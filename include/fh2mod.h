@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define FH2MOD_API_VERSION 2
+#define FH2MOD_API_VERSION 3
 
 #ifdef __cplusplus
 #define FH2MOD_EXPORT extern "C" __declspec(dllexport)
@@ -43,6 +43,8 @@ extern "C" {
 
 /* Opaque handle for one registered mod. */
 typedef struct FH2Mod FH2Mod;
+/* Opaque handle for one hook (API 3). */
+typedef struct FH2Hook FH2Hook;
 
 typedef struct FH2ModInfo {
     uint32_t size;                /* sizeof(FH2ModInfo) */
@@ -56,7 +58,7 @@ typedef struct FH2ModInfo {
 typedef struct FH2ModApi {
     uint32_t size;                /* sizeof(FH2ModApi) as the platform knows it */
     uint32_t api_version;         /* FH2MOD_API_VERSION of the platform */
-    const char* platform_version; /* "2.1.0" */
+    const char* platform_version; /* "2.2.0" */
     const wchar_t* azimuth_dir;   /* folder with azimuth.exe, no trailing slash */
     const wchar_t* game_dir;      /* the game's Mount folder (game:\), or "" if not found */
 
@@ -159,6 +161,53 @@ typedef struct FH2ModApi {
     /* The version string of the registered mod called `name`, or NULL if
        it isn't installed. */
     const char* (*mod_version)(const char* name);
+
+    /* ==== API version 3 (platform 2.2.0): check api_version >= 3 ======== */
+
+    /* ---- Hooks -------------------------------------------------------------
+       Change what game code does, through the platform, so every mod's
+       changes to the same code fit together: several mods can hook one
+       function, each calls on to the next through `original`, and they can
+       be switched on and off in any order. Hooks on exactly the same function,
+       call site or pointer share it; the platform refuses a hook whose bytes
+       overlap any other hook's, or game code that Extra Options (or a mod
+       patching the game by itself) already changed, and logs who hooked
+       what. Crash reports list every hook in place.
+
+       Hooks in game code have to wait for wait_for_code (below). Hooks
+       elsewhere (Azimuth, a Windows DLL) can be made at any time.
+
+       Each call makes a hook, switched off, and returns it (or NULL, with
+       the reason in the log). `name` is for the log and crash reports, like
+       "RadioStreamFmod::createSound"; it may be NULL. `detour` is your
+       function, with the same signature and calling convention as the code
+       it replaces. `*original` is set before the call returns: call it from
+       your detour to run the code you replaced (and any other mod's detour
+       behind yours). It's safe to call at any time; while your hook is off
+       it goes straight to the game's own code.
+
+       When several mods hook the same place, the most recently enabled
+       detour runs first. */
+
+    /* An inline hook at the start of a function (`target`), with MinHook. */
+    FH2Hook* (*hook_function)(FH2Mod* mod, const char* name, void* target, void* detour, void** original);
+    /* One CALL rel32 or JMP rel32 instruction at `call_site`: only that
+       call goes to your detour; `*original` is the function it called. */
+    FH2Hook* (*hook_call)(FH2Mod* mod, const char* name, void* call_site, void* detour, void** original);
+    /* A function pointer in memory, like a vtable slot: `*slot` is replaced,
+       and `*original` is what it held. */
+    FH2Hook* (*hook_pointer)(FH2Mod* mod, const char* name, void** slot, void* detour, void** original);
+    /* Switch `hook` on or off, or all of your hooks if it's NULL (in one go:
+       the game's threads are paused once, for all of them). Returns 1 if
+       they all are now; 0 if any couldn't be, with the reason in the log. */
+    int (*enable_hooks)(FH2Mod* mod, FH2Hook* hook);
+    int (*disable_hooks)(FH2Mod* mod, FH2Hook* hook);
+    /* Like wait_for_game, but also waits until Extra Options has finished
+       patching the game (it checks the code it patches first, and patches
+       nothing if any of it was changed). Returns the game's base when it's
+       safe to hook game code, or NULL on timeout. Call it from your own
+       thread. */
+    void* (*wait_for_code)(uint32_t timeout_ms);
 } FH2ModApi;
 
 /* What a mod exports. */

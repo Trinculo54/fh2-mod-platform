@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 # Bump VERSION before tagging a release (the tag build checks they match).
-project(fh2_mod_platform VERSION 2.1.0 LANGUAGES C CXX RC)
+project(fh2_mod_platform VERSION 2.2.0 LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -36,8 +36,19 @@ add_library(fh2mod_api INTERFACE)
 target_include_directories(fh2mod_api INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(fh2mod_api INTERFACE FH2MOD_PLATFORM_VERSION="${PROJECT_VERSION}")
 
+# MinHook (BSD 2-Clause, third_party/minhook/LICENSE.txt), built into the
+# platform so every mod's hooks go through one copy of it.
+set(_minhook third_party/minhook/src)
+set(_minhook_src ${_minhook}/hook.c ${_minhook}/buffer.c ${_minhook}/trampoline.c ${_minhook}/hde/hde64.c)
+set_source_files_properties(${_minhook_src} PROPERTIES COMPILE_OPTIONS "$<$<NOT:$<BOOL:${MSVC}>>:-w>")
+
 add_library(fh2mod_platform SHARED src/platform.cpp src/strings.cpp src/updates.cpp src/files.cpp
-            src/database.cpp src/crash.cpp src/version.rc)
+            src/database.cpp src/crash.cpp src/hooks.cpp src/version.rc ${_minhook_src})
+target_include_directories(fh2mod_platform PRIVATE third_party/minhook/include ${_minhook})
+if(NOT MSVC)
+    # InterlockedCompareExchange128, for rewriting call sites atomically.
+    set_source_files_properties(src/hooks.cpp PROPERTIES COMPILE_OPTIONS -mcx16)
+endif()
 if(NOT MSVC)
     target_sources(fh2mod_platform PRIVATE src/d3dcompiler_47.def)
     target_link_options(fh2mod_platform PRIVATE "$<$<CONFIG:Release>:-Wl,--gc-sections;-s>" -static)
@@ -77,6 +88,17 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         target_link_libraries(aaa_mod PRIVATE fh2mod_api)
         set_target_properties(aaa_mod PROPERTIES OUTPUT_NAME AaaMod PREFIX "")
         target_link_options(aaa_mod PRIVATE -static)
+        # The hook test: tests/run_hook_test.sh <forza_durango_release_final.exe>
+        add_executable(hook_test tests/hook_test.cpp)
+        target_compile_definitions(hook_test PRIVATE UNICODE _UNICODE)
+        target_link_options(hook_test PRIVATE -municode -static -Wl,--image-base=0x10000000)
+        add_library(hook_mod SHARED tests/hook_mod.cpp)
+        target_link_libraries(hook_mod PRIVATE fh2mod_api)
+        set_target_properties(hook_mod PROPERTIES OUTPUT_NAME HookMod PREFIX "")
+        target_link_options(hook_mod PRIVATE -static)
+        add_library(fake_winmm SHARED tests/fake_winmm.cpp)
+        set_target_properties(fake_winmm PROPERTIES OUTPUT_NAME winmm PREFIX "")
+        target_link_options(fake_winmm PRIVATE -static)
         add_library(legacy_mod SHARED tests/legacy_mod.cpp)
         set_target_properties(legacy_mod PROPERTIES OUTPUT_NAME Legacy PREFIX "")
         target_link_options(legacy_mod PRIVATE -static)

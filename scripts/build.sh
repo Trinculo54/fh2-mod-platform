@@ -3,7 +3,7 @@
 #   dist/d3dcompiler_47.dll      the platform (next to azimuth.exe)
 #   dist/examples/HelloMod.dll   the example mod (not for players)
 #   dist/include/fh2mod.h        the API header
-#   dist/README.txt, dist/LICENSE.txt
+#   dist/README.txt, dist/LICENSE.txt, dist/LICENSE-MinHook.txt
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 for d in /opt/llvm-mingw/bin /usr/local/llvm-mingw/bin; do [ -d "$d" ] && PATH=$d:$PATH; done
@@ -16,4 +16,5 @@ cp "$root/build/HelloMod.dll" "$root/dist/examples/"
 cp "$root/include/fh2mod.h" "$root/dist/include/"
 cp "$root/scripts/dist-readme.txt" "$root/dist/README.txt"
 cp "$root/LICENSE" "$root/dist/LICENSE.txt"
+cp "$root/third_party/minhook/LICENSE.txt" "$root/dist/LICENSE-MinHook.txt"
 (cd "$root/dist" && find . -type f -printf '  %P\n')

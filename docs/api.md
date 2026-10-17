@@ -1,6 +1,6 @@
 # API reference
 
-Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, and version 2 with platform 2.1. Version 2 added file overrides, database patches and interfaces between mods; the sections for those say so.
+Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with platform 2.1, and version 3 with platform 2.2. Version 2 added file overrides, database patches and interfaces between mods, and version 3 added hooks; the sections for those say so.
 
 ## Rules that apply everywhere
 
@@ -25,7 +25,7 @@ DLLs without `fh2mod_init` still load, and are logged as mods from before the pl
 |---|---|
 | `size` | `sizeof(FH2ModApi)` as the platform knows it. |
 | `api_version` | The platform's `FH2MOD_API_VERSION`. |
-| `platform_version` | The platform's version, like `"2.1.0"`. |
+| `platform_version` | The platform's version, like `"2.2.0"`. |
 | `azimuth_dir` | The folder with `azimuth.exe`, without a trailing slash. Put your data folder here. |
 | `game_dir` | The game's `Mount` folder (`game:\`), or `""` if it wasn't found. |
 
@@ -161,6 +161,59 @@ A mod can offer other mods a struct of function pointers. Publish it under a nam
 
 WheresMyBuddy publishes `WheresMyBuddy.Friends`, with the names on the Drivatars and the signed-in gamertag (see `include/wheresmybuddy.h` in its repo). FH2 Universal Radio publishes `FH2UniversalRadio.NowPlaying`, with the song that's playing (`include/fh2universalradio.h`).
 
+## Hooks (API 3)
+
+```c
+FH2Hook* hook_function(FH2Mod* mod, const char* name, void* target, void* detour, void** original);
+FH2Hook* hook_call(FH2Mod* mod, const char* name, void* call_site, void* detour, void** original);
+FH2Hook* hook_pointer(FH2Mod* mod, const char* name, void** slot, void* detour, void** original);
+int enable_hooks(FH2Mod* mod, FH2Hook* hook);
+int disable_hooks(FH2Mod* mod, FH2Hook* hook);
+void* wait_for_code(uint32_t timeout_ms);
+```
+
+These change what game code does, and they're the way to do it when more than one mod might touch the same code. The platform keeps one list of every hook from every mod. It checks each new hook against that list and against the game as shipped, and it writes the patches safely while the game's threads are running. Function hooks are made with [MinHook](https://github.com/TsudaKageyu/minhook), which is built into the platform, so your mod doesn't need a copy of its own.
+
+There are three kinds:
+
+- **`hook_function`** puts an inline hook at the start of a function, so every call to it goes to your detour.
+- **`hook_call`** retargets one `CALL rel32` (`E8`) or `JMP rel32` (`E9`) instruction, so only that call goes to your detour, and other callers of the same function aren't affected. `*original` is the function it called. Your detour can be anywhere: the platform puts a stub within reach of the call.
+- **`hook_pointer`** replaces a function pointer in memory: a vtable slot, a callback in a table, an import. It has to be 8-byte aligned. `*original` is the pointer's old value.
+
+A call site's 4-byte target is swapped in one atomic write where it fits in an aligned 8 or 16 bytes. Otherwise the platform pauses the other threads for the moment it takes, and makes sure none of them is on that instruction.
+
+Each call returns a hook that is switched off, or null with the reason in the log. `name` appears in the log and in crash reports, so name what you hooked: `"FMOD::System::createSound"`. The detour must have exactly the signature and calling convention of the code it replaces. `*original` is set before the call returns. Call it from your detour to run the replaced code, which includes any other mod's detour that runs after yours. It's safe to call at any time. While your hook is switched off, it goes straight to the game's own code, past any other mod's detour.
+
+`enable_hooks` and `disable_hooks` switch one hook, or all of yours if you pass null. Switching several at once is better, because MinHook pauses the game's threads once for all of them, not once each. They return 1 if every hook is now switched the way you asked, and 0 if any couldn't be, with the reason in the log. When the last hook on a place is switched off, the game's original bytes go back in.
+
+**Several mods on one function.** When two mods hook the same function, call site or pointer, both hooks run. The most recently enabled detour runs first, and its `original` leads to the next one, and so on down to the game's own code. Any hook can be switched off without breaking the others: the chain closes up around it. Hooks that only overlap are refused, whatever their kind and whoever made them: a function hook on code that contains another mod's call hook, or a second function hook two bytes into a hooked function. The log names the mod already there.
+
+**Game code that was already changed.** Before hooking game code, the platform compares the bytes it would change (or, for a function, the bytes MinHook copies) with `forza_durango_release_final.exe` in the game folder. If they differ, something outside the platform already patched them (Extra Options, or a mod patching the game by itself), and the hook is refused rather than layered on top. Pointers are only compared when the exe has an address in the image there, such as a vtable slot. Imports and tables the game fills in at runtime can't be checked this way, so they're allowed. Extra Options changes around 130 places in the game, listed in its `patches.json`. If you need one of those, talk to its author.
+
+**wait_for_code.** Hooks in game code can't be made until `wait_for_code` has returned. It waits like `wait_for_game` and then, if Extra Options is installed, also until Extra Options has finished patching. Extra Options checks every place it patches before it changes any of them, and if a single one isn't as it expects, it patches nothing at all, so a mod hooking early could quietly switch Extra Options off. The platform knows Extra Options is done when its log (`FH2_ExtraOptions.log`, written this launch) says so. That's the status line it writes once it's done (`OK:`, `REFUSED:` or `DISABLED:`), or its `AZIMUTH: winmm proxy initialized` line. If it hasn't said so 20 seconds after the game was mapped, the platform goes ahead anyway and logs that. Hooks outside the game (in Azimuth or a Windows DLL) don't have to wait.
+
+```cpp
+using SerializeFn = char (*)(void* self, void* archive);
+static SerializeFn g_serialize;
+
+static char my_serialize(void* self, void* archive) {
+    const char r = g_serialize(self, archive);
+    // ... look at the loaded object ...
+    return r;
+}
+
+static DWORD WINAPI start(LPVOID) {
+    char* base = static_cast<char*>(g_api->wait_for_code(0xFFFFFFFFu));
+    void** slot = reinterpret_cast<void**>(base + 0x2D44F20) + 2; // ChampionshipDrivatarsState vtable, slot 2
+    if (g_api->hook_pointer(g_mod, "ChampionshipDrivatarsState::Serialize", slot,
+                            reinterpret_cast<void*>(&my_serialize), reinterpret_cast<void**>(&g_serialize)))
+        g_api->enable_hooks(g_mod, nullptr);
+    return 0;
+}
+```
+
+Every hook is logged when it's made and switched (`[MyMod] hooked function game+0x1997740 (FMOD::System::createSound)`), and crash reports list them all, marking the ones that were on. A crash inside a MinHook trampoline (the copy of the game's first instructions) is reported as such, with the hook it belongs to.
+
 ## Crash reports
 
-These need no code from you. If the game crashes, the platform writes `fh2-mods\crashes\crash-<date>-<time>.txt` and a minidump (`.dmp`) beside it, and adds the summary to `platform.log`. The report has the exception, the call stack as module+offset (`game+0x...`, `YourMod.dll+0x...`), and the mod the crash came from, if any. The ten newest reports are kept. Open the minidump in Visual Studio or WinDbg with your mod's debug symbols to see the exact line.
+These need no code from you. If the game crashes, the platform writes `fh2-mods\crashes\crash-<date>-<time>.txt` and a minidump (`.dmp`) beside it, and adds the summary to `platform.log`. The report has the exception, the call stack as module+offset (`game+0x...`, `YourMod.dll+0x...`), the mod the crash came from, if any, and every hook in place (see above). The ten newest reports are kept. Open the minidump in Visual Studio or WinDbg with your mod's debug symbols to see the exact line.

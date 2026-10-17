@@ -199,11 +199,22 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS* ep) {
             std::snprintf(one, sizeof one, "%s%ls", list[0] ? ", " : "", g_dlls[i].name);
             strncat(list, one, sizeof list - std::strlen(list) - 1);
         }
+    char hook[200];
+    if (hook_at(er.ExceptionAddress, hook, sizeof hook))
+        o.put("the crash was in %s", hook);
     if (blamed >= 0)
         o.put("the crash came from %ls", g_dlls[blamed].name);
     else
         o.put("no mod was on the walked call stack%s%s", list[0] ? "; mod code referenced on the stack: " : "",
               list);
+    if (const int n = hook_count()) {
+        o.put("hooks (* = on):");
+        for (int i = 0; i < n; ++i) {
+            bool on            = false;
+            const char* line   = hook_line(i, &on);
+            if (line) o.put("  %c %s", on ? '*' : ' ', line);
+        }
+    }
 
     if (o.file != INVALID_HANDLE_VALUE) CloseHandle(o.file);
     std::swprintf(path, sizeof path / sizeof *path, L"%ls.dmp", base);

@@ -46,6 +46,12 @@ void clean_leftover_files(const std::vector<FH2Mod*>& mods);
 // database.cpp: SQL patches applied to a copy of the game database.
 void apply_database(const std::vector<FH2Mod*>& mods);
 
+// hooks.cpp: the hook API, and what crash reports say about hooks.
+void fill_hook_api(FH2ModApi& api);
+bool hook_at(const void* p, char* out, std::size_t n); // p is in a hook's trampoline or stub
+int hook_count();
+const char* hook_line(int i, bool* enabled);
+
 // crash.cpp
 struct LoadedDll {
     std::wstring name;

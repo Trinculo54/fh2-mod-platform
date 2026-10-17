@@ -634,6 +634,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.get_interface     = api_get_interface;
                 g_api.wait_for_mods     = api_wait_for_mods;
                 g_api.mod_version       = api_mod_version;
+                fill_hook_api(g_api);
                 return load_mods(nullptr);
             },
             nullptr, 0, nullptr))

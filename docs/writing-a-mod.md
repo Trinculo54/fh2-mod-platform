@@ -113,7 +113,13 @@ Azimuth maps the game, `forza_durango_release_final.exe`, into its own process w
 
 Only one build of the game is in circulation: the Xbox One build from 24 November 2015. Addresses in it are fixed, so mods can use offsets from the base. Even so, check that the code or data you're about to change looks the way you expect before you patch it, and log and skip if it doesn't. A wrong guess is then a missing feature, not a crash. [`game-notes.md`](game-notes.md) lists what's known about the build, and both existing mods are worth reading. FH2 Universal Radio redirects calls inside the game's FMOD radio, and WheresMyBuddy swaps a virtual function on a save-game class.
 
-Game code runs on many threads. If you hook something, your hook can be called from any of them, at any time, including while you're still setting up. Install hooks atomically (one aligned 8-byte write for a pointer, or a compare-exchange), and finish everything your hook needs before you install it.
+## Changing game code
+
+Hook through the platform (API 3) instead of patching memory yourself. `hook_function` detours a whole function, `hook_call` redirects one call instruction, and `hook_pointer` swaps a function pointer such as a vtable slot. The platform makes the patch, gives you the `original` to call on, and lets other mods hook the same code alongside you. It also refuses code that Extra Options has already changed, and lists your hooks in crash reports. [`api.md`](api.md#hooks-api-3) has the details and an example.
+
+Two rules matter. First, get the game's base from `wait_for_code`, not `wait_for_game`, before hooking game code, so Extra Options gets to patch first. Second, game code runs on many threads, so your detour can be called from any of them as soon as the hook is on. Set up everything it needs first, then call `enable_hooks`, and make the detour safe to run on several threads at once.
+
+If you can't use the platform's hooks for something (a patch in the middle of a function, say), still check the bytes are what you expect before you change them, and write them atomically.
 
 ## Your own files
 
@@ -129,7 +135,7 @@ fh2-mods\MyMod.dll
 MyMod\...                 your data, if any
 ```
 
-Always include the platform. A player who only installs your mod needs it, and the version checks take care of an older copy getting put back. A short `README.txt` that says where things go and where your log is will save you a lot of questions.
+Always include the platform. Since 2.2 the platform has MinHook built in, which is under the BSD 2-Clause license, so include `LICENSE-MinHook.txt` from the platform's `dist` folder in your zip too. A player who only installs your mod needs it, and the version checks take care of an older copy getting put back. A short `README.txt` that says where things go and where your log is will save you a lot of questions.
 
 Before releasing, start the game with only your mod and check `fh2-mods\platform.log`. It should show your DLL loaded with its version, your `registered` line, and the tables, files and database changes you made. Then try it next to the other mods.
 
@@ -140,6 +146,7 @@ Put a version in your DLL's file properties (a `VERSIONINFO` resource) as well. 
 A few things keep mods from tripping over each other:
 
 - **Don't proxy DLLs yourself.** `d3dcompiler_47.dll` is the platform's and `winmm.dll` is Extra Options'. If you need to load early, the platform is already as early as it gets.
+- **Hook through the platform.** Your own copy of MinHook, or your own byte patches, can't see other mods' hooks, and the platform can't warn about clashes with them.
 - **Don't write into the game's own files.** Use the string-table, file and database functions, so that removing your mod puts everything back.
 - **Make your features switchable.** Give each one a setting, and when it's off, undo what you did, for example with `clear_strings`.
 - **Don't take ages to start.** Do your setup on your own threads.

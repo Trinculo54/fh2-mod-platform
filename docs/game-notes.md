@@ -12,6 +12,8 @@ Azimuth's settings are in `data\azimuth.ini`, a UTF-16 file. The `[launcher]` se
 
 The game reads its data from `game:\media`. Most of it is in zips, whose directories are listed in `media\zipmanifest.xml`; the game relies on those offsets, so don't edit the zips. [Extra Options](https://github.com/RokkuDayo/forzahorizon2_extraoptions) adds an override folder: a file at `media\X.zip\path\file` can be replaced by `mediaoverride\X\path\file`, and a loose file at `media\path\file` by `mediaoverride\path\file`. The priority is `mediaoverride`, then `mediapc`, then the original. Extra Options loads through `winmm.dll`, and its settings are in `FH2_ExtraOptions.ini` next to `azimuth.exe`. `Gamerpic.png` in the same folder is the player's avatar when `CustomGamerpic=1`.
 
+Extra Options also patches game code: around 84 byte patches and 47 hooks, listed with their RVAs in `patches.json` in its repo. It applies them all at once, while Azimuth loads its TLS helper just after mapping the game, and only after checking that every one of those places looks as it expects. If any doesn't, it applies none of them. That's why the platform's hooks wait for `wait_for_code`, and refuse game code that no longer matches the exe on disk.
+
 ## Text
 
 See [`string-tables.md`](string-tables.md). The title screen's "PRESS (A) TO START" is two strings in `Main.str`: `0xB197` (PRESS) and `0x18F0` (TO START). TO START is its own text box, centred vertically on the button, so the line can grow sideways only about as far as the screen edge.
