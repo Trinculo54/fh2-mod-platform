@@ -63,10 +63,12 @@ int wmain(int argc, wchar_t** argv) {
     CHECK(p != nullptr);
     if (argc > 2) map_image(argv[2]); // "press Play"
     std::string log;
-    for (int i = 0; i < 100; ++i) {
+    for (int i = 0; i < 250; ++i) {
         Sleep(100);
         log = slurp(L"fh2-mods\\platform.log");
-        if (log.find("mod(s) loaded") != std::string::npos && (phase != L"full" || log.find("late edit applied") != std::string::npos))
+        if (log.find("mod(s) loaded") != std::string::npos &&
+            (phase == L"full" ? log.find("late edit applied") != std::string::npos
+                              : log.find("removed AIPlayers.str") != std::string::npos))
             break;
     }
     Sleep(300);

@@ -78,7 +78,7 @@ Replaces every string in `table` that is exactly `from` (the whole string, case-
 void clear_strings(FH2Mod* mod, const char* table);
 ```
 
-Drops your edits to `table`, or to every table if `table` is null. A table nobody edits any more gets its override files removed the next time strings are applied, so the game uses its own text again.
+Drops your edits to `table`, or to every table if `table` is null. When no mod edits a table any more, its override files are removed, so the game uses its own text again. That happens straight away when you call `clear_strings` and then `apply_strings`. For a table left over from an earlier launch, such as one from a mod that has since been removed, it happens about 15 seconds after startup, which leaves mods time to make their edits from their own threads first.
 
 ## apply_strings
 

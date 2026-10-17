@@ -433,16 +433,29 @@ DWORD WINAPI load_mods(LPVOID) {
         g_current_dll.clear();
     }
 
-    // First write of everything; also clears overrides of tables that no
-    // mod edits any more, and stale notices.
+    // First write of everything edited so far, and the title notices.
     {
         std::scoped_lock lk{g_mu};
-        for (const auto& t : read_manifest()) g_dirty.insert(t);
         g_dirty.insert("main.str");
         g_table_names.emplace("main.str", "Main.str");
     }
     apply_all();
     plog(std::to_string(loaded.size()) + " mod(s) loaded");
+
+    // Tables written last time that no mod has edited by now are leftovers
+    // (a mod removed, or a feature turned off): clean them up. Wait a little
+    // first, since mods often make their edits from their own threads just
+    // after starting.
+    Sleep(15000);
+    {
+        std::scoped_lock lk{g_mu};
+        for (const auto& t : read_manifest()) {
+            bool edited = false;
+            for (const auto& m : g_mods) edited = edited || m->set.count(t) || m->repl.count(t);
+            if (!edited && t != "main.str") g_dirty.insert(t);
+        }
+    }
+    apply_all();
     return 0;
 }
 
