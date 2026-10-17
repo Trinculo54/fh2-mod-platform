@@ -42,7 +42,7 @@ Call once, from `fh2mod_init`. It returns your handle, or null if `info` is miss
 | `size` | `sizeof(FH2ModInfo)` |
 | `name` | Display name, used in the log and in notices. |
 | `version` | Your version, `x.y.z`. |
-| `github_repo` | `"Owner/Repo"`, or null. When set (and `check_updates` is 1), the platform checks your latest release on GitHub, at most every six hours, and shows "Name x.y.z is available" on the title screen when it's newer than `version`. |
+| `github_repo` | `"Owner/Repo"`, or null. When set (and `check_updates` is 1), the platform checks your latest release on GitHub, at most every six hours, and shows "Name x.y.z is available" on the title screen when it's newer than `version`. The six hours start over when a different `version` is installed, and a remembered release older than `version` is never trusted, so installing an older or newer build checks again straight away. |
 | `platform_version` | The platform version you ship with. Pass `FH2MOD_PLATFORM_VERSION`. If the installed platform is older, players get "Old FH2 Mod Platform: reinstall Name". |
 | `check_updates` | 0 to never go online for your mod. Give players a setting for it. |
 

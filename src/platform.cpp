@@ -267,8 +267,13 @@ void check_updates(FH2Mod* m) {
     }
     std::scoped_lock lk{g_mu};
     const bool newer = compare_versions(latest, m->version) > 0;
+    const char* when = cached ? ", checked earlier" : "";
     log_line(m->name, newer ? "update available: " + latest + " (github.com/" + m->repo + "/releases)"
-                            : "up to date (latest release " + latest + (cached ? ", checked earlier)" : ")"));
+                      : compare_versions(latest, m->version) < 0
+                          ? (cached ? "newer than the latest release from an earlier check (" + latest +
+                                          "); couldn't reach GitHub this time"
+                                    : "newer than the latest release on GitHub (" + latest + ")")
+                          : "up to date (latest release " + latest + when + ")");
     const std::string line = m->name + " " + (latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest) +
                              " is available";
     auto& st     = m->status;

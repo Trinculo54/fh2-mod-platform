@@ -17,8 +17,15 @@ namespace fh2platform {
 
 int compare_versions(std::string_view a, std::string_view b);
 
+// Whether a cached check (latest release `latest`, made at `checked` while
+// `cached_for` was installed) still answers for `version` at `now`: under 6
+// hours old, made for this same version, and not older than it. A cached
+// "latest" older than what's installed means a release came out since.
+bool cache_still_good(long long checked, long long now, const std::string& latest, const std::string& cached_for,
+                      const std::string& version);
+
 // Latest release tag of "Owner/Repo" on GitHub, cached in
-// notices\<name>.check for 6 hours. Empty if unknown.
+// notices\<name>.check (see cache_still_good). Empty if unknown.
 std::string latest_release(const std::filesystem::path& azimuth, const std::wstring& name,
                            const std::string& repo, const std::string& agent_version, bool* from_cache);
 
