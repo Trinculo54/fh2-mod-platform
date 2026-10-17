@@ -131,7 +131,7 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("---- platform.log\n%s----\n", log.c_str());
 
     if (phase == L"full") {
-        CHECK(has(log, "FH2 Mod Platform 2.1.0 (API 2)"));
+        CHECK(has(log, "FH2 Mod Platform 2.2.0 (API 3)"));
         CHECK(log.find("loaded HelloMod.dll") != std::string::npos);
         CHECK(log.find("Legacy.dll has no fh2mod_init") != std::string::npos);
         CHECK(fs::exists("legacy_ran.txt"));

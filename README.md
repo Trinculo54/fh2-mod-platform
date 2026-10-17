@@ -43,7 +43,8 @@ The platform calls `fh2mod_init` on its own thread right after loading your DLL,
 - **Game files.** Replace any file the game loads. One mod per file, and it's cleaned up when the mod is removed.
 - **The game database.** Change cars, events and the rest of the game's data with SQL. Every mod's changes go into one copy of the database.
 - **Other mods.** Publish functions for other mods to call, look up theirs, and check which mods are installed.
-- **Crash reports.** When the game crashes, a report in `fh2-mods\crashes` says where, and which mod it came from.
+- **Hooks.** Detour game functions, single calls or vtable slots through one shared copy of MinHook. Mods can hook the same function side by side, the platform refuses patches that would clash with another mod's or with Extra Options', and every hook is logged and listed in crash reports.
+- **Crash reports.** When the game crashes, a report in `fh2-mods\crashes` says where, which mod it came from, and which hooks were in place.
 
 The whole API is one C header, [`include/fh2mod.h`](include/fh2mod.h), and it only ever grows: a mod built against an older version keeps working with newer platforms.
 
@@ -63,11 +64,11 @@ The platform is built with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/r
 
 A mod usually adds this repo as a git submodule and builds the platform alongside itself, so its release zip always carries a matching `d3dcompiler_47.dll`. [`docs/writing-a-mod.md`](docs/writing-a-mod.md) shows the CMake for that.
 
-Configuring with `-DFH2MOD_TESTS=ON` builds an offline test, which runs under Wine as a stand-in for `azimuth.exe` with the example mod, two test mods and an old-style mod in `fh2-mods`. It needs `EN.zip` and `gamedbRC.slt` from your own install, plus a SQLite DLL named `winsqlite3.dll` in Wine's `system32`, since Wine doesn't come with one: `tests/run_platform_test.sh <EN.zip> <gamedbRC.slt> [forza_durango_release_final.exe]`.
+Configuring with `-DFH2MOD_TESTS=ON` builds an offline test, which runs under Wine as a stand-in for `azimuth.exe` with the example mod, two test mods and an old-style mod in `fh2-mods`. It needs `EN.zip` and `gamedbRC.slt` from your own install, plus a SQLite DLL named `winsqlite3.dll` in Wine's `system32`, since Wine doesn't come with one: `tests/run_platform_test.sh <EN.zip> <gamedbRC.slt> [forza_durango_release_final.exe]`. The hook test needs only the game exe, and runs three launches (no Extra Options, Extra Options finishing late, and a crash inside a hook): `tests/run_hook_test.sh <forza_durango_release_final.exe>`.
 
 ## License
 
-Released under the [MIT License](LICENSE), so you can build anything on it, open source or not.
+Released under the [MIT License](LICENSE), so you can build anything on it, open source or not. The platform includes [MinHook](https://github.com/TsudaKageyu/minhook) (in `third_party/minhook`), which is under the BSD 2-Clause license; `dist/LICENSE-MinHook.txt` is its notice, to ship alongside `d3dcompiler_47.dll`.
 
 ## Disclaimer
 
