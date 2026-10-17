@@ -1,6 +1,6 @@
 # API reference
 
-Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 is the platform 2.0 API.
+Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, and version 2 with platform 2.1. Version 2 added file overrides, database patches and interfaces between mods; the sections for those say so.
 
 ## Rules that apply everywhere
 
@@ -25,7 +25,7 @@ DLLs without `fh2mod_init` still load, and are logged as mods from before the pl
 |---|---|
 | `size` | `sizeof(FH2ModApi)` as the platform knows it. |
 | `api_version` | The platform's `FH2MOD_API_VERSION`. |
-| `platform_version` | The platform's version, like `"2.0.0"`. |
+| `platform_version` | The platform's version, like `"2.1.0"`. |
 | `azimuth_dir` | The folder with `azimuth.exe`, without a trailing slash. Put your data folder here. |
 | `game_dir` | The game's `Mount` folder (`game:\`), or `""` if it wasn't found. |
 
@@ -110,3 +110,57 @@ void* wait_for_game(uint32_t timeout_ms);
 `game_base` returns the base address of `forza_durango_release_final.exe` once Azimuth has mapped it into the process, or null before that. Azimuth maps it when the player presses Play. `wait_for_game` waits until it's mapped, or until `timeout_ms` runs out (`0xFFFFFFFF` waits forever), and returns the base or null. It checks every 100 ms. Call it from your own thread, never from `fh2mod_init`, which would hold up every mod loaded after you.
 
 The game is recognised by its PE header: the 24 November 2015 build, timestamp `0x565501ED` and image size `0x03A18000`. Azimuth maps it at its preferred base, `0x140000000`, but use the returned address anyway.
+
+## set_file and clear_file (API 2)
+
+```c
+int set_file(FH2Mod* mod, const char* media_path, const void* data, size_t size);
+void clear_file(FH2Mod* mod, const char* media_path);
+```
+
+`set_file` replaces a file the game reads from `game:\media`. Give the path relative to `media`, with forward or back slashes. For a file inside a zip, use the zip's name without `.zip` as a folder: `media\UI.zip\x.xml` is `"UI/x.xml"`. The file is written straight away to Extra Options' `mediaoverride` folder, which Extra Options mounts over `media`. If the file there already has the same content, it isn't rewritten.
+
+Only one mod can replace a file. `set_file` returns 1 when the file is yours and written. It returns 0 if another mod already replaces it, if the path isn't a plain path under `media`, or if the write failed, and the log says which. String tables and the game database can't be replaced whole; use the functions for those. If someone had put a file at that spot by hand, it's kept next to it as `<name>.bak` the first time.
+
+`clear_file` deletes your override, so the game reads its own file again. Pass null to clear every file you replace. The files the platform wrote are listed in `fh2-mods\platform-files.txt`. About 15 seconds after startup, any listed file that no mod has claimed this launch is deleted. That's what cleans up after a mod that was removed.
+
+The game reads most files once, when it first needs them, so call `set_file` early, from `fh2mod_init` or soon after.
+
+## add_sql, clear_sql and apply_database (API 2)
+
+```c
+void add_sql(FH2Mod* mod, const char* utf8_sql);
+void clear_sql(FH2Mod* mod);
+void apply_database(FH2Mod* mod);
+```
+
+`media\Stripped\gamedbRC.slt` is a SQLite database that holds most of the game's data: cars (`Data_Car`), events, AI drivers and around 280 more tables. `add_sql` queues statements to run against it. One call can hold several statements separated by semicolons, and calls add up.
+
+The platform copies the original database and runs every mod's statements, in load order, each mod inside its own transaction. If any statement from a mod fails, all of that mod's changes are rolled back and the SQLite error is logged, while the other mods' changes still apply. The result goes to `mediaoverride\Stripped\gamedbRC.slt`. When no mod has statements any more, it's deleted.
+
+Building the copy takes a moment, so it's only redone when something changed. `fh2-mods\platform-db.txt` remembers a hash of the original database and every mod's statements, and the log repeats the results from the last build.
+
+Statements added in `fh2mod_init` are applied for you. For later ones, call `apply_database` from your own thread. Like string tables, the database is read once at startup, so later changes show from the next launch.
+
+SQLite comes from Windows itself (`winsqlite3.dll`, part of Windows 10 and 11). To look around the database, open a copy of it in any SQLite browser.
+
+## Interfaces between mods (API 2)
+
+```c
+void publish_interface(FH2Mod* mod, const char* name, uint32_t version, const void* iface);
+const void* get_interface(const char* name, uint32_t min_version);
+int wait_for_mods(uint32_t timeout_ms);
+const char* mod_version(const char* name);
+```
+
+A mod can offer other mods a struct of function pointers. Publish it under a name, usually `"YourMod.Something"`, with a version number. Ship a small header that defines the struct, and treat it the way the platform treats `FH2ModApi`: start it with a `size` member, never change or remove a member, add new ones only at the end, and bump the version when you do. `iface` must stay valid for as long as the process runs. A name belongs to the first mod that publishes it. Publishing null withdraws it.
+
+`get_interface` returns the struct if it's published with at least `min_version`, or null. Mods start in alphabetical order, so the mod you want may not have published yet while your `fh2mod_init` runs. `wait_for_mods` waits until every mod's `fh2mod_init` has returned, and returns 1 once they have. Call it from your own thread; from inside `fh2mod_init` it returns 0 straight away, since waiting there would hang every mod after yours.
+
+`mod_version` gives the version a mod registered with, matched by name without regard to case, or null if it isn't installed. Use it to check for a mod you depend on and to tell the player, perhaps with `set_notice`, when it's missing or too old.
+
+WheresMyBuddy publishes `WheresMyBuddy.Friends`, with the names on the Drivatars and the signed-in gamertag (see `include/wheresmybuddy.h` in its repo). FH2 Universal Radio publishes `FH2UniversalRadio.NowPlaying`, with the song that's playing (`include/fh2universalradio.h`).
+
+## Crash reports
+
+These need no code from you. If the game crashes, the platform writes `fh2-mods\crashes\crash-<date>-<time>.txt` and a minidump (`.dmp`) beside it, and adds the summary to `platform.log`. The report has the exception, the call stack as module+offset (`game+0x...`, `YourMod.dll+0x...`), and the mod the crash came from, if any. The ten newest reports are kept. Open the minidump in Visual Studio or WinDbg with your mod's debug symbols to see the exact line.

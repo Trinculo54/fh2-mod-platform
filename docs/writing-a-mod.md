@@ -83,6 +83,30 @@ If two mods set the same key, the one loaded later wins, in alphabetical order o
 
 You don't need it for updates: register with `github_repo` and the platform checks your latest GitHub release (at most every six hours, remembered between launches) and adds "MyMod 1.1.0 is available" itself when it's newer than your `version`. It compares `x.y.z` numbers, with or without a leading `v`, so tag releases to match your version. It also adds "Old FH2 Mod Platform: reinstall MyMod" when the installed platform is older than your `platform_version`.
 
+## Replacing game files
+
+To swap out a whole file the game loads, such as a texture, an XML file or the Drivatar cache, use `set_file(mod, "drivatarglobalcache/DefaultCache.bin", data, size)` instead of writing into `mediaoverride` yourself. The path is relative to `media`, and a zip counts as a folder: `media\UI.zip\x.xml` is `"UI/x.xml"`. The platform makes sure only one mod replaces a given file and logs it when a second one tries. It also deletes the file once your mod stops claiming it, whether you call `clear_file` or the player removes your mod. Check the return value: 0 means you didn't get the file. These calls need API version 2, so check `api->api_version >= 2` first.
+
+## Changing the game database
+
+Most of the game's data, from car stats and prices to events and AI drivers, is in a SQLite database, `media\Stripped\gamedbRC.slt`. Open a copy in any SQLite browser to look around (`Data_Car` is a good place to start). Then change it with plain SQL:
+
+```cpp
+api->add_sql(g_mod, "UPDATE Data_Car SET BaseCost = BaseCost / 2");   // half-price Autoshow
+```
+
+Every mod's statements run against one copy of the database, in load order, so two mods can change different things in it, or even the same table, without either replacing the other's copy. If your SQL has an error, none of your changes are made and `platform.log` gives SQLite's error message. Use `UPDATE` and `INSERT` rather than dropping and recreating tables, so other mods' changes survive.
+
+## Working with other mods
+
+If your mod has something other mods could use, publish it. Write a small header with a struct of function pointers, starting with a `size` member, and call `publish_interface(mod, "MyMod.Thing", 1, &my_struct)` in `fh2mod_init`. Another mod includes your header, and then, on its own thread, waits with `wait_for_mods` and calls `get_interface("MyMod.Thing", 1)`. If it gets null, your mod isn't installed or is too old, and it should carry on without it. `mod_version("MyMod")` tells a mod whether another is installed at all.
+
+Once an interface is published, keep it working: add members at the end and bump the version, never change existing ones. Both existing mods publish one: `WheresMyBuddy.Friends` and `FH2UniversalRadio.NowPlaying`.
+
+## When it crashes
+
+If the game crashes, look in `fh2-mods\crashes`. Each crash gets a text report, with the call stack and the mod it came from, plus a minidump to open in a debugger. When players report a crash, ask them for the text file.
+
 ## Working with the game
 
 Azimuth maps the game, `forza_durango_release_final.exe`, into its own process when you press Play, so it isn't there yet when your mod starts. `wait_for_game(timeout)` blocks until it is and returns its base address; `game_base()` returns it right away, or null. Call `wait_for_game` from your own thread, not from `fh2mod_init`.
@@ -107,7 +131,7 @@ MyMod\...                 your data, if any
 
 Always include the platform. A player who only installs your mod needs it, and the version checks take care of an older copy getting put back. A short `README.txt` that says where things go and where your log is will save you a lot of questions.
 
-Before releasing, start the game with only your mod and check `fh2-mods\platform.log`. It should show your DLL loaded with its version, your `registered` line, and the tables you edited. Then try it next to the other mods.
+Before releasing, start the game with only your mod and check `fh2-mods\platform.log`. It should show your DLL loaded with its version, your `registered` line, and the tables, files and database changes you made. Then try it next to the other mods.
 
 Put a version in your DLL's file properties (a `VERSIONINFO` resource) as well. The platform logs it next to the file name, and players can see it under Properties → Details. Both existing mods generate theirs from the CMake project version; see `src/version.rc` and `cmake/version.h.in` in either repo.
 
@@ -116,7 +140,7 @@ Put a version in your DLL's file properties (a `VERSIONINFO` resource) as well. 
 A few things keep mods from tripping over each other:
 
 - **Don't proxy DLLs yourself.** `d3dcompiler_47.dll` is the platform's and `winmm.dll` is Extra Options'. If you need to load early, the platform is already as early as it gets.
-- **Don't write into the game's own files.** Use the string-table functions, or Extra Options' `mediaoverride` folder for other assets, so that removing your mod puts everything back.
+- **Don't write into the game's own files.** Use the string-table, file and database functions, so that removing your mod puts everything back.
 - **Make your features switchable.** Give each one a setting, and when it's off, undo what you did, for example with `clear_strings`.
 - **Don't take ages to start.** Do your setup on your own threads.
 - **Log what you change.** It's how people debug, you included.

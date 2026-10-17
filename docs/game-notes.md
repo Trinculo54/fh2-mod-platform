@@ -16,6 +16,10 @@ The game reads its data from `game:\media`. Most of it is in zips, whose directo
 
 See [`string-tables.md`](string-tables.md). The title screen's "PRESS (A) TO START" is two strings in `Main.str`: `0xB197` (PRESS) and `0x18F0` (TO START). TO START is its own text box, centred vertically on the button, so the line can grow sideways only about as far as the screen edge.
 
+## The game database
+
+`media\Stripped\gamedbRC.slt` is a plain SQLite database, about 6 MB, with around 290 tables. The game opens it as `game:\media\Stripped\gamedbRC.slt` through its own file system, the one Extra Options mounts `mediaoverride` over, and reads it at startup. Tables worth knowing: `Data_Car` (every car, with `DisplayName`, `BaseCost`, `PerformanceIndex`, 0-60 times and handling values), `Data_Engine`, `Events`, `EventCars`, `CarMeets`, `AIPlayers` and `DriverModels`. Text columns hold string-table references like `_&2149394699` rather than text, so names and descriptions are changed through the string tables. The exe also mentions `media\db\gamedb.slt`, which isn't in the shipped game.
+
 ## Drivatars
 
 The built-in Drivatars are in `media\DrivatarGlobalCache\DefaultCache.bin`. The file starts with `u32 4` (version) and `u32 125` (count), followed by 125 records of `0x2658` bytes each. They use only 25 different gamertags, five records each. A record's gamertag is UTF-16 in its first 32 bytes (15 characters and a NUL), and the Drivatar's id, 1 to 25 and the same for all five copies, is the `u32` at `+0x2650`. The game reads the file once at startup (code at `0xA2D0E0`) into a manager object, with the record count at `+0x4D58` and a `std::vector` of records at `+0x4D78`. WheresMyBuddy replaces it through `mediaoverride`.
@@ -30,4 +34,4 @@ FMOD Studio 1.x is linked into the game, and its low-level API is exported from 
 
 ## Finding more
 
-Most of this came from the exe's own strings and RTTI. The exe keeps MSVC type names like `.?AVChampionshipDrivatarsState@SaveStates@@`, which lead to vtables. SQL in the exe shows what the game database (`media\Stripped\gamedbRC.slt`, plain SQLite) holds. When you find something, a pull request adding it here helps the next person.
+Most of this came from the exe's own strings and RTTI. The exe keeps MSVC type names like `.?AVChampionshipDrivatarsState@SaveStates@@`, which lead to vtables. SQL in the exe shows which tables of the game database it reads, and how. When you find something, a pull request adding it here helps the next person.
