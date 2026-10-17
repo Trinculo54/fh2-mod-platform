@@ -140,12 +140,21 @@ int compare_versions(std::string_view a, std::string_view b) {
     return 0;
 }
 
+bool cache_still_good(long long checked, long long now, const std::string& latest, const std::string& cached_for,
+                      const std::string& version) {
+    if (latest.empty() || now - checked < 0 || now - checked >= kCheckEverySecs) return false;
+    // A check from before this version was installed (or from a platform
+    // that didn't note the version) says nothing about releases since.
+    if (strip_v(cached_for) != strip_v(version)) return false;
+    return compare_versions(latest, version) >= 0;
+}
+
 std::string latest_release(const fs::path& azimuth, const std::wstring& name, const std::string& repo,
                            const std::string& agent_version, bool* from_cache) {
     std::error_code ec;
     const auto file = notices_dir(azimuth) / (name + L".check");
     long long checked = 0;
-    std::string latest;
+    std::string latest, cached_for;
     {
         std::ifstream in{file};
         std::string line;
@@ -153,18 +162,20 @@ std::string latest_release(const fs::path& azimuth, const std::wstring& name, co
             line = trim(line);
             if (line.rfind("checked=", 0) == 0) checked = std::atoll(line.c_str() + 8);
             if (line.rfind("latest=", 0) == 0) latest = line.substr(7);
+            if (line.rfind("version=", 0) == 0) cached_for = line.substr(8);
         }
     }
     const long long now = static_cast<long long>(std::time(nullptr));
     if (from_cache) *from_cache = true;
-    if (!latest.empty() && now - checked >= 0 && now - checked < kCheckEverySecs) return latest;
+    if (cache_still_good(checked, now, latest, cached_for, agent_version)) return latest;
 
     const auto tag = tag_from_json(https_get(L"api.github.com", L"/repos/" + widen(repo) + L"/releases/latest",
                                              name + L"/" + widen(agent_version)));
     if (tag.empty()) return latest; // offline: keep what we knew
     if (from_cache) *from_cache = false;
     fs::create_directories(file.parent_path(), ec);
-    std::ofstream{file, std::ios::trunc} << "checked=" << now << "\nlatest=" << tag << "\n";
+    std::ofstream{file, std::ios::trunc} << "checked=" << now << "\nlatest=" << tag << "\nversion=" << agent_version
+                                         << "\n";
     return tag;
 }
 

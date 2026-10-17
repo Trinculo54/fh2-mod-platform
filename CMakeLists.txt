@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 # Bump VERSION before tagging a release (the tag build checks they match).
-project(fh2_mod_platform VERSION 2.2.0 LANGUAGES C CXX RC)
+project(fh2_mod_platform VERSION 2.2.1 LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -76,7 +76,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 
     option(FH2MOD_TESTS "Build the offline test" OFF)
     if(FH2MOD_TESTS)
-        add_executable(platform_test tests/platform_test.cpp src/strings.cpp)
+        add_executable(platform_test tests/platform_test.cpp src/strings.cpp src/updates.cpp)
         target_include_directories(platform_test PRIVATE include src)
         target_compile_definitions(platform_test PRIVATE UNICODE _UNICODE)
         target_link_options(platform_test PRIVATE -municode -static -Wl,--image-base=0x10000000)

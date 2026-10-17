@@ -64,7 +64,8 @@ typedef struct FH2ModApi {
 
     /* Call once from fh2mod_init. Returns your handle for the calls below.
        The platform then shows a title-screen notice when a newer release of
-       your mod is out on GitHub (at most one check every 6 hours), or when
+       your mod is out on GitHub (checked at most every 6 hours, and again as
+       soon as a different version of your mod is installed), or when
        the installed platform is older than info->platform_version. */
     FH2Mod* (*register_mod)(const FH2ModInfo* info);
 

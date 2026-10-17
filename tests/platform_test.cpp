@@ -7,6 +7,7 @@
 // phase "full": everything installed; "removed": TestMod.dll deleted;
 // "crash": AaaMod crashes on purpose.
 #include "strings.hpp"
+#include "updates.hpp"
 
 #include <windows.h>
 
@@ -105,6 +106,16 @@ static char* map_image(const wchar_t* path) {
 
 int wmain(int argc, wchar_t** argv) {
     const std::wstring phase = argc > 1 ? argv[1] : L"full";
+    // Update-check cache: 6 hours, for the same version, never older than it.
+    const long long t = 1'800'000'000, h = 3600;
+    CHECK(cache_still_good(t, t + 5 * h, "v1.5.0", "1.4.0", "1.4.0"));
+    CHECK(!cache_still_good(t, t + 7 * h, "v1.5.0", "1.4.0", "1.4.0"));  // too old
+    CHECK(!cache_still_good(t, t + h, "v1.1.0", "1.1.0", "1.4.0"));      // made before 1.4.0 went in
+    CHECK(!cache_still_good(t, t + h, "v1.1.0", "", "1.4.0"));           // a check from platform 2.2.0
+    CHECK(!cache_still_good(t, t + h, "v1.3.0", "1.4.0", "1.4.0"));      // older than what's installed
+    CHECK(cache_still_good(t, t + h, "v1.4.0", "1.4.0", "1.4.0"));
+    CHECK(!cache_still_good(t, t - h, "v1.4.0", "1.4.0", "1.4.0"));      // clock went back
+    CHECK(!cache_still_good(t, t + h, "", "1.4.0", "1.4.0"));
     if (phase == L"crash") {
         std::ofstream{"crash.txt"} << "1";
         SetUnhandledExceptionFilter(after_crash); // Windows' (or Azimuth's) handler, to the platform
@@ -131,7 +142,7 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("---- platform.log\n%s----\n", log.c_str());
 
     if (phase == L"full") {
-        CHECK(has(log, "FH2 Mod Platform 2.2.0 (API 3)"));
+        CHECK(has(log, "FH2 Mod Platform 2.2.1 (API 3)"));
         CHECK(log.find("loaded HelloMod.dll") != std::string::npos);
         CHECK(log.find("Legacy.dll has no fh2mod_init") != std::string::npos);
         CHECK(fs::exists("legacy_ran.txt"));
