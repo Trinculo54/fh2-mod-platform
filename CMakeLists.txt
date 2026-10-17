@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 # Bump VERSION before tagging a release (the tag build checks they match).
-project(fh2_mod_platform VERSION 2.0.0 LANGUAGES C CXX RC)
+project(fh2_mod_platform VERSION 2.1.0 LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -36,7 +36,8 @@ add_library(fh2mod_api INTERFACE)
 target_include_directories(fh2mod_api INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(fh2mod_api INTERFACE FH2MOD_PLATFORM_VERSION="${PROJECT_VERSION}")
 
-add_library(fh2mod_platform SHARED src/platform.cpp src/strings.cpp src/updates.cpp src/version.rc)
+add_library(fh2mod_platform SHARED src/platform.cpp src/strings.cpp src/updates.cpp src/files.cpp
+            src/database.cpp src/crash.cpp src/version.rc)
 if(NOT MSVC)
     target_sources(fh2mod_platform PRIVATE src/d3dcompiler_47.def)
     target_link_options(fh2mod_platform PRIVATE "$<$<CONFIG:Release>:-Wl,--gc-sections;-s>" -static)
@@ -72,6 +73,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         target_link_libraries(test_mod PRIVATE fh2mod_api)
         set_target_properties(test_mod PROPERTIES OUTPUT_NAME TestMod PREFIX "")
         target_link_options(test_mod PRIVATE -static)
+        add_library(aaa_mod SHARED tests/aaa_mod.cpp)
+        target_link_libraries(aaa_mod PRIVATE fh2mod_api)
+        set_target_properties(aaa_mod PROPERTIES OUTPUT_NAME AaaMod PREFIX "")
+        target_link_options(aaa_mod PRIVATE -static)
         add_library(legacy_mod SHARED tests/legacy_mod.cpp)
         set_target_properties(legacy_mod PROPERTIES OUTPUT_NAME Legacy PREFIX "")
         target_link_options(legacy_mod PRIVATE -static)

@@ -16,7 +16,7 @@
 
 #include <windows.h>
 
-#include "fh2mod.h"
+#include "platform.hpp"
 #include "strings.hpp"
 #include "updates.hpp"
 
@@ -41,16 +41,6 @@
 #define FH2MOD_PLATFORM_VERSION "0.0.0"
 #endif
 
-struct FH2Mod {
-    std::string name, version, repo, platform_version;
-    std::wstring wname, dll;
-    bool check_updates = true;
-    // table (lower case) -> edits
-    std::map<std::string, std::map<uint16_t, std::wstring>> set;
-    std::map<std::string, std::map<std::wstring, std::wstring>> repl;
-    std::vector<std::string> notice; // from set_notice
-    std::vector<std::string> status; // the platform's own: update available, platform too old
-};
 
 namespace fh2platform {
 
@@ -73,6 +63,8 @@ FILE* g_log = nullptr;
 
 FH2ModApi g_api{};
 
+} // namespace
+
 // ---- log -----------------------------------------------------------------------
 
 void log_line(const std::string& who, const std::string& text) {
@@ -86,7 +78,11 @@ void log_line(const std::string& who, const std::string& text) {
     std::fputc('\n', g_log);
     std::fflush(g_log);
 }
-void plog(const std::string& text) { log_line("", text); }
+fs::path azimuth_dir() { return g_azimuth; }
+fs::path game_mount() { return g_game; }
+
+namespace {
+
 
 std::string lower(std::string s) {
     for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -202,7 +198,7 @@ void refresh_notice(FH2Mod* m) {
 // ---- the game ------------------------------------------------------------------
 
 constexpr uint32_t kTimestamp   = 0x565501EDu; // forza_durango_release_final.exe, 24 Nov 2015
-constexpr uint32_t kSizeOfImage = 0x03A18000u;
+constexpr uint32_t kSizeOfImage = kGameSizeOfImage;
 
 bool readable(const void* p, std::size_t n) {
     MEMORY_BASIC_INFORMATION mbi{};
@@ -219,6 +215,8 @@ bool is_game(const char* base) {
     return nt->Signature == IMAGE_NT_SIGNATURE && nt->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 &&
            nt->FileHeader.TimeDateStamp == kTimestamp && nt->OptionalHeader.SizeOfImage == kSizeOfImage;
 }
+
+} // namespace
 
 void* find_game() {
     static void* found = nullptr;
@@ -238,6 +236,8 @@ void* find_game() {
     }
     return nullptr;
 }
+
+namespace {
 
 // ---- the API ---------------------------------------------------------------------
 
@@ -367,6 +367,92 @@ void* api_wait_for_game(uint32_t timeout_ms) {
     }
 }
 
+// ---- API 2: files, database, other mods ------------------------------------------
+
+int api_set_file(FH2Mod* m, const char* path, const void* data, size_t size) { return set_file(m, path, data, size); }
+void api_clear_file(FH2Mod* m, const char* path) { clear_file(m, path); }
+
+void api_add_sql(FH2Mod* m, const char* sql) {
+    if (!m || !sql || !*sql) return;
+    std::scoped_lock lk{g_mu};
+    m->sql.emplace_back(sql);
+}
+
+void api_clear_sql(FH2Mod* m) {
+    if (!m) return;
+    std::scoped_lock lk{g_mu};
+    m->sql.clear();
+}
+
+void build_database() {
+    // Work from a snapshot, so mods can keep adding while it's built.
+    std::vector<FH2Mod> snap;
+    {
+        std::scoped_lock lk{g_mu};
+        for (const auto& m : g_mods) {
+            FH2Mod c;
+            c.name = m->name;
+            c.sql  = m->sql;
+            snap.push_back(std::move(c));
+        }
+    }
+    std::vector<FH2Mod*> ptrs;
+    for (auto& c : snap) ptrs.push_back(&c);
+    apply_database(ptrs);
+}
+
+void api_apply_database(FH2Mod*) { build_database(); }
+
+struct Interface {
+    FH2Mod* owner;
+    uint32_t version;
+    const void* iface;
+};
+std::map<std::string, Interface> g_interfaces;
+HANDLE g_mods_ready = nullptr;   // set once every fh2mod_init has returned
+DWORD g_loader_thread = 0;
+
+void api_publish_interface(FH2Mod* m, const char* name, uint32_t version, const void* iface) {
+    if (!m || !name || !*name) return;
+    std::scoped_lock lk{g_mu};
+    auto it = g_interfaces.find(name);
+    if (it != g_interfaces.end() && it->second.owner != m) {
+        log_line(m->name, std::string("can't publish ") + name + ": " + it->second.owner->name + " already did");
+        return;
+    }
+    if (!iface) {
+        if (it != g_interfaces.end()) g_interfaces.erase(it);
+        log_line(m->name, std::string("withdrew ") + name);
+        return;
+    }
+    g_interfaces[name] = {m, version, iface};
+    log_line(m->name, std::string("published ") + name + " v" + std::to_string(version));
+}
+
+const void* api_get_interface(const char* name, uint32_t min_version) {
+    if (!name) return nullptr;
+    std::scoped_lock lk{g_mu};
+    const auto it = g_interfaces.find(name);
+    return it != g_interfaces.end() && it->second.version >= min_version ? it->second.iface : nullptr;
+}
+
+int api_wait_for_mods(uint32_t timeout_ms) {
+    if (GetCurrentThreadId() == g_loader_thread) {
+        if (WaitForSingleObject(g_mods_ready, 0) == WAIT_OBJECT_0) return 1;
+        log_line("", "a mod called wait_for_mods from fh2mod_init; call it from your own thread");
+        return 0;
+    }
+    return g_mods_ready && WaitForSingleObject(g_mods_ready, timeout_ms) == WAIT_OBJECT_0;
+}
+
+const char* api_mod_version(const char* name) {
+    if (!name) return nullptr;
+    std::scoped_lock lk{g_mu};
+    for (const auto& m : g_mods)
+        if (lstrcmpiA(m->name.c_str(), name) == 0) return m->version.c_str();
+    return nullptr;
+}
+
 // ---- loading mods --------------------------------------------------------------
 
 int call_init(FH2ModInitFn init, const FH2ModApi* api, DWORD* code) {
@@ -378,12 +464,14 @@ int call_init(FH2ModInitFn init, const FH2ModApi* api, DWORD* code) {
 }
 
 DWORD WINAPI load_mods(LPVOID) {
+    g_loader_thread = GetCurrentThreadId();
+    g_mods_ready    = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     std::error_code ec;
     fs::create_directories(g_azimuth / "fh2-mods", ec);
     g_log = _wfopen((g_azimuth / "fh2-mods" / "platform.log").c_str(), L"w");
     plog(std::string("FH2 Mod Platform ") + FH2MOD_PLATFORM_VERSION + " (API " + std::to_string(FH2MOD_API_VERSION) +
          ") in " + narrow(g_azimuth.wstring()));
-    plog(g_game.empty() ? "couldn't find the game's Mount folder; string-table edits are off"
+    plog(g_game.empty() ? "couldn't find the game's Mount folder; game text, file and database changes are off"
                         : "game folder " + narrow(g_game.wstring()));
 
     struct Loaded {
@@ -396,11 +484,16 @@ DWORD WINAPI load_mods(LPVOID) {
         if (e.is_regular_file(ec) && lower(narrow(e.path().extension().wstring())) == ".dll")
             files.push_back(e.path().filename().wstring());
     std::sort(files.begin(), files.end());
+    std::vector<LoadedDll> dlls;
     for (const auto& f : files) {
         // ALTERED_SEARCH_PATH: a mod's own dependencies resolve from fh2-mods first.
         const auto path = (g_azimuth / "fh2-mods" / f).wstring();
         if (HMODULE h = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) {
             loaded.push_back({f, h});
+            const auto* base = reinterpret_cast<const char*>(h);
+            const auto* nt   = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
+                base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
+            dlls.push_back({f, base, nt->OptionalHeader.SizeOfImage});
             const auto v = version_string(h);
             plog("loaded " + narrow(f) + (v.empty() ? "" : " " + v));
         } else {
@@ -408,6 +501,26 @@ DWORD WINAPI load_mods(LPVOID) {
         }
     }
     if (files.empty()) plog("no mods in fh2-mods");
+    {
+        // The platform itself, so a crash in it is named too.
+        HMODULE self = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(&load_mods), &self);
+        if (self) {
+            const auto* base = reinterpret_cast<const char*>(self);
+            const auto* nt   = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
+                base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
+            dlls.push_back({L"d3dcompiler_47.dll (FH2 Mod Platform)", base, nt->OptionalHeader.SizeOfImage});
+        }
+    }
+    install_crash_handler(dlls);
+    std::thread([] {
+        // Azimuth sets up more of itself when Play is pressed.
+        if (api_wait_for_game(0xFFFFFFFFu)) {
+            Sleep(10000);
+            recheck_crash_handler();
+        }
+    }).detach();
 
     for (const auto& l : loaded) {
         auto init = reinterpret_cast<FH2ModInitFn>(GetProcAddress(l.mod, "fh2mod_init"));
@@ -440,7 +553,9 @@ DWORD WINAPI load_mods(LPVOID) {
         g_table_names.emplace("main.str", "Main.str");
     }
     apply_all();
+    build_database();
     plog(std::to_string(loaded.size()) + " mod(s) loaded");
+    SetEvent(g_mods_ready);
 
     // Tables written last time that no mod has edited by now are leftovers
     // (a mod removed, or a feature turned off): clean them up. Wait a little
@@ -456,6 +571,12 @@ DWORD WINAPI load_mods(LPVOID) {
         }
     }
     apply_all();
+    {
+        std::vector<FH2Mod*> mods;
+        std::scoped_lock lk{g_mu};
+        for (const auto& m : g_mods) mods.push_back(m.get());
+        clean_leftover_files(mods);
+    }
     return 0;
 }
 
@@ -504,6 +625,15 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.set_notice       = api_set_notice;
                 g_api.game_base        = api_game_base;
                 g_api.wait_for_game    = api_wait_for_game;
+                g_api.set_file          = api_set_file;
+                g_api.clear_file        = api_clear_file;
+                g_api.add_sql           = api_add_sql;
+                g_api.clear_sql         = api_clear_sql;
+                g_api.apply_database    = api_apply_database;
+                g_api.publish_interface = api_publish_interface;
+                g_api.get_interface     = api_get_interface;
+                g_api.wait_for_mods     = api_wait_for_mods;
+                g_api.mod_version       = api_mod_version;
                 return load_mods(nullptr);
             },
             nullptr, 0, nullptr))

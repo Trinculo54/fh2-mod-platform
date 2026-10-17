@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
 # Runs the platform test under Wine. Needs a build with -DFH2MOD_TESTS=ON in
-# build-test/ and the game's EN.zip (and optionally the exe) from your install:
-#   tests/run_platform_test.sh <EN.zip> [forza_durango_release_final.exe]
+# build-test/, files from your own install (EN.zip from
+# media\Stripped\StringTables and media\Stripped\gamedbRC.slt), and a
+# winsqlite3.dll in Wine's system32 (Wine doesn't have one; build SQLite's
+# amalgamation as a DLL with that name):
+#   tests/run_platform_test.sh <EN.zip> <gamedbRC.slt> [forza_durango_release_final.exe]
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 b=$root/build-test
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
-mkdir -p "$dir/fh2-mods" "$dir/FH2/Mount/media/Stripped/StringTables"
+mkdir -p "$dir/fh2-mods" "$dir/FH2/Mount/media/Stripped/StringTables" "$dir/FH2/Mount/mediaoverride/UI"
 cp "$b/platform_test.exe" "$dir/azimuth.exe"
 cp "$b/d3dcompiler_47.dll" "$dir/"
-cp "$b/HelloMod.dll" "$b/TestMod.dll" "$b/Legacy.dll" "$dir/fh2-mods/"
+cp "$b/AaaMod.dll" "$b/HelloMod.dll" "$b/TestMod.dll" "$b/Legacy.dll" "$dir/fh2-mods/"
 cp "$1" "$dir/FH2/Mount/media/Stripped/StringTables/EN.zip"
+cp "$2" "$dir/FH2/Mount/media/Stripped/gamedbRC.slt"
+chmod u+w "$dir/FH2/Mount/media/Stripped/gamedbRC.slt"
+printf 'made by hand' > "$dir/FH2/Mount/mediaoverride/UI/handmade.xml"
 exe=()
-[ -n "${2:-}" ] && exe=("$(winepath -w "$2" 2>/dev/null || echo "Z:${2//\//\\}")")
+[ -n "${3:-}" ] && exe=("$(winepath -w "$3" 2>/dev/null || echo "Z:${3//\//\\}")")
 cd "$dir"
 wine azimuth.exe full "${exe[@]}"
 rm fh2-mods/TestMod.dll
 wine azimuth.exe removed
+wine azimuth.exe crash

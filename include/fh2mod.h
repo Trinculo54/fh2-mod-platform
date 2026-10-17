@@ -25,6 +25,7 @@
 #ifndef FH2MOD_H
 #define FH2MOD_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <wchar.h>
 
@@ -32,7 +33,7 @@
 extern "C" {
 #endif
 
-#define FH2MOD_API_VERSION 1
+#define FH2MOD_API_VERSION 2
 
 #ifdef __cplusplus
 #define FH2MOD_EXPORT extern "C" __declspec(dllexport)
@@ -55,7 +56,7 @@ typedef struct FH2ModInfo {
 typedef struct FH2ModApi {
     uint32_t size;                /* sizeof(FH2ModApi) as the platform knows it */
     uint32_t api_version;         /* FH2MOD_API_VERSION of the platform */
-    const char* platform_version; /* "2.0.0" */
+    const char* platform_version; /* "2.1.0" */
     const wchar_t* azimuth_dir;   /* folder with azimuth.exe, no trailing slash */
     const wchar_t* game_dir;      /* the game's Mount folder (game:\), or "" if not found */
 
@@ -102,6 +103,62 @@ typedef struct FH2ModApi {
     /* Waits until the game is mapped (or timeout_ms passes; 0xFFFFFFFF =
        forever) and returns its base, or NULL. */
     void* (*wait_for_game)(uint32_t timeout_ms);
+
+    /* ==== API version 2 (platform 2.1.0): check api_version >= 2 ======== */
+
+    /* ---- Game files --------------------------------------------------------
+       Replace a file the game reads from game:\media, through Extra Options'
+       mediaoverride folder. `media_path` is relative to media, with a zip's
+       name standing in for the zip: "drivatarglobalcache/DefaultCache.bin",
+       or "UI/somefile.xml" for a file inside media\UI.zip. One mod per
+       file: returns 1 if written (or already identical), 0 if another mod
+       already replaces it or the write failed (the log says which). String
+       tables and the game database have their own functions above and
+       below, and can't be replaced whole. */
+    int (*set_file)(FH2Mod* mod, const char* media_path, const void* data, size_t size);
+    /* Stop replacing a file (or all of yours, if NULL): the override is
+       deleted and the game reads its own copy again. Files a mod no longer
+       replaces at all (because it was removed) are cleaned up shortly after
+       startup. */
+    void (*clear_file)(FH2Mod* mod, const char* media_path);
+
+    /* ---- Game database -----------------------------------------------------
+       media\Stripped\gamedbRC.slt is a SQLite database with most of the
+       game's data (cars, events, AI drivers). add_sql queues statements
+       (UTF-8, several per call is fine) to run against a copy of it; every
+       mod's statements run in load order, each mod's in a transaction of its
+       own, and the copy goes to mediaoverride. If a mod's SQL fails, only
+       that mod's changes are rolled back, and the error is logged. The copy
+       is rebuilt only when something changed. Statements added in
+       fh2mod_init are applied for you; later ones need apply_database. */
+    void (*add_sql)(FH2Mod* mod, const char* utf8_sql);
+    /* Drop all of your statements (call apply_database after). */
+    void (*clear_sql)(FH2Mod* mod);
+    /* Rebuild the database copy now if anything changed. Slow (seconds):
+       call it from your own thread. The game reads the database once, at
+       startup. */
+    void (*apply_database)(FH2Mod* mod);
+
+    /* ---- Other mods --------------------------------------------------------
+       Mods can offer each other functions. Publish a struct of function
+       pointers under a name, like "WheresMyBuddy.Friends", and treat it like
+       this API: never change a published member, only add new ones at the
+       end and bump the version. */
+
+    /* Offer `iface` (which must stay valid) as `name`, version `version`.
+       Another mod can't take a name you published. */
+    void (*publish_interface)(FH2Mod* mod, const char* name, uint32_t version, const void* iface);
+    /* The interface published as `name`, if its version is at least
+       `min_version`; otherwise NULL. Mods start in alphabetical order, so
+       look up interfaces after wait_for_mods. */
+    const void* (*get_interface)(const char* name, uint32_t min_version);
+    /* Waits until every mod's fh2mod_init has returned (or timeout_ms
+       passes). Returns 1 when they have. Call it from your own thread:
+       from inside fh2mod_init it returns 0 straight away. */
+    int (*wait_for_mods)(uint32_t timeout_ms);
+    /* The version string of the registered mod called `name`, or NULL if
+       it isn't installed. */
+    const char* (*mod_version)(const char* name);
 } FH2ModApi;
 
 /* What a mod exports. */
