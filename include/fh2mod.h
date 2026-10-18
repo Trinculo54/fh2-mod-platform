@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define FH2MOD_API_VERSION 4
+#define FH2MOD_API_VERSION 5
 
 #ifdef __cplusplus
 #define FH2MOD_EXPORT extern "C" __declspec(dllexport)
@@ -234,13 +234,29 @@ typedef struct FH2ModApi {
     /* You changed the value yourself (a hotkey, say): the page shows it the
        next time it opens. on_change isn't called. */
     void (*set_setting)(FH2Mod* mod, const char* key, int value);
+
+    /* ==== API version 5 (platform 2.4.0): check api_version >= 5 ======== */
+
+    /* Sliders on the Mods page: an FH2Setting with kind = FH2_SETTING_SLIDER
+       (see FH2Setting below). On an older platform a slider would come out as
+       an On/Off row, so only add one when api_version >= 5. */
+    /* A slider's current value, or 0 if you have no slider called `key`. */
+    float (*get_slider)(FH2Mod* mod, const char* key);
+    /* You changed a slider's value yourself: the page shows it the next time
+       it opens. on_slide isn't called. */
+    void (*set_slider)(FH2Mod* mod, const char* key, float value);
 } FH2ModApi;
 
 /* Called on the game's UI thread when the player changes a row: keep it
    short (save the value, flip a flag), and don't call back into the game. */
 typedef void (*FH2SettingChangedFn)(void* user, const char* key, int value);
+/* The same for a slider (API 5). */
+typedef void (*FH2SliderChangedFn)(void* user, const char* key, float value);
 
-/* One row on the Mods page (API 4). */
+#define FH2_SETTING_ON_OFF 0
+#define FH2_SETTING_SLIDER 1
+
+/* One row on the Mods page (API 4; sliders API 5). */
 struct FH2Setting {
     uint32_t size;                 /* sizeof(FH2Setting) */
     const char* key;               /* unique within your mod: letters, digits and '_', like "Trees" */
@@ -249,7 +265,17 @@ struct FH2Setting {
     int value;                     /* current value: 0 = Off, 1 = On */
     int needs_restart;             /* nonzero: a change only takes effect the next time the game starts */
     FH2SettingChangedFn on_change; /* may be NULL */
-    void* user;                    /* passed to on_change */
+    void* user;                    /* passed to on_change and on_slide */
+
+    /* ---- API 5 (platform 2.4.0): sliders. Zeroed (as by FH2Setting s{}),
+       the row is On/Off and these are ignored. ---- */
+    int kind;                      /* FH2_SETTING_ON_OFF or FH2_SETTING_SLIDER */
+    float min, max;                /* the slider's range */
+    float step;                    /* how far one press of left or right moves it; 0 = a hundredth of the range */
+    float slider_value;            /* its current value (`value` is ignored) */
+    float display_scale;           /* the number shown is the value times this, so 100 shows 0.12 as 12; 0 = 1 */
+    int decimals;                  /* digits shown after the decimal point, 0 to 3 */
+    FH2SliderChangedFn on_slide;   /* may be NULL */
 };
 
 /* What a mod exports. */
