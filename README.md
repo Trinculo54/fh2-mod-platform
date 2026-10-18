@@ -10,6 +10,8 @@ Mods currently built on it are [FH2 Universal Radio](https://github.com/Trinculo
 
 There's nothing to install by hand. Each mod's zip includes `d3dcompiler_47.dll`, and extracting any of them into your Azimuth folder puts the platform in place. Every copy is the same file, so it doesn't matter which mod you install last, as long as it's a mod from the platform era. If you install a mod that ships an older platform, mods that need the newer one say so on the title screen, under "PRESS (A) TO START", and reinstalling one of them fixes it. If an old mod from before the platform puts back the original FH2 Mod Loader, newer mods keep their main features but lose the extras, and they say so in their logs.
 
+Mods can also put their main switches in the game itself. When one does, Pause > Settings gets a MODS tile next to the others, and the page behind it lists every mod's switches, with a description of each. A change takes effect straight away or, for switches that only work after a restart, the game offers to restart for you when you leave the page.
+
 The same spot on the title screen tells you when one of your mods has a new release on GitHub. Each mod decides whether it checks, and most let you turn it off in their settings.
 
 Everything the platform does is logged to `fh2-mods\platform.log`: which mods it loaded and their versions, which game text, files and data it changed and for whom, and any mod that failed to load or crashed while starting up. It's the first thing to look at when a mod doesn't seem to be doing anything. If the game itself crashes, the platform writes a report to `fh2-mods\crashes` naming the mod the crash came from, if any, which is the thing to attach when you report it to that mod's author.
@@ -43,6 +45,7 @@ The platform calls `fh2mod_init` on its own thread right after loading your DLL,
 - **Game files.** Replace any file the game loads. One mod per file, and it's cleaned up when the mod is removed.
 - **The game database.** Change cars, events and the rest of the game's data with SQL. Every mod's changes go into one copy of the database.
 - **Other mods.** Publish functions for other mods to call, look up theirs, and check which mods are installed.
+- **In-game settings.** On/Off switches on a Mods page in the game's own Settings menu, shared by every mod. You're told when the player flips one, and switches that need a restart get the game's own restart prompt.
 - **Hooks.** Detour game functions, single calls or vtable slots through one shared copy of MinHook. Mods can hook the same function side by side, the platform refuses patches that would clash with another mod's or with Extra Options', and every hook is logged and listed in crash reports.
 - **Crash reports.** When the game crashes, a report in `fh2-mods\crashes` says where, which mod it came from, and which hooks were in place.
 

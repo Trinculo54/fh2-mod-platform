@@ -1,6 +1,6 @@
 # API reference
 
-Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with platform 2.1, and version 3 with platform 2.2. Version 2 added file overrides, database patches and interfaces between mods, and version 3 added hooks; the sections for those say so.
+Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with platform 2.1, version 3 with platform 2.2 and version 4 with platform 2.3. Version 2 added file overrides, database patches and interfaces between mods, version 3 added hooks, and version 4 the Mods page; the sections for those say so.
 
 ## Rules that apply everywhere
 
@@ -213,6 +213,50 @@ static DWORD WINAPI start(LPVOID) {
 ```
 
 Every hook is logged when it's made and switched (`[MyMod] hooked function game+0x1997740 (FMOD::System::createSound)`), and crash reports list them all, marking the ones that were on. A crash inside a MinHook trampoline (the copy of the game's first instructions) is reported as such, with the hook it belongs to.
+
+## The Mods page (API 4)
+
+```c
+int add_setting(FH2Mod* mod, const FH2Setting* setting);
+int get_setting(FH2Mod* mod, const char* key);
+void set_setting(FH2Mod* mod, const char* key, int value);
+
+typedef struct FH2Setting {
+    uint32_t size;                 /* sizeof(FH2Setting) */
+    const char* key;               /* unique within your mod: "Trees" */
+    const char* label;             /* the row's label: "Breakable trees" */
+    const char* description;       /* beside the list while the row is selected; may be NULL */
+    int value;                     /* 0 = Off, 1 = On */
+    int needs_restart;             /* nonzero: a change only takes effect the next time the game starts */
+    FH2SettingChangedFn on_change; /* void (*)(void* user, const char* key, int value); may be NULL */
+    void* user;
+} FH2Setting;
+```
+
+These put On/Off switches for your mod in the game's own menus. When at least one mod adds a row, Pause > Settings gets a sixth tile, MODS, and the page behind it lists every mod's rows in load order. It's laid out like the HUD options page: the row's description, followed by your mod's name, shows beside the list.
+
+Add your rows from `fh2mod_init`. The platform writes the page once every mod's `fh2mod_init` has returned, so a row added after that only shows from the next launch (the log says so). `key` is letters, digits and `_`, and unique within your mod. `add_setting` returns 1, or 0 with the reason in the log.
+
+**Your mod owns the value.** The platform doesn't store it anywhere. Pass the current value in `value`, from your ini or wherever you keep your settings. When the player changes the row, `on_change` gets the new value with your `user` pointer: save it, and start using it if it can change on the fly. `on_change` runs on the game's UI thread, inside the menu's own code, so keep it short and don't call into the game from it. A crash in it is caught and logged. `get_setting` returns a row's current value (-1 if you have no row called `key`). If you change a value yourself, from a hotkey say, `set_setting` makes the page show it the next time it opens; `on_change` isn't called for that.
+
+**Switches that need a restart.** Some changes can only take effect when the game starts, like anything the game reads once while loading. Mark those rows `needs_restart`. Their description then ends with "Takes effect the next time you start the game." While any of them differs from the value the game started with, a notice under the list says so. When the player leaves the Mods page with such a change, the game's own message box offers **Restart now**, **Restart later** and **Go back**. Restart now closes the game the way Azimuth's own Quit does, then starts Azimuth again with `--skip-launcher`, straight back into the game. Your `on_change` has already been called by then, so save there and the restart picks up the new value.
+
+```cpp
+static void changed(void*, const char* key, int value) {
+    WritePrivateProfileStringA("MyMod", key, value ? "1" : "0", g_ini.c_str());
+    if (std::strcmp(key, "Sparks") == 0) g_sparks = value;   // takes effect at once
+}
+
+// in fh2mod_init, after register_mod:
+if (api->api_version >= 4) {
+    FH2Setting s{sizeof s};
+    s.key = "Sparks"; s.label = "Sparks"; s.description = "Sparks fly when you scrape a wall.";
+    s.value = g_sparks; s.on_change = changed;
+    api->add_setting(mod, &s);
+}
+```
+
+The log (`[Mods page]`) says when the page is ready, and each change is logged under your mod's name. If the game's menu code doesn't look as expected, there's no tile or page and the platform's three files for it are removed again; your mod keeps running and simply isn't told of changes. [`game-notes.md`](game-notes.md#menus) explains how the page is put together.
 
 ## Crash reports
 
