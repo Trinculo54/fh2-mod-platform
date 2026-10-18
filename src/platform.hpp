@@ -42,6 +42,8 @@ int set_file(FH2Mod* mod, const char* media_path, const void* data, std::size_t 
 void clear_file(FH2Mod* mod, const char* media_path);
 // Removes overrides from earlier launches that no mod owns now.
 void clean_leftover_files(const std::vector<FH2Mod*>& mods);
+// Removes one override from an earlier launch now, if no mod replaces it this time.
+void remove_leftover_file(const char* media_path);
 
 // database.cpp: SQL patches applied to a copy of the game database.
 void apply_database(const std::vector<FH2Mod*>& mods);

@@ -810,7 +810,13 @@ void settings_start(const FH2ModApi* api) {
         n = g_rows.size();
     }
     g_written = true;
-    if (!n) return;
+    if (!n) {
+        // No rows this time (the mods that had some were removed): take the tile and the
+        // page back out before the game reads its menus, rather than with the clean-up later.
+        remove_leftover_file("UI/Scenes/Anthem/A_PauseOptions.xaml");
+        remove_leftover_file("UI/Scenes/Anthem/A_ModOptions.xaml");
+        return;
+    }
     if (game_mount().empty()) {
         slog("the game folder wasn't found; no Mods page");
         return;
