@@ -123,7 +123,7 @@ If you can't use the platform's hooks for something (a patch in the middle of a 
 
 ## Switches in the game
 
-If players will want to turn parts of your mod on and off, give them rows on the Mods page (API 4): Pause > Settings > MODS, shared by every mod. You pass the current value and get told when the player changes it; you keep saving it in your own settings file, as before. Rows that only work after a restart are marked so, and the game then offers to restart for the player. [`api.md`](api.md#the-mods-page-api-4) has the details and an example. Keep it to the main switches; fine-tuning still belongs in your ini.
+If players will want to turn parts of your mod on and off, or tune a number, give them rows on the Mods page (API 4; sliders API 5): Pause > Settings > MODS, shared by every mod. You pass the current value and get told when the player changes it; you keep saving it in your own settings file, as before. Rows that only work after a restart are marked so, and the game then offers to restart for the player. [`api.md`](api.md#the-mods-page-api-4-sliders-api-5) has the details and an example. Keep it to the main switches; fine-tuning still belongs in your ini.
 
 ## Your own files
 
