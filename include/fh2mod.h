@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define FH2MOD_API_VERSION 3
+#define FH2MOD_API_VERSION 4
 
 #ifdef __cplusplus
 #define FH2MOD_EXPORT extern "C" __declspec(dllexport)
@@ -45,6 +45,8 @@ extern "C" {
 typedef struct FH2Mod FH2Mod;
 /* Opaque handle for one hook (API 3). */
 typedef struct FH2Hook FH2Hook;
+/* One row on the Mods page (API 4), defined below FH2ModApi. */
+typedef struct FH2Setting FH2Setting;
 
 typedef struct FH2ModInfo {
     uint32_t size;                /* sizeof(FH2ModInfo) */
@@ -209,7 +211,46 @@ typedef struct FH2ModApi {
        safe to hook game code, or NULL on timeout. Call it from your own
        thread. */
     void* (*wait_for_code)(uint32_t timeout_ms);
+
+    /* ==== API version 4 (platform 2.3.0): check api_version >= 4 ======== */
+
+    /* ---- In-game settings --------------------------------------------------
+       On/Off rows on the game's own Mods page (Pause > Settings > MODS),
+       next to every other mod's. The tile and the page only appear when at
+       least one mod adds a row. Add your rows from fh2mod_init: the page is
+       written when every mod's fh2mod_init has returned, and rows added
+       after that only show from the next launch.
+
+       Your mod keeps owning the value: pass the current one in, and when the
+       player changes it, on_change tells you the new one, so you can save it
+       wherever you keep your settings (your ini) and use it. The platform
+       doesn't store values. Rows marked needs_restart get a note in their
+       description, and changing one brings up the game's own message box
+       when the player leaves the Mods page, offering to restart the game.
+       Returns 1 if the row was added, 0 if not (the log says why). */
+    int (*add_setting)(FH2Mod* mod, const FH2Setting* setting);
+    /* The row's current value, or -1 if you have no row called `key`. */
+    int (*get_setting)(FH2Mod* mod, const char* key);
+    /* You changed the value yourself (a hotkey, say): the page shows it the
+       next time it opens. on_change isn't called. */
+    void (*set_setting)(FH2Mod* mod, const char* key, int value);
 } FH2ModApi;
+
+/* Called on the game's UI thread when the player changes a row: keep it
+   short (save the value, flip a flag), and don't call back into the game. */
+typedef void (*FH2SettingChangedFn)(void* user, const char* key, int value);
+
+/* One row on the Mods page (API 4). */
+struct FH2Setting {
+    uint32_t size;                 /* sizeof(FH2Setting) */
+    const char* key;               /* unique within your mod: letters, digits and '_', like "Trees" */
+    const char* label;             /* the row's label, UTF-8: "Breakable trees" */
+    const char* description;       /* shown beside the list while the row is selected; may be NULL */
+    int value;                     /* current value: 0 = Off, 1 = On */
+    int needs_restart;             /* nonzero: a change only takes effect the next time the game starts */
+    FH2SettingChangedFn on_change; /* may be NULL */
+    void* user;                    /* passed to on_change */
+};
 
 /* What a mod exports. */
 typedef int (*FH2ModInitFn)(const FH2ModApi* api);

@@ -52,6 +52,13 @@ bool hook_at(const void* p, char* out, std::size_t n); // p is in a hook's tramp
 int hook_count();
 const char* hook_line(int i, bool* enabled);
 
+// settings.cpp: rows on the game's Mods page (API 4).
+int settings_add(FH2Mod* mod, const FH2Setting* setting);
+int settings_get(FH2Mod* mod, const char* key);
+void settings_set(FH2Mod* mod, const char* key, int value);
+// After every fh2mod_init: writes the pages and hooks the game if any mod added a row.
+void settings_start(const FH2ModApi* api);
+
 // crash.cpp
 struct LoadedDll {
     std::wstring name;

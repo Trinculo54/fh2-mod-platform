@@ -31,3 +31,5 @@ EXPORTS
     D3DStripShader                    = C:\Windows\System32\d3dcompiler_47.D3DStripShader
     D3DWriteBlobToFile                = C:\Windows\System32\d3dcompiler_47.D3DWriteBlobToFile
     DebugSetMute                      = C:\Windows\System32\d3dcompiler_47.DebugSetMute
+    ; ours: rundll32 d3dcompiler_47.dll,RestartHelper (settings.cpp)
+    RestartHelper
