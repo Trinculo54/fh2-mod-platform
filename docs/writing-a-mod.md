@@ -121,6 +121,10 @@ Two rules matter. First, get the game's base from `wait_for_code`, not `wait_for
 
 If you can't use the platform's hooks for something (a patch in the middle of a function, say), still check the bytes are what you expect before you change them, and write them atomically.
 
+## Switches in the game
+
+If players will want to turn parts of your mod on and off, give them rows on the Mods page (API 4): Pause > Settings > MODS, shared by every mod. You pass the current value and get told when the player changes it; you keep saving it in your own settings file, as before. Rows that only work after a restart are marked so, and the game then offers to restart for the player. [`api.md`](api.md#the-mods-page-api-4) has the details and an example. Keep it to the main switches; fine-tuning still belongs in your ini.
+
 ## Your own files
 
 Keep your settings, logs and other data in a folder of your own next to `azimuth.exe`, named after your mod, such as `MyMod\` or `mymod\`. The existing mods use `fh2-radio\` and `wheresmybuddy\`. `api->azimuth_dir` gives you that folder and `api->game_dir` the game's `Mount` folder. Don't put data in `fh2-mods`: anything in there ending in `.dll` gets loaded as a mod, and the platform keeps its own files there.

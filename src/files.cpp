@@ -187,6 +187,20 @@ void clear_file(FH2Mod* mod, const char* media_path) {
     write_files_manifest(manifest);
 }
 
+void remove_leftover_file(const char* media_path) {
+    const std::wstring rel = normalize(media_path);
+    if (rel.empty() || game_mount().empty()) return;
+    std::scoped_lock lk{g_files_mu};
+    if (g_owner.count(lower_w(rel))) return;
+    auto manifest = read_files_manifest();
+    auto it       = find_ci(manifest, rel);
+    if (it == manifest.end()) return;
+    if (remove_file(game_mount() / L"mediaoverride" / rel))
+        plog("removed the " + shown(rel) + " override (" + it->second + " no longer replaces it)");
+    manifest.erase(it);
+    write_files_manifest(manifest);
+}
+
 void clean_leftover_files(const std::vector<FH2Mod*>&) {
     if (game_mount().empty()) return;
     std::scoped_lock lk{g_files_mu};

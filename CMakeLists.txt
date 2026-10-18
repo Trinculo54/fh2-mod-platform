@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 # Bump VERSION before tagging a release (the tag build checks they match).
-project(fh2_mod_platform VERSION 2.2.1 LANGUAGES C CXX RC)
+project(fh2_mod_platform VERSION 2.3.0 LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -43,7 +43,7 @@ set(_minhook_src ${_minhook}/hook.c ${_minhook}/buffer.c ${_minhook}/trampoline.
 set_source_files_properties(${_minhook_src} PROPERTIES COMPILE_OPTIONS "$<$<NOT:$<BOOL:${MSVC}>>:-w>")
 
 add_library(fh2mod_platform SHARED src/platform.cpp src/strings.cpp src/updates.cpp src/files.cpp
-            src/database.cpp src/crash.cpp src/hooks.cpp src/version.rc ${_minhook_src})
+            src/database.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/version.rc ${_minhook_src})
 target_include_directories(fh2mod_platform PRIVATE third_party/minhook/include ${_minhook})
 if(NOT MSVC)
     # InterlockedCompareExchange128, for rewriting call sites atomically.

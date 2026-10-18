@@ -42,6 +42,8 @@ int set_file(FH2Mod* mod, const char* media_path, const void* data, std::size_t 
 void clear_file(FH2Mod* mod, const char* media_path);
 // Removes overrides from earlier launches that no mod owns now.
 void clean_leftover_files(const std::vector<FH2Mod*>& mods);
+// Removes one override from an earlier launch now, if no mod replaces it this time.
+void remove_leftover_file(const char* media_path);
 
 // database.cpp: SQL patches applied to a copy of the game database.
 void apply_database(const std::vector<FH2Mod*>& mods);
@@ -51,6 +53,13 @@ void fill_hook_api(FH2ModApi& api);
 bool hook_at(const void* p, char* out, std::size_t n); // p is in a hook's trampoline or stub
 int hook_count();
 const char* hook_line(int i, bool* enabled);
+
+// settings.cpp: rows on the game's Mods page (API 4).
+int settings_add(FH2Mod* mod, const FH2Setting* setting);
+int settings_get(FH2Mod* mod, const char* key);
+void settings_set(FH2Mod* mod, const char* key, int value);
+// After every fh2mod_init: writes the pages and hooks the game if any mod added a row.
+void settings_start(const FH2ModApi* api);
 
 // crash.cpp
 struct LoadedDll {

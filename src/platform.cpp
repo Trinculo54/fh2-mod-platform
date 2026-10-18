@@ -559,6 +559,7 @@ DWORD WINAPI load_mods(LPVOID) {
     }
     apply_all();
     build_database();
+    settings_start(&g_api);
     plog(std::to_string(loaded.size()) + " mod(s) loaded");
     SetEvent(g_mods_ready);
 
@@ -640,6 +641,9 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.wait_for_mods     = api_wait_for_mods;
                 g_api.mod_version       = api_mod_version;
                 fill_hook_api(g_api);
+                g_api.add_setting       = settings_add;
+                g_api.get_setting       = settings_get;
+                g_api.set_setting       = settings_set;
                 return load_mods(nullptr);
             },
             nullptr, 0, nullptr))
