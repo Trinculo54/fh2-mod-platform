@@ -214,12 +214,14 @@ static DWORD WINAPI start(LPVOID) {
 
 Every hook is logged when it's made and switched (`[MyMod] hooked function game+0x1997740 (FMOD::System::createSound)`), and crash reports list them all, marking the ones that were on. A crash inside a MinHook trampoline (the copy of the game's first instructions) is reported as such, with the hook it belongs to.
 
-## The Mods page (API 4)
+## The Mods page (API 4; sliders API 5)
 
 ```c
 int add_setting(FH2Mod* mod, const FH2Setting* setting);
 int get_setting(FH2Mod* mod, const char* key);
 void set_setting(FH2Mod* mod, const char* key, int value);
+float get_slider(FH2Mod* mod, const char* key);              /* API 5 */
+void set_slider(FH2Mod* mod, const char* key, float value);  /* API 5 */
 
 typedef struct FH2Setting {
     uint32_t size;                 /* sizeof(FH2Setting) */
@@ -230,10 +232,18 @@ typedef struct FH2Setting {
     int needs_restart;             /* nonzero: a change only takes effect the next time the game starts */
     FH2SettingChangedFn on_change; /* void (*)(void* user, const char* key, int value); may be NULL */
     void* user;
+    /* API 5: sliders. Zeroed, the row is On/Off. */
+    int kind;                      /* FH2_SETTING_ON_OFF or FH2_SETTING_SLIDER */
+    float min, max;                /* the slider's range */
+    float step;                    /* one press of left or right; 0 = a hundredth of the range */
+    float slider_value;            /* its current value */
+    float display_scale;           /* the number shown is value * this (100 shows 0.12 as 12); 0 = 1 */
+    int decimals;                  /* digits after the decimal point, 0 to 3 */
+    FH2SliderChangedFn on_slide;   /* void (*)(void* user, const char* key, float value); may be NULL */
 } FH2Setting;
 ```
 
-These put On/Off switches for your mod in the game's own menus. When at least one mod adds a row, Pause > Settings gets a sixth tile, MODS, and the page behind it lists every mod's rows in load order. It's laid out like the HUD options page: the row's description, followed by your mod's name, shows beside the list.
+These put On/Off switches and sliders for your mod in the game's own menus. When at least one mod adds a row, Pause > Settings gets a sixth tile, MODS, and the page behind it lists every mod's rows in load order. It's laid out like the HUD options page: the row's description, followed by your mod's name, shows beside the list.
 
 Add your rows from `fh2mod_init`. The platform writes the page once every mod's `fh2mod_init` has returned, so a row added after that only shows from the next launch (the log says so). `key` is letters, digits and `_`, and unique within your mod. `add_setting` returns 1, or 0 with the reason in the log.
 
@@ -252,6 +262,25 @@ if (api->api_version >= 4) {
     FH2Setting s{sizeof s};
     s.key = "Sparks"; s.label = "Sparks"; s.description = "Sparks fly when you scrape a wall.";
     s.value = g_sparks; s.on_change = changed;
+    api->add_setting(mod, &s);
+}
+```
+
+**Sliders (API 5, platform 2.4.0).** Set `kind = FH2_SETTING_SLIDER` and the row is the game's own slider, like the audio volumes: left and right move it by `step` between `min` and `max`, and the number at its end is the value times `display_scale`, with `decimals` digits after the point. A value kept as a share, like 0.12, reads best with `display_scale = 100` and no decimals ("12"). Pass the current value in `slider_value`; `on_slide` gets each new one, already kept inside the range and on a step. `get_slider` and `set_slider` work like `get_setting` and `set_setting`. `needs_restart` works for sliders too. An older platform would show a slider as an On/Off row, so only add one when `api_version >= 5`:
+
+```cpp
+static void slid(void*, const char* key, float value) {
+    char v[32];
+    std::snprintf(v, sizeof v, "%g", value);
+    WritePrivateProfileStringA("MyMod", key, v, g_ini.c_str());
+    if (std::strcmp(key, "SparkAmount") == 0) g_spark_amount = value;
+}
+
+if (api->api_version >= 5) {
+    FH2Setting s{sizeof s};
+    s.key = "SparkAmount"; s.label = "Spark amount"; s.description = "How many sparks fly, in percent.";
+    s.kind = FH2_SETTING_SLIDER; s.min = 0; s.max = 2; s.step = 0.05f;
+    s.slider_value = g_spark_amount; s.display_scale = 100; s.on_slide = slid;
     api->add_setting(mod, &s);
 }
 ```

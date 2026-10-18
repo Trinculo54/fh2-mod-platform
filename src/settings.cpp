@@ -1,4 +1,5 @@
-// In-game settings (API 4): On/Off rows for mods on a Mods page of the game's own.
+// In-game settings (API 4, sliders API 5): On/Off and slider rows for mods on a Mods page of
+// the game's own.
 //
 // What the player sees:
 //  - Pause > Settings gets a sixth tile, MODS. It opens a page laid out like the HUD options
@@ -25,6 +26,10 @@
 //    (0x140B3A3E0: { id 0x49, "HudOptions", L"Anthem\A_HudOptions" at +0x28, factory }),
 //    and the second copy, the one the new page loads its XAML from, goes into the page.
 //    Both builds just after our tile was pressed are pointed at A_ModOptions instead.
+//  - Sliders are the game's own Slider control (the audio volumes, the controller dead zones),
+//    styled like A_Style_Slider_Options but with each row's range, step and number format,
+//    bound to float properties of ours laid out like a float property of the game's
+//    (0x140ED6E90), boxed with 0x1403F5990.
 //  - Extra Options adds its own rows to any page declared x:Class="ForzaUI.A_HudOptions";
 //    the Mods page writes it with a space before the '=', which keeps them off it.
 //  - The message box is the one the options pages use for "Unsaved changes": see the popup
@@ -37,6 +42,7 @@
 
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -80,6 +86,12 @@ struct Row {
     FH2SettingChangedFn on_change = nullptr;
     void* user = nullptr;
     uint8_t* desc = nullptr;         // our AVUI property descriptor, made on first use
+    // sliders (API 5)
+    bool slider = false;
+    std::atomic<float> fvalue{0};
+    float fboot = 0, fmin = 0, fmax = 1, fstep = 0.01f, scale = 1;
+    int decimals = 0;
+    FH2SliderChangedFn on_slide = nullptr;
 };
 std::mutex g_mu;                     // guards the list (rows are never removed)
 std::deque<Row> g_rows;
@@ -119,13 +131,13 @@ Row* row_by_desc(void* desc) {
 
 bool restart_pending() {
     for (Row& r : g_rows)
-        if (r.restart && r.value.load() != r.boot) return true;
+        if (r.restart && (r.slider ? std::fabs(r.fvalue.load() - r.fboot) > r.fstep * 0.5f : r.value.load() != r.boot)) return true;
     return false;
 }
 
 std::string current_values() {
     std::string v;
-    for (Row& r : g_rows) v += std::to_string(r.value.load()) + ",";
+    for (Row& r : g_rows) v += (r.slider ? std::to_string(r.fvalue.load()) : std::to_string(r.value.load())) + ",";
     return v;
 }
 
@@ -137,20 +149,25 @@ constexpr uintptr_t RVA_BOX_BOOL        = 0x0336BA0;   // ObjectPtr* box(ObjectP
 constexpr uintptr_t RVA_BOOL_TYPE       = 0x15C9550;   // the bool type, (0)
 constexpr uintptr_t RVA_NOTIFY_PROP     = 0x0CF9C60;   // raise PropertyChanged(obj, desc)
 constexpr uintptr_t RVA_MODEL_PROPERTY  = 0x0D58660;   // the HUD page's EnableDrivatarLiveries descriptor
+constexpr uintptr_t RVA_FLOAT_PROPERTY  = 0x0ED6E90;   // a float property's descriptor, for sliders
+constexpr uintptr_t RVA_BOX_FLOAT       = 0x03F5990;   // ObjectPtr* box(ObjectPtr* out, const float*)
 using BoxIntFn    = void** (*)(void** out, const int* value);
 using BoxBoolFn   = void** (*)(void** out, const bool* value);
+using BoxFloatFn  = void** (*)(void** out, const float* value);
 using TypeFn      = void* (*)(int);
 using NotifyFn    = void (*)(void* obj, void* desc);
 using AccessorFn  = uint8_t* (*)();
 using ObjectCtorFn = void (*)(void* self);
 
 std::mutex g_desc_mu;
+bool g_sliders_ok = false;           // the game's float property and float boxing look as expected
 uint8_t* g_notice_desc = nullptr;    // FH2Mod_RestartNotice
 
 // A descriptor laid out like the model's: +0x28 getter(out, desc, obj), +0x30 setter(desc,
 // obj, value), +0x40 name, +0x48 value type (the model's, an int, unless given), +0x50 flags.
-uint8_t* new_descriptor(const char* name, void* getter, void* setter, void* type) {
-    uint8_t* model = reinterpret_cast<AccessorFn>(g_base + RVA_MODEL_PROPERTY)();
+// Sliders copy a float property instead.
+uint8_t* new_descriptor(const char* name, void* getter, void* setter, void* type, uintptr_t model_rva = RVA_MODEL_PROPERTY) {
+    uint8_t* model = reinterpret_cast<AccessorFn>(g_base + model_rva)();
     if (!model || !readable(model, 0x58)) return nullptr;
     auto* d = static_cast<uint8_t*>(VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
     if (!d) return nullptr;
@@ -187,15 +204,59 @@ bool call_on_change(FH2SettingChangedFn fn, void* user, const char* key, int v) 
 
 void** __cdecl row_get(void** out, void* desc, void*) {
     Row* r = row_by_desc(desc);
-    int v  = r ? r->value.load() : 0;
     *out   = nullptr;
+    if (r && r->slider) {
+        float f = r->fvalue.load();
+        reinterpret_cast<BoxFloatFn>(g_base + RVA_BOX_FLOAT)(out, &f);
+        return out;
+    }
+    int v = r ? r->value.load() : 0;
     reinterpret_cast<BoxIntFn>(g_base + RVA_BOX_INT)(out, &v);
     return out;
+}
+
+bool call_on_slide(FH2SliderChangedFn fn, void* user, const char* key, float v) {
+    __try {
+        fn(user, key, v);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// a value inside the slider's range, on one of its steps
+float snap(const Row& r, float v) {
+    if (v < r.fmin) v = r.fmin;
+    if (v > r.fmax) v = r.fmax;
+    if (r.fstep > 0) v = r.fmin + std::round((v - r.fmin) / r.fstep) * r.fstep;
+    if (v > r.fmax) v = r.fmax;
+    return v;
+}
+
+std::string show(const Row& r, float v) {
+    char b[32];
+    std::snprintf(b, sizeof b, "%.*f", r.decimals, static_cast<double>(v * r.scale));
+    return b;
+}
+
+void slider_set(Row* r, void* obj, uint8_t* value) {
+    float f = 0;
+    std::memcpy(&f, value + 0x28, sizeof f);
+    if (!std::isfinite(f)) return;
+    f                        = snap(*r, f);
+    const bool pending_before = restart_pending();
+    const float old          = r->fvalue.exchange(f);
+    if (std::fabs(old - f) < r->fstep * 0.01f) return;
+    log_line(r->mod->name, r->key + " set to " + show(*r, f) + " on the Mods page");
+    if (r->on_slide && !call_on_slide(r->on_slide, r->user, r->key.c_str(), f))
+        log_line(r->mod->name, "crashed in its on_slide for " + r->key);
+    if (restart_pending() != pending_before && obj && g_notice_desc) notify_changed(obj, g_notice_desc);
 }
 
 void __cdecl row_set(void* desc, void* obj, uint8_t* value) {
     Row* r = row_by_desc(desc);
     if (!r || !value || !readable(value + 0x28, 4)) return;
+    if (r->slider) return slider_set(r, obj, value);
     const int v              = *reinterpret_cast<int*>(value + 0x28);
     const bool pending_before = restart_pending();
     const int old            = r->value.exchange(v);
@@ -216,7 +277,10 @@ void __cdecl notice_set(void*, void*, uint8_t*) {}
 
 uint8_t* descriptor_for(Row* r) {
     std::scoped_lock lk{g_desc_mu};
-    if (!r->desc) r->desc = new_descriptor(r->prop.c_str(), reinterpret_cast<void*>(&row_get), reinterpret_cast<void*>(&row_set), nullptr);
+    if (r->slider && !g_sliders_ok) return nullptr;
+    if (!r->desc)
+        r->desc = new_descriptor(r->prop.c_str(), reinterpret_cast<void*>(&row_get), reinterpret_cast<void*>(&row_set), nullptr,
+                                 r->slider ? RVA_FLOAT_PROPERTY : RVA_MODEL_PROPERTY);
     return r->desc;
 }
 
@@ -285,6 +349,60 @@ bool replace_between(std::string& s, const std::string& open, const std::string&
     return true;
 }
 
+std::string num(float f) {
+    char b[32];
+    std::snprintf(b, sizeof b, "%g", static_cast<double>(f));
+    return b;
+}
+
+// A slider's style: A_Style_Slider_Options (Shared_OptionsScreens.xaml) with the row's range,
+// step and number. Shown as a percentage (scale 100) it uses the game's own "fracpercentage";
+// otherwise the converter's Scale.
+std::string slider_resources(const Row& r, std::size_t i) {
+    const std::string n     = std::to_string(i);
+    const bool percent      = std::fabs(r.scale - 100.0f) < 1e-3f;
+    std::string res = "            <local:NumUnitConverter x:Key=\"FH2Mod_Num_" + n + "\" FractionDigits=\"" +
+                      std::to_string(r.decimals) + "\" ShowUnit=\"False\"" +
+                      (percent || r.scale == 1.0f ? "" : " Scale=\"" + num(r.scale) + "\"") + " />\r\n";
+    res += "            <Style x:Key=\"FH2Mod_Slider_" + n + "\" TargetType=\"Slider\" BasedOn=\"{StaticResource A_Style_Slider_Options}\">\r\n"
+           "                <Setter Property=\"Minimum\" Value=\"" + num(r.fmin) + "\" />\r\n"
+           "                <Setter Property=\"Maximum\" Value=\"" + num(r.fmax) + "\" />\r\n"
+           "                <Setter Property=\"SmallChange\" Value=\"" + num(r.fstep) + "\" />\r\n"
+           "                <Setter Property=\"Template\">\r\n"
+           "                    <Setter.Value>\r\n"
+           "                        <ControlTemplate TargetType=\"Slider\">\r\n"
+           "                            <Grid FocusManager.IsFocusScope=\"True\">\r\n"
+           "                                <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition /></Grid.ColumnDefinitions>\r\n"
+           "                                <local:FZTextBlock x:Name=\"PART_Label\" Text=\"{Binding Tag.Heading, RelativeSource={RelativeSource TemplatedParent}}\" "
+           "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Left\" />\r\n"
+           "                                <DockPanel Grid.Column=\"1\">\r\n"
+           "                                    <local:FZTextBlock DockPanel.Dock=\"Right\" Width=\"64\" TextAlignment=\"Right\" HorizontalAlignment=\"Right\" "
+           "Text=\"{Binding Value, RelativeSource={RelativeSource TemplatedParent}, " +
+           (percent ? std::string("ConverterParameter=fracpercentage, ") : std::string()) + "Converter={StaticResource FH2Mod_Num_" + n +
+           "}}\" Style=\"{StaticResource A_Style_SliderControlText}\" />\r\n"
+           "                                    <Grid Margin=\"32, 0, 8, 0\" Height=\"22\">\r\n"
+           "                                        <local:FZMaterial x:Name=\"PART_SliderMaterial\" Color=\"{StaticResource A_Color_MediumGreyText}\" />\r\n"
+           "                                        <Track x:Name=\"PART_Track\">\r\n"
+           "                                            <Track.DecreaseRepeatButton>\r\n"
+           "                                                <RepeatButton x:Name=\"Left\" Style=\"{StaticResource A_Style_RepeatButton_Left_Unfocused}\"/>\r\n"
+           "                                            </Track.DecreaseRepeatButton>\r\n"
+           "                                        </Track>\r\n"
+           "                                    </Grid>\r\n"
+           "                                </DockPanel>\r\n"
+           "                            </Grid>\r\n"
+           "                            <ControlTemplate.Triggers>\r\n"
+           "                                <DataTrigger Binding=\"{Binding RelativeSource={RelativeSource Mode=FindAncestor, AncestorType=ListBoxItem}, Path=IsKeyboardFocusWithin}\" Value=\"True\">\r\n"
+           "                                    <Setter TargetName=\"PART_SliderMaterial\" Property=\"Color\" Value=\"{StaticResource A_Color_Header_Background}\"/>\r\n"
+           "                                    <Setter TargetName=\"Left\" Property=\"Style\" Value=\"{StaticResource A_Style_RepeatButton_Left_Focused}\"/>\r\n"
+           "                                </DataTrigger>\r\n"
+           "                            </ControlTemplate.Triggers>\r\n"
+           "                        </ControlTemplate>\r\n"
+           "                    </Setter.Value>\r\n"
+           "                </Setter>\r\n"
+           "            </Style>\r\n";
+    return res;
+}
+
 // The Mods page: A_HUDOptions.xaml with its rows swapped for the mods'.
 bool write_mods_page() {
     std::string page = read_ui("Scenes/Anthem/A_HUDOptions.xaml");
@@ -300,6 +418,13 @@ bool write_mods_page() {
             desc += (desc.empty() ? "" : " ") + std::string("(") + r.mod->name + ")";
             res += "            <local:TileMenuDataItem x:Key=\"FH2Mod_Item_" + std::to_string(i) + "\" Heading=\"" +
                    xml_escape(r.label) + "\" Description=\"" + xml_escape(desc) + "\" />\r\n";
+            if (r.slider) {
+                res += slider_resources(r, i);
+                rows += "                                        <Slider Value=\"{Binding " + r.prop + "}\" Tag=\"{StaticResource FH2Mod_Item_" +
+                        std::to_string(i) + "}\" Style=\"{StaticResource FH2Mod_Slider_" + std::to_string(i) + "}\"" +
+                        (i == 0 ? " x:Name=\"FirstItem\"" : "") + " />\r\n";
+                continue;
+            }
             rows += "                                        <local:SpinnerControl Label=\"" + xml_escape(r.label) +
                     "\" Tag=\"{StaticResource FH2Mod_Item_" + std::to_string(i) + "}\" SelectedIndex=\"{Binding " + r.prop +
                     "}\" ItemsSource=\"{Binding OnOffOptions}\" Style=\"{StaticResource A_Style_SpinnerControl_Default}\"" +
@@ -712,6 +837,17 @@ void hook_game() {
             clear_file(&g_owner_mod, nullptr);
             return;
         }
+    const Check slider_checks[] = {
+        // a float property's descriptor accessor, down to the call for the float type
+        {RVA_FLOAT_PROPERTY, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF, 0xFF, 0x48, 0x89,
+                              0x5C, 0x24, 0x40, 0x8B, 0x05, 0x3E, 0x16, 0x67, 0x02, 0xA8, 0x01, 0x0F, 0x85, 0x85, 0x00, 0x00, 0x00,
+                              0x83, 0xC8, 0x01, 0x89, 0x05, 0x2D, 0x16, 0x67, 0x02, 0x33, 0xC9, 0xE8, 0x3E, 0x1D, 0x6F, 0x00}},
+        {RVA_BOX_FLOAT, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0xD9, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00, 0xE8,
+                         0x1A, 0x11, 0xF4, 0xFF}},
+    };
+    g_sliders_ok = true;
+    for (const Check& c : slider_checks) g_sliders_ok = g_sliders_ok && code_matches(c.rva, c.bytes.data(), c.bytes.size());
+    if (!g_sliders_ok) slog("the game's float properties don't look as expected; sliders won't work");
     const Check popup_checks[] = {
         {RVA_MAKE_ITEMS, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48, 0xC7, 0x44, 0x24}},
         {RVA_MAKE_ITEM, {0x40, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x40}},
@@ -781,6 +917,24 @@ int settings_add(FH2Mod* m, const FH2Setting* s) {
     r.restart    = s->needs_restart != 0;
     r.on_change  = s->on_change;
     r.user       = s->user;
+    if (s->size >= offsetof(FH2Setting, on_slide) + sizeof(void*) && s->kind == FH2_SETTING_SLIDER) {
+        if (!(std::isfinite(s->min) && std::isfinite(s->max) && s->max > s->min)) {
+            log_line(m->name, std::string("add_setting: ") + s->key + " needs max above min");
+            g_rows.pop_back();
+            return 0;
+        }
+        r.slider   = true;
+        r.fmin     = s->min;
+        r.fmax     = s->max;
+        r.fstep    = s->step > 0 && std::isfinite(s->step) ? s->step : (s->max - s->min) / 100.0f;
+        r.scale    = s->display_scale > 0 && std::isfinite(s->display_scale) ? s->display_scale : 1.0f;
+        r.decimals = s->decimals < 0 ? 0 : s->decimals > 3 ? 3 : s->decimals;
+        r.on_slide = s->on_slide;
+        r.fvalue   = snap(r, std::isfinite(s->slider_value) ? s->slider_value : s->min);
+        r.fboot    = r.fvalue;
+        r.value    = 0;
+        r.boot     = 0;
+    }
     log_line(m->name, "Mods page row: " + r.label + (r.restart ? " (after a restart)" : "") +
                           (g_written ? "; the page is already written, so it shows from the next launch" : ""));
     return 1;
@@ -796,7 +950,20 @@ int settings_get(FH2Mod* m, const char* key) {
 void settings_set(FH2Mod* m, const char* key, int value) {
     if (!m || !key) return;
     std::scoped_lock lk{g_mu};
-    if (Row* r = find_row(m, key)) r->value = value ? 1 : 0;
+    if (Row* r = find_row(m, key); r && !r->slider) r->value = value ? 1 : 0;
+}
+
+float settings_get_slider(FH2Mod* m, const char* key) {
+    if (!m || !key) return 0;
+    std::scoped_lock lk{g_mu};
+    const Row* r = find_row(m, key);
+    return r && r->slider ? r->fvalue.load() : 0;
+}
+
+void settings_set_slider(FH2Mod* m, const char* key, float value) {
+    if (!m || !key || !std::isfinite(value)) return;
+    std::scoped_lock lk{g_mu};
+    if (Row* r = find_row(m, key); r && r->slider) r->fvalue = snap(*r, value);
 }
 
 // After every mod's fh2mod_init: write the pages and hook the game, if any mod added a row.

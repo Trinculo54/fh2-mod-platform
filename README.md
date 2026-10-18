@@ -45,7 +45,7 @@ The platform calls `fh2mod_init` on its own thread right after loading your DLL,
 - **Game files.** Replace any file the game loads. One mod per file, and it's cleaned up when the mod is removed.
 - **The game database.** Change cars, events and the rest of the game's data with SQL. Every mod's changes go into one copy of the database.
 - **Other mods.** Publish functions for other mods to call, look up theirs, and check which mods are installed.
-- **In-game settings.** On/Off switches on a Mods page in the game's own Settings menu, shared by every mod. You're told when the player flips one, and switches that need a restart get the game's own restart prompt.
+- **In-game settings.** On/Off switches and sliders on a Mods page in the game's own Settings menu, shared by every mod. You're told when the player flips one, and switches that need a restart get the game's own restart prompt.
 - **Hooks.** Detour game functions, single calls or vtable slots through one shared copy of MinHook. Mods can hook the same function side by side, the platform refuses patches that would clash with another mod's or with Extra Options', and every hook is logged and listed in crash reports.
 - **Crash reports.** When the game crashes, a report in `fh2-mods\crashes` says where, which mod it came from, and which hooks were in place.
 
