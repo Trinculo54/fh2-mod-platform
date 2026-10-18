@@ -101,7 +101,7 @@ Every mod's statements run against one copy of the database, in load order, so t
 
 If your mod has something other mods could use, publish it. Write a small header with a struct of function pointers, starting with a `size` member, and call `publish_interface(mod, "MyMod.Thing", 1, &my_struct)` in `fh2mod_init`. Another mod includes your header, and then, on its own thread, waits with `wait_for_mods` and calls `get_interface("MyMod.Thing", 1)`. If it gets null, your mod isn't installed or is too old, and it should carry on without it. `mod_version("MyMod")` tells a mod whether another is installed at all.
 
-Once an interface is published, keep it working: add members at the end and bump the version, never change existing ones. Both existing mods publish one: `WheresMyBuddy.Friends` and `FH2UniversalRadio.NowPlaying`.
+Once an interface is published, keep it working: add members at the end and bump the version, never change existing ones. WheresMyBuddy and FH2 Universal Radio both publish one: `WheresMyBuddy.Friends` and `FH2UniversalRadio.NowPlaying`.
 
 ## When it crashes
 
@@ -111,7 +111,7 @@ If the game crashes, look in `fh2-mods\crashes`. Each crash gets a text report, 
 
 Azimuth maps the game, `forza_durango_release_final.exe`, into its own process when you press Play, so it isn't there yet when your mod starts. `wait_for_game(timeout)` blocks until it is and returns its base address; `game_base()` returns it right away, or null. Call `wait_for_game` from your own thread, not from `fh2mod_init`.
 
-Only one build of the game is in circulation: the Xbox One build from 24 November 2015. Addresses in it are fixed, so mods can use offsets from the base. Even so, check that the code or data you're about to change looks the way you expect before you patch it, and log and skip if it doesn't. A wrong guess is then a missing feature, not a crash. [`game-notes.md`](game-notes.md) lists what's known about the build, and both existing mods are worth reading. FH2 Universal Radio redirects calls inside the game's FMOD radio, and WheresMyBuddy swaps a virtual function on a save-game class.
+Only one build of the game is in circulation: the Xbox One build from 24 November 2015. Addresses in it are fixed, so mods can use offsets from the base. Even so, check that the code or data you're about to change looks the way you expect before you patch it, and log and skip if it doesn't. A wrong guess is then a missing feature, not a crash. [`game-notes.md`](game-notes.md) lists what's known about the build, and the existing mods are worth reading. FH2 Universal Radio redirects calls inside the game's FMOD radio, WheresMyBuddy swaps a virtual function on a save-game class, and [WreckingBall](https://github.com/Trinculo54/WreckingBall) hooks seventeen functions in the game's collision, physics and rendering code, checking that each looks right before it does.
 
 ## Changing game code
 
