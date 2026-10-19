@@ -680,7 +680,10 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         page.insert(l0, "<Grid>\r\n");
     }
     // our description panel (the same, plus the lines under the description)
-    for (std::size_t at = page.find(desc_panel); at != std::string::npos; at = page.find(desc_panel, at)) {
+    // TEST (crash hunt): only on Updates for now; Installed mods crashed with it
+    const bool use_desc_template = std::string(file) == "A_ModPage_02.xaml";
+    for (std::size_t at = use_desc_template ? page.find(desc_panel) : std::string::npos; at != std::string::npos;
+         at = page.find(desc_panel, at)) {
         const std::string ours = "Width=\"380\" Height=\"550\" Template=\"{StaticResource FH2Mod_DescriptionPanel}\"";
         page.replace(at, desc_panel.size(), ours);
         at += ours.size();
@@ -920,6 +923,9 @@ std::vector<PageItem> installed_items() {
         it.value    = (e.enabled ? "" : "Off  ") + (e.version.empty() ? std::string() : e.version);
         it.button   = i < kMaxModPages ? static_cast<int>(i) : -1;
         add_mod_lines(it, e);
+        // TEST (crash hunt): the game's own panel here, so the lines go into the description
+        for (const std::string* l : {&it.note, &it.version, &it.version_alert, &it.link})
+            if (!l->empty()) it.description += "   " + *l;
         items.push_back(it);
     }
     if (g_entries.empty())
@@ -967,7 +973,9 @@ std::vector<PageItem> updates_items() {
             else if (!latest.empty()) label += ": up to date";
             d += " Release notes: github.com/" + e.mod->repo + "/releases";
         }
-        items.push_back(info(label, d.empty() ? "No update information for this mod." : d));
+        PageItem it = info(label, d.empty() ? "No update information for this mod." : d);
+        add_mod_lines(it, e);   // TEST (crash hunt): exercises our description panel
+        items.push_back(it);
     }
     items.push_back(info("How update checks work",
                          "Mods that name their GitHub page check it for new releases at most every 6 hours. A mod with a new "
