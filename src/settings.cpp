@@ -1389,6 +1389,38 @@ bool red_badge(std::string& page, std::size_t tab_at) {
 
 int g_pause_menu_updates = 0;   // the count in the UPDATES tile as last written
 
+// A MODS tab tile: the game's icon tile (HorizontalIconTile), with an icon of our own drawn
+// in its place: Paths in the light grey of the game's icons, big and cut off at the tile's
+// edges as theirs are. `strokes` are lines, `fills` solid shapes, `rings` circles with the
+// tile's colour inside (a slider's knob).
+std::string tile_template(const std::string& key, const char* strokes, const char* fills, const char* rings) {
+    const std::string grey = "#FFDCDCDC", sw = "26";
+    std::string icon;
+    if (*strokes) icon += "                        <Path Data=\"" + std::string(strokes) + "\" Stroke=\"" + grey + "\" StrokeThickness=\"" + sw + "\" />\r\n";
+    if (*fills) icon += "                        <Path Data=\"" + std::string(fills) + "\" Fill=\"" + grey + "\" />\r\n";
+    if (*rings)
+        icon += "                        <Path Data=\"" + std::string(rings) + "\" Fill=\"#FFF5F5F5\" Stroke=\"" + grey +
+                "\" StrokeThickness=\"" + sw + "\" />\r\n";
+    return "\r\n            <ControlTemplate x:Key=\"" + key + "\" TargetType=\"{x:Type Button}\">\r\n"
+           "                <Grid Style=\"{StaticResource A_Style_FrameworkElement_DefaultTransition}\" "
+           "local:UIPageTransitionManager.TransitionIndex=\"{Binding (local:UIPageTransitionManager.TransitionIndex), RelativeSource={RelativeSource TemplatedParent}}\">\r\n"
+           "                    <Grid Style=\"{StaticResource A_Style_Grid_HiddenWhenLocked}\">\r\n"
+           "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_TileShadow}\" />\r\n"
+           "                    </Grid>\r\n"
+           "                    <Grid Style=\"{StaticResource A_Style_Grid_MotionBlur}\">\r\n"
+           "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_TileBackground}\" />\r\n"
+           "                        <Grid ClipToBounds=\"True\">\r\n" + icon +
+           "                        </Grid>\r\n"
+           "                        <Grid Margin=\"{StaticResource A_Thickness_TilePadding}\">\r\n"
+           "                            <local:FZTextBlock Text=\"{Binding DataContext.Heading, RelativeSource={RelativeSource TemplatedParent}}\" "
+           "Style=\"{StaticResource A_Style_FZTextBlock_TileTitle}\" HorizontalAlignment=\"Left\" TextAlignment=\"Left\" />\r\n"
+           "                        </Grid>\r\n"
+           "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_TileSelectionBar}\" />\r\n"
+           "                    </Grid>\r\n"
+           "                </Grid>\r\n"
+           "            </ControlTemplate>";
+}
+
 bool write_pause_menu() {
     std::string page = read_ui("Scenes/Anthem/A_PauseMenu.xaml");
     if (page.empty()) return false;
@@ -1402,17 +1434,26 @@ bool write_pause_menu() {
         return false;
     }
     struct Tile {
-        const char *name, *item, *heading, *icon, *size, *tmpl;
+        const char *name, *item, *heading, *size;
+        const char *strokes, *fills, *rings;   // the tile's icon (Path data; see tile_template)
         int x, y;
     };
     static const Tile tiles[] = {
         // three columns of two: Installed mods big on the left, then two pairs (the Season Pass
         // tile, the store's, is left out: nothing wires it)
-        {"PART_Button_FH2Mod_Installed", "FH2Mod_Tile_Installed", "INSTALLED MODS", "Icons/TiledMenus/Tuning1x1.png", "2x2", "VerticalIconTile", 0, 0},
-        {"PART_Button_CarPacks", "FH2Mod_Tile_Updates", "UPDATES", "Icons/PauseMenu/Restart.png", "2x1", "HorizontalIconTile", 2, 0},
-        {"PART_Button_ExpansionPacks", "FH2Mod_Tile_GetMods", "GET MODS", "Icons/PauseMenu/Extras.png", "2x1", "HorizontalIconTile", 2, 1},
-        {"PART_Button_Extras", "FH2Mod_Tile_About", "ABOUT", "Icons/PauseMenu/Stats.png", "2x1", "HorizontalIconTile", 4, 0},
-        {"PART_Button_VIPMembership", "FH2Mod_Tile_AllSettings", "ALL SETTINGS", "Icons/PauseMenu/TuneCar.png", "2x1", "HorizontalIconTile", 4, 1},
+        {"PART_Button_FH2Mod_Installed", "FH2Mod_Tile_Installed", "INSTALLED MODS", "2x2",   // a puzzle piece
+         "M190,250 L300,250 A50,50 0 1 1 380,250 L490,250 L490,350 A50,50 0 1 1 490,430 L490,560 L190,560 L190,450 A50,50 0 1 0 190,370 Z",
+         "", "", 0, 0},
+        {"PART_Button_CarPacks", "FH2Mod_Tile_Updates", "UPDATES", "2x1",   // two arrows round a circle
+         "M331,134 A105,105 0 0 1 521,117 M529,206 A105,105 0 0 1 339,222",
+         "M554,98 L541,152 488,136 Z M306,242 L319,188 372,204 Z", "", 2, 0},
+        {"PART_Button_ExpansionPacks", "FH2Mod_Tile_GetMods", "GET MODS", "2x1",   // a download into a tray
+         "M410,30 L410,190 M335,120 L410,195 485,120 M270,170 L270,250 530,250 530,170", "", "", 2, 1},
+        {"PART_Button_Extras", "FH2Mod_Tile_About", "ABOUT", "2x1",   // an i in a circle
+         "M420,40 A130,130 0 0 1 420,300 A130,130 0 0 1 420,40 Z M420,140 L420,250", "M420,72 A20,20 0 0 1 420,112 A20,20 0 0 1 420,72 Z", "", 4, 0},
+        {"PART_Button_VIPMembership", "FH2Mod_Tile_AllSettings", "ALL SETTINGS", "2x1",   // three sliders
+         "M250,115 L600,115 M250,185 L600,185 M250,255 L600,255", "",
+         "M320,87 A28,28 0 0 1 320,143 A28,28 0 0 1 320,87 Z M480,157 A28,28 0 0 1 480,213 A28,28 0 0 1 480,157 Z M380,227 A28,28 0 0 1 380,283 A28,28 0 0 1 380,227 Z", 4, 1},
     };
     std::string res, buttons = "\r\n";
     int index = 1;
@@ -1422,13 +1463,13 @@ bool write_pause_menu() {
         std::string heading = t.heading;
         if (std::string(t.item) == "FH2Mod_Tile_Updates" && out > 0) heading += " (" + std::to_string(out) + ")";
         if (std::string(t.item) == "FH2Mod_Tile_Installed") heading += " (" + std::to_string(g_entries.size()) + ")";   // in fh2-mods, on or off
-        res += std::string("\r\n            <local:TileMenuDataItem x:Key=\"") + t.item + "\" Heading=\"" + heading +
-               "\" Icon=\"/ForzaUI;component/Textures/Anthem/" + t.icon + "\" />";
+        res += std::string("\r\n            <local:TileMenuDataItem x:Key=\"") + t.item + "\" Heading=\"" + heading + "\" />";
+        res += tile_template(std::string(t.item) + "_Template", t.strokes, t.fills, t.rings);
         buttons += std::string("                        <Button Canvas.Left=\"{StaticResource A_Double_TileCoord_X_") + std::to_string(t.x) +
                    "}\"\r\n                                Canvas.Top=\"{StaticResource A_Double_TileCoord_Y_" + std::to_string(t.y) +
                    "}\"\r\n                                DataContext=\"{StaticResource " + t.item +
                    "}\"\r\n                                Style=\"{StaticResource A_Style_Button_Tile_" + t.size +
-                   "}\"\r\n                                Template=\"{StaticResource A_ControlTemplate_" + t.tmpl +
+                   "}\"\r\n                                Template=\"{StaticResource " + std::string(t.item) + "_Template" +
                    "}\"\r\n                                local:TileMenuNavigationManager.TileState=\"Enabled\""
                    "\r\n                                local:TileMenuNavigationManager.GridX=\"" + std::to_string(t.x) +
                    "\"\r\n                                local:TileMenuNavigationManager.GridY=\"" + std::to_string(t.y) +
