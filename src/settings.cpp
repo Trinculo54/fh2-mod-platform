@@ -2702,19 +2702,40 @@ bool call_on_button(FH2PageButtonFn fn, void* user, const char* key, int button,
     }
 }
 
-// A page of a mod's own design on tile t: A and B go to its on_button first. Other buttons are
-// logged once each (their codes are for a later API), and go on as usual.
-bool g_custom_handled[3] = {};   // per FH2_BUTTON_: the press was handled, so its release is too
+// A page of a mod's own design on tile t: A, B, X, Y, LB and RB go to its on_button first. Other
+// buttons are logged once each, and go on as usual.
+//
+// The menus get the pad as keys (a table at 0x142254390 turns the game's controls into AVUI's
+// keys, WPF's numbering): A is Space (18), B is B (45), X is X (67), Y is Y (68), the d-pad the
+// arrows (23-26) and the number pad's 8/2/4/6 together. The bumpers and triggers are the shifts
+// (116, 117), PageUp and PageDown (19, 20) and the controls (118, 119): which are the bumpers isn't
+// certain yet, so both the shifts and the controls are LB and RB, and the log says which came.
+bool g_custom_handled[7] = {};   // per FH2_BUTTON_: the press was handled, so its release is too
 std::set<int> g_buttons_seen;
 
+int pad_button(int key) {
+    switch (key) {
+        case 18: return FH2_BUTTON_A;
+        case 45: return FH2_BUTTON_B;
+        case 67: return FH2_BUTTON_X;
+        case 68: return FH2_BUTTON_Y;
+        case 116: case 118: return FH2_BUTTON_LB;
+        case 117: case 119: return FH2_BUTTON_RB;
+        default: return 0;
+    }
+}
+
 bool custom_page_button(void* page, int j, int button, bool pressed) {
-    const int code = button == kButtonA ? FH2_BUTTON_A : button == kButtonB ? FH2_BUTTON_B : 0;
+    const int code = pad_button(button);
     if (!code) {
         if (pressed && g_buttons_seen.insert(button).second) slog("button " + std::to_string(button) + " on a mod's page");
         else focus_note("button " + std::to_string(button) + (pressed ? " pressed" : " released"));
         return o_hud_page_button(page, button, pressed);
     }
-    focus_note(std::string(code == FH2_BUTTON_A ? "A" : "B") + (pressed ? " pressed" : " released"));
+    static const char* const names[] = {"", "A", "B", "X", "Y", "LB", "RB"};
+    if ((code == FH2_BUTTON_LB || code == FH2_BUTTON_RB) && pressed && g_buttons_seen.insert(button).second)
+        slog(std::string(names[code]) + " (key " + std::to_string(button) + ") on a mod's page");
+    focus_note(std::string(names[code]) + (pressed ? " pressed" : " released"));
     if (pressed) {
         FH2Mod* mod = nullptr;
         FH2PageButtonFn fn = nullptr;

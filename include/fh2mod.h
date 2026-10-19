@@ -413,13 +413,18 @@ typedef void (*FH2PageOpenFn)(void* user, const char* page_key);
 typedef void (*FH2PageSelectFn)(void* user, const char* page_key, const char* row_key);
 /* A page of your own design: a button was pressed (FH2_BUTTON_...). Return
    FH2_PAGE_IGNORED for what it usually does (B leaves the page, A does
-   nothing), or one of the FH2_PAGE_HANDLED values. */
+   nothing, the others whatever the game does with them there), or one of
+   the FH2_PAGE_HANDLED values. */
 typedef int (*FH2PageButtonFn)(void* user, const char* page_key, int button);
 /* A page of your own design: a binding changed slot `slot` to `value`. */
 typedef void (*FH2PageSlotFn)(void* user, const char* page_key, int slot, int value);
 
-#define FH2_BUTTON_A 1
-#define FH2_BUTTON_B 2
+#define FH2_BUTTON_A  1
+#define FH2_BUTTON_B  2
+#define FH2_BUTTON_X  3
+#define FH2_BUTTON_Y  4
+#define FH2_BUTTON_LB 5
+#define FH2_BUTTON_RB 6
 #define FH2_PAGE_IGNORED        0
 #define FH2_PAGE_HANDLED        1   /* nothing else happens */
 #define FH2_PAGE_HANDLED_SELECT 2   /* and the menus' select sound plays */
