@@ -536,6 +536,7 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
     if (page.empty()) return false;
     std::string res = "\r\n            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowNotice\" UseHidden=\"true\" InvertResult=\"false\" />\r\n"
                       "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowView\" UseHidden=\"false\" InvertResult=\"false\" />\r\n"
+                      "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowList\" UseHidden=\"true\" InvertResult=\"false\" />\r\n"
                       "            <ControlTemplate x:Key=\"FH2Mod_InfoRow\" TargetType=\"{x:Type Button}\">\r\n"
                       "                <Grid VerticalAlignment=\"Center\">\r\n"
                       "                    <Grid.ColumnDefinitions>\r\n"
@@ -578,8 +579,11 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         page.insert(l + list.size(), " SelectedIndex=\"{Binding FH2Mod_Selected, Mode=TwoWay}\"");
     }
     if (views && !views->empty()) {
-        // Every view is a list of its own, collapsed unless FH2Mod_View_<k> says it's showing;
-        // view 0 is the page's own OptionsList. Each has its own copy of the description panel.
+        // Every view is a list of its own, hidden unless FH2Mod_View_<k> says it's showing; view 0
+        // is the page's own OptionsList. Hidden rather than collapsed: a list that has never
+        // been laid out can't take the focus the moment it shows. Each list has its own copy of
+        // the description panel, collapsed (they sit side by side). The panel's DataContext is
+        // the list's selected row, so its Visibility reads the view through the list's.
         const std::size_t l0 = page.find("<local:CommonListBox"), l1 = page.find("</local:CommonListBox>", l0);
         const std::size_t tag_end = page.find('>', l0);
         const std::size_t dp = page.find(desc_panel);
@@ -588,7 +592,13 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             slog("A_HUDOptions.xaml doesn't look as expected; no " + title + " page");
             return false;
         }
-        const std::string vis0 = " Visibility=\"{Binding FH2Mod_View_0, Converter={StaticResource FH2Mod_ShowView}}\"";
+        auto list_vis = [](std::size_t k) {
+            return " Visibility=\"{Binding FH2Mod_View_" + std::to_string(k) + ", Converter={StaticResource FH2Mod_ShowList}}\"";
+        };
+        auto panel_vis = [](std::size_t k) {
+            return " Visibility=\"{Binding DataContext.FH2Mod_View_" + std::to_string(k) + ", ElementName=" +
+                   (k ? "FH2Mod_List_" + std::to_string(k) : std::string("OptionsList")) + ", Converter={StaticResource FH2Mod_ShowView}}\"";
+        };
         std::string panel = page.substr(d0, d1 + 2 - d0);
         std::string panels;
         for (std::size_t k = 1; k <= view_rows.size(); ++k) {
@@ -596,12 +606,11 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             const std::size_t e = pk.find("ElementName=OptionsList");
             if (e == std::string::npos) return false;
             pk.replace(e, std::string("ElementName=OptionsList").size(), "ElementName=FH2Mod_List_" + std::to_string(k));
-            pk.insert(std::string("<ContentControl").size(), " Visibility=\"{Binding FH2Mod_View_" + std::to_string(k) +
-                                                                 ", Converter={StaticResource FH2Mod_ShowView}}\"");
+            pk.insert(std::string("<ContentControl").size(), panel_vis(k));
             panels += "\r\n                        " + pk;
         }
         page.insert(d1 + 2, panels);
-        page.insert(d0 + std::string("<ContentControl").size(), vis0);
+        page.insert(d0 + std::string("<ContentControl").size(), panel_vis(0));
         // the lists (all before the panels, so their positions above stand)
         std::string open_tag = page.substr(l0, tag_end + 1 - l0);
         std::string lists;
@@ -610,15 +619,14 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             const std::size_t nm = t.find("x:Name=\"OptionsList\"");
             if (nm == std::string::npos) return false;
             t.replace(nm, std::string("x:Name=\"OptionsList\"").size(),
-                      "x:Name=\"FH2Mod_List_" + std::to_string(k) + "\" Visibility=\"{Binding FH2Mod_View_" + std::to_string(k) +
-                          ", Converter={StaticResource FH2Mod_ShowView}}\"");
+                      "x:Name=\"FH2Mod_List_" + std::to_string(k) + "\"" + list_vis(k));
             if (const std::size_t si = t.find(" SelectedIndex=\"{Binding FH2Mod_Selected, Mode=TwoWay}\""); si != std::string::npos)
                 t.erase(si, std::string(" SelectedIndex=\"{Binding FH2Mod_Selected, Mode=TwoWay}\"").size());
             lists += "\r\n" + t + view_rows[k - 1] + "</local:CommonListBox>";
         }
         const std::size_t close = l1 + std::string("</local:CommonListBox>").size();
         page.insert(close, lists + "\r\n</Grid>");
-        page.insert(l0 + std::string("<local:CommonListBox").size(), vis0);
+        page.insert(l0 + std::string("<local:CommonListBox").size(), list_vis(0));
         page.insert(l0, "<Grid>\r\n");
     }
     const std::size_t t = page.find(title_attr);
@@ -1440,6 +1448,8 @@ void notify_view(int k) {
     if (obj && k >= 0 && k < kMaxViews && g_view_desc[k]) notify_changed(obj, g_view_desc[k]);
 }
 
+std::string g_focus_again;   // focus this once more when the button comes up (UI thread only)
+
 void switch_view(void* page, int k) {
     const int old = g_view.exchange(k);
     if (old == k) return;
@@ -1453,6 +1463,7 @@ void switch_view(void* page, int k) {
         name = old <= 1 ? "FirstItem" : "PART_Button_FH2Mod_" + std::to_string(old - 1);
     }
     if (!focus_named(page, name.c_str())) slog("couldn't focus " + name);
+    g_focus_again = name;   // the list has only just been shown; by the button's release it's laid out
     slog(k ? "showing " + g_entries[k - 1].name + "'s settings" : std::string("back to the list"));
 }
 
@@ -1492,6 +1503,10 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
         slog("debug: button " + std::to_string(button) + (pressed ? " down" : " up") + " on " + hexp(page) +
              (page == g_installed_page.load() ? " (Installed mods)" : "") + ", row " + std::to_string(g_selected.load()));
     if (page && page == g_installed_page.load() && (button == kButtonA || button == kButtonB)) {
+        if (!pressed && !g_focus_again.empty()) {
+            focus_named(page, g_focus_again.c_str());
+            g_focus_again.clear();
+        }
         const int view = g_view.load();
         if (view == 0 && button == kButtonB) return o_hud_page_button(page, button, pressed);   // leave the page
         if (pressed) {
