@@ -450,7 +450,7 @@ std::string xml_escape(const std::string& s) {
             case '<': o += "&lt;"; break;
             case '>': o += "&gt;"; break;
             case '"': o += "&quot;"; break;
-            case '\n': o += "&#10;"; break;   // a line break the TextBlock keeps
+            case '\n': o += ' '; break;   // FZTextBlock doesn't break lines (not even at &#10;)
             default: o += c;
         }
     return o;
@@ -542,6 +542,7 @@ struct PageItem {
     // under the description, each on a line of its own (Installed mods): a note (turned off,
     // and so on), the version, the same in red when there's a newer one, and the GitHub page
     std::string note, version, version_alert, link;
+    bool note_alert = false;         // the note is an error (shown in red)
 };
 
 // A line of information is a Button laid out like a row: label left, value right. The first
@@ -571,9 +572,12 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
             // write_list_page): Heading the version, Description the same in red when a newer
             // one is out (only one of the two is filled), Icon the GitHub page. Its own label and
             // value are on the button (BindingProxy.A, .C) for FH2Mod_InfoRow.
+            // (A row of settings keeps its note in the description; a line of information shows
+            // it in the footer, see below. FZTextBlock doesn't break lines at &#10;.)
+            const bool info_row = it.row < 0 || static_cast<std::size_t>(it.row) >= g_rows.size();
             auto data_item = [&](const std::string& label, const std::string& desc) {
                 std::string d = desc;
-                if (!it.note.empty()) d += (d.empty() ? "" : "\n\n") + it.note;   // a blank line between
+                if (!it.note.empty() && !info_row) d += (d.empty() ? "" : " ") + it.note;
                 res += "            <local:TileMenuDataItem x:Key=\"" + key + "\" Heading=\"" + xml_escape(label) + "\" Description=\"" +
                        xml_escape(d) + "\" />\r\n";
             };
@@ -583,7 +587,14 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
                        xml_escape(it.version_alert) + "\" Icon=\"" + xml_escape(it.link) + "\" />\r\n";
                 content = " Content=\"{StaticResource " + key + "_V}\"";
             }
-            if (it.row < 0 || static_cast<std::size_t>(it.row) >= g_rows.size()) {
+            // A line of information's note: a third data item, its DataContext (unused by
+            // FH2Mod_InfoRow): Heading normally, Description (in red) for an error.
+            if (info_row && !it.note.empty()) {
+                res += "            <local:TileMenuDataItem x:Key=\"" + key + "_N\" Heading=\"" + (it.note_alert ? "" : xml_escape(it.note)) +
+                       "\" Description=\"" + (it.note_alert ? xml_escape(it.note) : "") + "\" />\r\n";
+                content += " DataContext=\"{StaticResource " + key + "_N}\"";
+            }
+            if (info_row) {
                 data_item(it.label, it.description);
                 const std::string name = n == 0 ? first_name : button_name(it, false);
                 rows += "                                        <Button Tag=\"{StaticResource " + key +
@@ -847,14 +858,21 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         // Inside the panel's own width, so the footer wraps inside it.
         const std::string grid =
             "<Grid Width=\"380\" HorizontalAlignment=\"Left\"" + vis + ">\r\n                        " + panel +
-            "\r\n                        <StackPanel DataContext=\"{Binding SelectedItem.Content, ElementName=" + list +
-            "}\" VerticalAlignment=\"Bottom\" Margin=\"30,0,30,24\">\r\n"
+            "\r\n                        <StackPanel VerticalAlignment=\"Bottom\" Margin=\"30,0,30,24\">\r\n"
+            // the row's note (an error in red), set apart from the description above it
+            "                            <Grid DataContext=\"{Binding SelectedItem.DataContext, ElementName=" + list + "}\" Margin=\"0,0,0,24\">\r\n"
+            "                                <local:FZTextBlock Text=\"{Binding Heading}\" " + text + " />\r\n"
+            "                                <local:FZTextBlock Text=\"{Binding Description}\" Color=\"{StaticResource FH2Mod_Color_Red}\" " +
+            text + " />\r\n"
+            "                            </Grid>\r\n"
+            "                            <StackPanel DataContext=\"{Binding SelectedItem.Content, ElementName=" + list + "}\">\r\n"
             "                            <Grid>\r\n"
             "                                <local:FZTextBlock Text=\"{Binding Heading}\" " + text + " />\r\n"
             "                                <local:FZTextBlock Text=\"{Binding Description}\" Color=\"{StaticResource FH2Mod_Color_Red}\" " +
             text + " />\r\n"
             "                            </Grid>\r\n"
             "                            <local:FZTextBlock Text=\"{Binding Icon}\" Margin=\"0,8,0,0\" " + text + " />\r\n"
+            "                            </StackPanel>\r\n"
             "                        </StackPanel>\r\n                    </Grid>";
         page.replace(e0, e1 + 2 - e0, grid);
         at = page.find(desc_panel, e0 + grid.size());
@@ -1172,7 +1190,8 @@ std::vector<PageItem> installed_items() {
         if (const std::string why = mod_problem(e); !why.empty()) {   // it isn't working: says so, in red
             it.value_alert = "! Error !";
             it.value.clear();
-            it.note = "It isn't working: " + why + " fh2-mods\\platform.log has more.";
+            it.note       = "It isn't working: " + why + " fh2-mods\\platform.log has more.";
+            it.note_alert = true;
         }
         items.push_back(it);
     }
