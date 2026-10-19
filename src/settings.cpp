@@ -978,7 +978,7 @@ std::vector<PageItem> installed_items() {
         it.button   = i < kMaxModPages ? static_cast<int>(i) : -1;
         add_mod_lines(it, e);
         if (!it.version_alert.empty()) {   // a newer version is out: the version in red, with a !
-            it.value_alert = "! " + it.value;
+            it.value_alert = "! " + it.value + " !";
             it.value.clear();
         }
         items.push_back(it);
@@ -1128,6 +1128,50 @@ bool write_hub_page(int p) {
 }
 
 // Pause > MARKETPLACE -> MODS, with the tab's tiles where the store's were.
+// The MODS tab's badge in red: copies of the tab style (A_Style_Button_TabTitle_Pause, in this
+// page) and of the badge style it uses (A_Style_ContentControl_NotificationBadge, in
+// Global_Controls.xaml) with the badge's colour swapped, used by the MODS tab only. The rest is
+// the game's own XAML, word for word.
+std::string xaml_block(const std::string& text, const std::string& key, const std::string& open, const std::string& close) {
+    const std::size_t k = text.find("x:Key=\"" + key + "\"");
+    if (k == std::string::npos) return "";
+    const std::size_t a = text.rfind(open, k), b = text.find(close, k);
+    if (a == std::string::npos || b == std::string::npos) return "";
+    return text.substr(a, b + close.size() - a);
+}
+
+bool swap_all(std::string& s, const std::string& from, const std::string& to) {
+    bool any = false;
+    for (std::size_t at = s.find(from); at != std::string::npos; at = s.find(from, at + to.size())) {
+        s.replace(at, from.size(), to);
+        any = true;
+    }
+    return any;
+}
+
+bool red_badge(std::string& page, std::size_t tab_at) {
+    std::string tab_style = xaml_block(page, "A_Style_Button_TabTitle_Pause", "<Style", "</Style>");
+    std::string badge     = xaml_block(read_ui("Resources/Anthem/Global_Controls.xaml"), "A_Style_ContentControl_NotificationBadge", "<Style",
+                                       "</Style>");
+    if (tab_style.empty() || badge.empty() ||
+        !swap_all(tab_style, "x:Key=\"A_Style_Button_TabTitle_Pause\"", "x:Key=\"FH2Mod_Style_Button_TabTitle_Pause\"") ||
+        !swap_all(tab_style, "{StaticResource A_Style_ContentControl_NotificationBadge}", "{StaticResource FH2Mod_Style_NotificationBadge}") ||
+        !swap_all(badge, "x:Key=\"A_Style_ContentControl_NotificationBadge\"", "x:Key=\"FH2Mod_Style_NotificationBadge\"") ||
+        !swap_all(badge, "{StaticResource A_Color_TileSelected_Background}", "{StaticResource A_Color_Stat_Negative}"))
+        return false;
+    // the MODS tab uses the copy
+    const std::size_t end = page.find("/>", tab_at), st = page.find("Style=\"{StaticResource A_Style_Button_TabTitle_Pause}\"", tab_at);
+    if (end == std::string::npos || st == std::string::npos || st > end) return false;
+    page.replace(st, std::string("Style=\"{StaticResource A_Style_Button_TabTitle_Pause}\"").size(),
+                 "Style=\"{StaticResource FH2Mod_Style_Button_TabTitle_Pause}\"");
+    // the copies go right after the original, so they see the same resources it does
+    const std::size_t orig = page.find(xaml_block(page, "A_Style_Button_TabTitle_Pause", "<Style", "</Style>"));
+    if (orig == std::string::npos) return false;
+    const std::size_t after = page.find("</Style>", orig) + std::string("</Style>").size();
+    page.insert(after, "\r\n            " + badge + "\r\n            " + tab_style);
+    return true;
+}
+
 bool write_pause_menu() {
     std::string page = read_ui("Scenes/Anthem/A_PauseMenu.xaml");
     if (page.empty()) return false;
@@ -1171,9 +1215,11 @@ bool write_pause_menu() {
     buttons += "                    ";
     if (!replace_between(page, scope, "</Canvas>", buttons, false)) return false;
     page.insert(page.find(items_at) + items_at.size(), res);
-    page.replace(page.find(tab), tab.size(), "Content=\"MODS\"");
+    const std::size_t tab_at = page.find(tab);
+    page.replace(tab_at, tab.size(), "Content=\"MODS\"");
     if (const std::size_t b = page.find(badge); b != std::string::npos)
         page.replace(b, badge.size(), "Tag=\"{Binding FH2Mod_UpdateBadge}\"");
+    if (!red_badge(page, tab_at)) slog("couldn't make the MODS tab's badge red; it's the game's colour");
     return set_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseMenu.xaml", page.data(), page.size()) != 0;
 }
 
