@@ -301,7 +301,6 @@ void __cdecl selected_set(void*, void* obj, uint8_t* value) {
     if (obj) g_view_obj = obj;
     if (value && readable(value + 0x28, 4)) {
         g_selected = *reinterpret_cast<int*>(value + 0x28);
-        slog("debug: row " + std::to_string(g_selected.load()) + " selected");
     }
 }
 uint8_t* selected_descriptor() {
@@ -1639,7 +1638,6 @@ uint8_t* d_hud_scene(uint8_t* out) {
     } else if (asked && now - asked < 1500) {
         page = L"A_ModOptions";
     }
-    if (!page.empty()) slog("debug: scene record -> " + narrow(page));
     if (!page.empty() && !point_at_page(r, page.c_str()))
         slog("the HUD page's scene record doesn't look as expected; opened the HUD page");
     return r;
@@ -2011,7 +2009,6 @@ void switch_view(void* page, int k) {
     const int old = g_view.exchange(k);
     if (old == k) return;
     play_sound(k ? kSoundOpen : kSoundClose);
-    slog(std::string("debug: played ") + (k ? "SubMenuOpen" : "SubMenuClose"));
     g_view_back = k == 0;
     notify_view(old);
     notify_view(k);
@@ -2047,16 +2044,9 @@ void open_url(const std::string& url) {
     }).detach();
 }
 
-std::string hexp(const void* p) {
-    char b[24];
-    std::snprintf(b, sizeof b, "%p", p);
-    return b;
-}
 
 void d_hud_page_loaded(void* page) {
     o_hud_page_loaded(page);
-    const int shown = g_hub_shown.load();
-    slog("debug: HUD page " + hexp(page) + " loaded, MODS tab page " + std::to_string(shown));
     const int was_shown = g_hub_shown.exchange(0);
     if (was_shown == kHubUpdates) {
         g_updates_page = page;
@@ -2099,9 +2089,6 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
         }
         return true;   // not Accept (it would leave the page)
     }
-    if (g_in_hub)
-        slog("debug: button " + std::to_string(button) + (pressed ? " down" : " up") + " on " + hexp(page) +
-             (page == g_installed_page.load() ? " (Installed mods)" : "") + ", row " + std::to_string(g_selected.load()));
     if (page && page == g_installed_page.load() && (button == kButtonA || button == kButtonB)) {
         if (!pressed && !g_focus_again.empty()) {
             focus_named(page, g_focus_again.c_str());
