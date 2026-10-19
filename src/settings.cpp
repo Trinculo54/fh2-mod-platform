@@ -900,21 +900,7 @@ void add_hub_rows() {
 std::string with_v(const std::string& version) { return version.empty() ? "" : " " + version; }
 
 
-std::string alnum_lower(const std::string& s) {
-    std::string o;
-    for (char c : s)
-        if (std::isalnum(static_cast<unsigned char>(c))) o += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return o;
-}
 
-const ModEntry* installed(const char* key) {
-    for (const ModEntry& e : g_entries) {
-        std::string stem = narrow(e.dll);
-        if (stem.size() > 4) stem.resize(stem.size() - 4);
-        if (alnum_lower(e.name).find(key) != std::string::npos || alnum_lower(stem).find(key) != std::string::npos) return &e;
-    }
-    return nullptr;
-}
 
 // Extra Options' log starts with "<name> <version> - ..."; empty when it isn't loaded from the
 // game's folder.
@@ -1057,31 +1043,6 @@ std::vector<PageItem> updates_items() {
     return items;
 }
 
-std::vector<PageItem> get_mods_items() {
-    struct Known {
-        const char *key, *name, *repo, *what;
-    };
-    static const Known known[] = {
-        {"universalradio", "FH2 Universal Radio", "Trinculo54/FH2-Universal-Radio", "Plays Spotify and more on the in-game radio."},
-        {"wheresmybuddy", "WheresMyBuddy", "Trinculo54/WheresMyBuddy", "Puts your Xbox friends in the game as Drivatars."},
-        {"wreckingball", "WreckingBall", "Trinculo54/WreckingBall",
-         "Makes trees, fences, railings, roadside clutter and telephone poles break when you drive into them."},
-    };
-    std::vector<PageItem> items;
-    items.push_back(info("Installing a mod",
-                         "Download the zip from the mod's GitHub releases page and extract it into your Azimuth folder, next to "
-                         "azimuth.exe, then start the game again. Its DLL goes into fh2-mods by itself."));
-    for (const Known& k : known) {
-        const ModEntry* e = installed(k.key);
-        items.push_back(info(std::string(k.name) + (e ? " (installed)" : ""),
-                             std::string(k.what) + " github.com/" + k.repo + "/releases"));
-    }
-    const std::string eo = extra_options_line();
-    items.push_back(info(std::string("Forza Horizon 2 Extra Options") + (eo.empty() ? "" : " (installed)"),
-                         "Not a platform mod: it loads through winmm.dll and works alongside the platform, adding options of its "
-                         "own to the game's menus. github.com/RokkuDayo/forzahorizon2_extraoptions"));
-    return items;
-}
 
 std::vector<PageItem> about_items() {
     std::size_t on = 0, off = 0;
@@ -1114,7 +1075,6 @@ bool write_hub_page(int p) {
             return write_list_page(hub_file(p).c_str(), "INSTALLED MODS", installed_items(), true, &views);
         }
         case kHubUpdates: return write_list_page(hub_file(p).c_str(), "UPDATES", updates_items(), true);
-        case kHubGetMods: return write_list_page(hub_file(p).c_str(), "GET MODS", get_mods_items());
         case kHubAbout: return write_list_page(hub_file(p).c_str(), "ABOUT", about_items());
         case kHubAllSettings: return write_mods_page();
         default: break;
@@ -1779,7 +1739,9 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
 }
 
 void d_tile_updates(void* page) { open_hub_page(page, kHubUpdates); }
-void d_tile_get_mods(void* page) { open_hub_page(page, kHubGetMods); }
+// GET MODS opens the mod site in the browser rather than a page of ours
+constexpr const char* kModSite = "https://fh2mods.refil.cc/mods";
+void d_tile_get_mods(void*) { open_url(kModSite); }
 void d_tile_about(void* page) { open_hub_page(page, kHubAbout); }
 void d_tile_all_settings(void* page) { open_hub_page(page, kHubAllSettings); }
 void tile_installed(void* page) { open_hub_page(page, kHubInstalled); }
@@ -2099,7 +2061,9 @@ void settings_start(const FH2ModApi* api) {
     // the MODS tab
     g_hub_files = write_pause_menu() && write_pause_flow();
     remove_leftover_file("stateflow/ui_screens.xml");
-    for (int p = kHubInstalled; p <= kHubAbout && g_hub_files; ++p) g_hub_files = write_hub_page(p);
+    for (int p = kHubInstalled; p <= kHubAbout && g_hub_files; ++p)
+        if (p != kHubGetMods) g_hub_files = write_hub_page(p);
+    remove_leftover_file("UI/Scenes/Anthem/A_ModPage_03.xaml");   // Get mods, before it opened the mod site
     remove_leftover_file("UI/Scenes/Anthem/A_ModPage_05.xaml");   // Making mods, before 2.5.0's release
     if (!g_hub_files) {
         clear_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseMenu.xaml");
