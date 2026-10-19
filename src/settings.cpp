@@ -450,7 +450,7 @@ std::string xml_escape(const std::string& s) {
             case '<': o += "&lt;"; break;
             case '>': o += "&gt;"; break;
             case '"': o += "&quot;"; break;
-            case '\n': o += ' '; break;   // no line breaks in attributes (lines are TextBlocks of their own)
+            case '\n': o += "&#10;"; break;   // a line break the TextBlock keeps
             default: o += c;
         }
     return o;
@@ -573,7 +573,7 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
             // value are on the button (BindingProxy.A, .C) for FH2Mod_InfoRow.
             auto data_item = [&](const std::string& label, const std::string& desc) {
                 std::string d = desc;
-                if (!it.note.empty()) d += (d.empty() ? "" : " ") + it.note;
+                if (!it.note.empty()) d += (d.empty() ? "" : "\n\n") + it.note;   // a blank line between
                 res += "            <local:TileMenuDataItem x:Key=\"" + key + "\" Heading=\"" + xml_escape(label) + "\" Description=\"" +
                        xml_escape(d) + "\" />\r\n";
             };
