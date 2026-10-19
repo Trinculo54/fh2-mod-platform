@@ -337,6 +337,40 @@ uint8_t* view_descriptor(int k) {
     return g_view_desc[k];
 }
 
+// FH2Mod_UpdateBadge: "!" on the MODS tab (its Tag, as the other tabs' notification counts)
+// while a mod has a newer version out, "" otherwise. The value is an AVUI String, made once
+// with 0x141663220 and never freed; the property's type is the one the game gives the tabs'
+// badge properties (0x1416A4B30).
+constexpr uintptr_t RVA_BADGE_TYPE = 0x16A4B30;
+uint8_t* g_badge_desc = nullptr;
+alignas(16) uint8_t g_badge_on[0x80], g_badge_off[0x80];
+bool g_badge_strings = false;
+bool any_update_out();
+void** __cdecl badge_get(void** out, void*, void*) {
+    *out = nullptr;
+    if (!g_badge_strings) {
+        reinterpret_cast<void (*)(void*, const char*, int)>(g_base + 0x1663220)(g_badge_on, "!", -1);
+        reinterpret_cast<void (*)(void*, const char*, int)>(g_base + 0x1663220)(g_badge_off, "", -1);
+        *reinterpret_cast<int32_t*>(g_badge_on + 0x10) += 1 << 20;   // never freed
+        *reinterpret_cast<int32_t*>(g_badge_off + 0x10) += 1 << 20;
+        g_badge_strings = true;
+    }
+    uint8_t* v = any_update_out() ? g_badge_on : g_badge_off;
+    InterlockedIncrement(reinterpret_cast<volatile LONG*>(v + 0x10));   // the caller releases it
+    *out = v;
+    return out;
+}
+void __cdecl badge_set(void*, void*, uint8_t*) {}
+uint8_t* badge_descriptor() {
+    std::scoped_lock lk{g_desc_mu};
+    static const uint8_t expect[] = {0x48, 0x8D, 0x05, 0x59, 0xB0, 0x02, 0x02, 0xC3};
+    if (!g_badge_desc && code_matches(RVA_BADGE_TYPE, expect, sizeof expect)) {
+        void* type   = reinterpret_cast<TypeFn>(g_base + RVA_BADGE_TYPE)(0);
+        g_badge_desc = new_descriptor("FH2Mod_UpdateBadge", reinterpret_cast<void*>(&badge_get), reinterpret_cast<void*>(&badge_set), type);
+    }
+    return g_badge_desc;
+}
+
 uint8_t* notice_descriptor() {
     std::scoped_lock lk{g_desc_mu};
     if (!g_notice_desc) {
@@ -365,6 +399,7 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     if (!n || std::wcsncmp(n, L"FH2Mod_", 7) != 0) return nullptr;
     if (std::wcscmp(n, L"FH2Mod_RestartNotice") == 0) return notice_descriptor();
     if (std::wcscmp(n, L"FH2Mod_Selected") == 0) return selected_descriptor();
+    if (std::wcscmp(n, L"FH2Mod_UpdateBadge") == 0) return badge_descriptor();
     if (std::wcsncmp(n, L"FH2Mod_View_", 12) == 0) {
         int k = 0;
         for (const wchar_t* d = n + 12; *d; ++d) {
@@ -474,6 +509,7 @@ struct PageItem {
     int row = -1;                    // index in g_rows, or -1 for a line of information
     std::string label, description;
     std::string value;               // a line of information: shown on the right
+    std::string value_alert;         // or this, in red (a mod with a newer version out)
     int button = -1;                 // a line of information that opens something: its button number
     // under the description, each on a line of its own (Installed mods): a note (turned off,
     // and so on), the version, the same in red when there's a newer one, and the GitHub page
@@ -523,7 +559,7 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
                 data_item(it.label, it.description);
                 const std::string name = n == 0 ? first_name : button_name(it, false);
                 rows += "                                        <Button Tag=\"{StaticResource " + key +
-                        "}\" local:BindingProxy.A=\"" + xml_escape(it.label) + "\" local:BindingProxy.C=\"" + xml_escape(it.value) +
+                        "}\" local:BindingProxy.A=\"" + xml_escape(it.label) + "\" local:BindingProxy.C=\"" + xml_escape(it.value) + "\" local:BindingProxy.B=\"" + xml_escape(it.value_alert) +
                         "\"" + content + " Template=\"{StaticResource FH2Mod_InfoRow}\"" + (name.empty() ? "" : " x:Name=\"" + name + "\"") +
                         " />\r\n";
                 continue;
@@ -570,6 +606,9 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                       "                    </Grid>\r\n"
                       "                    <Grid Grid.Column=\"1\">\r\n"
                       "                        <local:FZTextBlock Text=\"{Binding (local:BindingProxy.C), RelativeSource={RelativeSource TemplatedParent}}\" "
+                      "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Center\" />\r\n"
+                      "                        <local:FZTextBlock Text=\"{Binding (local:BindingProxy.B), RelativeSource={RelativeSource TemplatedParent}}\" "
+                      "Color=\"{StaticResource A_Color_Stat_Negative}\" "
                       "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Center\" />\r\n"
                       "                    </Grid>\r\n"
                       "                </Grid>\r\n"
@@ -919,6 +958,16 @@ void add_mod_lines(PageItem& it, const ModEntry& e) {
     if (!e.repo.empty()) it.link = "github.com/" + e.repo;
 }
 
+// a mod (turned on) has a newer version out
+bool any_update_out() {
+    for (const ModEntry& e : g_entries)
+        if (e.enabled && e.mod && !e.mod->repo.empty() && e.mod->check_updates) {
+            const std::string latest = latest_known(e.mod);
+            if (!latest.empty() && compare_versions(latest, e.version) > 0) return true;
+        }
+    return false;
+}
+
 // Installed mods: one row per mod; A shows its settings.
 std::vector<PageItem> installed_items() {
     std::vector<PageItem> items;
@@ -928,6 +977,10 @@ std::vector<PageItem> installed_items() {
         it.value    = (e.enabled ? "" : "Off  ") + (e.version.empty() ? std::string() : e.version);
         it.button   = i < kMaxModPages ? static_cast<int>(i) : -1;
         add_mod_lines(it, e);
+        if (!it.version_alert.empty()) {   // a newer version is out: the version in red, with a !
+            it.value_alert = "! " + it.value;
+            it.value.clear();
+        }
         items.push_back(it);
     }
     if (g_entries.empty())
@@ -1119,7 +1172,8 @@ bool write_pause_menu() {
     if (!replace_between(page, scope, "</Canvas>", buttons, false)) return false;
     page.insert(page.find(items_at) + items_at.size(), res);
     page.replace(page.find(tab), tab.size(), "Content=\"MODS\"");
-    if (const std::size_t b = page.find(badge); b != std::string::npos) page.erase(b, badge.size());
+    if (const std::size_t b = page.find(badge); b != std::string::npos)
+        page.replace(b, badge.size(), "Tag=\"{Binding FH2Mod_UpdateBadge}\"");
     return set_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseMenu.xaml", page.data(), page.size()) != 0;
 }
 
