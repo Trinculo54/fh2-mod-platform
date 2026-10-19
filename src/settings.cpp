@@ -557,6 +557,15 @@ struct InCallback {
     }
 };
 uint8_t* g_slot_desc[FH2_PAGE_SLOTS] = {};
+// What happens to the focus on a page of a mod's own design, logged for a few seconds after a mod
+// moves it (at most a few lines each time the page opens): bindings changing slots then are the
+// page's own focus moves.
+std::atomic<ULONGLONG> g_focus_watch{0};
+std::atomic<int> g_focus_lines{0};
+void focus_note(const std::string& what) {
+    if (GetTickCount64() > g_focus_watch.load() || g_focus_lines.fetch_add(1) >= 24) return;
+    log_line("Mods page", what);
+}
 struct SlotIs {
     int slot, value;
     uint8_t* desc;
@@ -611,6 +620,7 @@ void __cdecl slot_set(void* desc, void* obj, uint8_t* value) {
     if (n < 0 || j < 0 || !value || !readable(value + 0x28, 4)) return;
     if (obj) g_custom_obj = obj;
     const int v = *reinterpret_cast<int*>(value + 0x28);
+    focus_note("a binding set slot " + std::to_string(n) + " to " + std::to_string(v));
     FH2Mod* mod = nullptr;
     FH2PageSlotFn fn = nullptr;
     void* user = nullptr;
@@ -2452,6 +2462,7 @@ void open_hub_page(void* page, int which) {
         }
         g_custom_obj   = nullptr;
         g_custom_shown = j;
+        g_focus_lines  = 0;
         for (auto& obj : g_tile_page_obj) obj = nullptr;   // the last one is gone
         if (j >= 0) pages_opening(j);
     }
@@ -2700,8 +2711,10 @@ bool custom_page_button(void* page, int j, int button, bool pressed) {
     const int code = button == kButtonA ? FH2_BUTTON_A : button == kButtonB ? FH2_BUTTON_B : 0;
     if (!code) {
         if (pressed && g_buttons_seen.insert(button).second) slog("button " + std::to_string(button) + " on a mod's page");
+        else focus_note("button " + std::to_string(button) + (pressed ? " pressed" : " released"));
         return o_hud_page_button(page, button, pressed);
     }
+    focus_note(std::string(code == FH2_BUTTON_A ? "A" : "B") + (pressed ? " pressed" : " released"));
     if (pressed) {
         FH2Mod* mod = nullptr;
         FH2PageButtonFn fn = nullptr;
@@ -2727,6 +2740,7 @@ bool custom_page_button(void* page, int j, int button, bool pressed) {
         if (r == FH2_PAGE_HANDLED_SELECT) play_sound(kSoundSelect);
         else if (r == FH2_PAGE_HANDLED_BACK) play_sound(kSoundBack, RVA_BACK_SOUNDS);
     } else if (!g_focus_again.empty()) {
+        focus_note("focused " + g_focus_again + " again, on the button's release");
         focus_named(page, g_focus_again.c_str());   // the element may only just have been shown
         g_focus_again.clear();
     }
@@ -3472,6 +3486,8 @@ int pages_focus(FH2Mod* m, const char* key, const char* name) {
         return 0;
     }
     g_focus_again = name;   // again when the button comes up: a list that has only just shown may not have taken it
+    g_focus_watch = GetTickCount64() + 3000;
+    focus_note(std::string("focused ") + name + " for " + m->name);
     return 1;
 }
 
