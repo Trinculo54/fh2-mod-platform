@@ -1589,6 +1589,40 @@ void open_hub_page(void* page, int which) {
     hub_ask(which);
     o_car_packs(page);
 }
+// The menus' sounds, played as the HUD page plays SubMenuOpen when it's shown (0x140C7AD40):
+// a std::string of the sound's name, made with the game's own assign (0x14022C300) and handed
+// by value to the UI sound player (the object at game+0x365A298, its vtable +0x08), which
+// frees it. Our view switches and the tiles that open the browser play them themselves.
+constexpr uintptr_t RVA_UI_SOUNDS      = 0x365A298;
+constexpr uintptr_t RVA_STRING_ASSIGN  = 0x022C300;   // std::string::assign(this, const char*, size_t)
+bool g_sounds_ok = false;                             // the code above looks as expected
+const char* const kSoundOpen   = "/Master/UI/PauseMenu/HZ2_SFX_UI_PauseMenu_SubMenuOpen_01";
+const char* const kSoundClose  = "/Master/UI/PauseMenu/HZ2_SFX_UI_PauseMenu_SubMenuClose_01";
+const char* const kSoundSelect = "/Master/UI/PauseMenu/HZ2_SFX_UI_PauseMenu_Select_01";
+
+struct GameString {   // MSVC std::string
+    char buf[16];
+    uint64_t size, cap;
+};
+
+void play_sound_inner(const char* name) {
+    void* player = *reinterpret_cast<void**>(g_base + RVA_UI_SOUNDS);
+    if (!player) return;
+    GameString str{};
+    str.cap = 15;
+    reinterpret_cast<void (*)(GameString*, const char*, std::size_t)>(g_base + RVA_STRING_ASSIGN)(&str, name, std::strlen(name));
+    void** vt = *reinterpret_cast<void***>(player);
+    reinterpret_cast<void (*)(void*, GameString*)>(vt[1])(player, &str);
+}
+
+void play_sound(const char* name) {
+    if (!g_sounds_ok) return;
+    __try {
+        play_sound_inner(name);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 // Installed mods holds every view at once: the list (the page's OptionsList) and one list per
 // mod, each collapsed unless its FH2Mod_View_<k> is true. A on the list shows the mod's view
 // and focuses its first row; B there comes back to the list. The page's own A and B (Accept,
@@ -1642,6 +1676,7 @@ std::string g_focus_again;   // focus this once more when the button comes up (U
 void switch_view(void* page, int k) {
     const int old = g_view.exchange(k);
     if (old == k) return;
+    play_sound(k ? kSoundOpen : kSoundClose);
     notify_view(old);
     notify_view(k);
     std::string name;
@@ -1711,8 +1746,10 @@ PageButtonFn o_hud_page_button = nullptr;
 bool d_hud_page_button(void* page, int button, bool pressed) {
     if (page && page == g_updates_page.load() && button == kButtonA) {
         const int n = g_selected.load();
-        if (pressed && n >= 0 && static_cast<std::size_t>(n) < g_update_urls.size() && !g_update_urls[n].empty())
+        if (pressed && n >= 0 && static_cast<std::size_t>(n) < g_update_urls.size() && !g_update_urls[n].empty()) {
+            play_sound(kSoundSelect);
             open_url(g_update_urls[n]);
+        }
         return true;   // not Accept (it would leave the page)
     }
     if (g_in_hub)
@@ -1741,7 +1778,10 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
 void d_tile_updates(void* page) { open_hub_page(page, kHubUpdates); }
 // GET MODS opens the mod site in the browser rather than a page of ours
 constexpr const char* kModSite = "https://fh2mods.refil.cc/mods";
-void d_tile_get_mods(void*) { open_url(kModSite); }
+void d_tile_get_mods(void*) {
+    play_sound(kSoundSelect);
+    open_url(kModSite);
+}
 void d_tile_about(void* page) { open_hub_page(page, kHubAbout); }
 void d_tile_all_settings(void* page) { open_hub_page(page, kHubAllSettings); }
 void tile_installed(void* page) { open_hub_page(page, kHubInstalled); }
@@ -1802,6 +1842,8 @@ void hook_hub() {
         {RVA_TILE_EXPANSIONS, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0x92, 0x7C, 0x4D, 0xFF, 0x80, 0xB8}},
         {RVA_TILE_EXTRAS, {0x40, 0x55, 0x56, 0x57, 0x48, 0x8B, 0xEC, 0x48, 0x83, 0xEC, 0x70, 0x48, 0xC7, 0x45, 0xB0, 0xFE}},
         {RVA_TILE_VIP, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x70, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF, 0xFF, 0x48}},
+        // the HUD page's "loaded", which plays SubMenuOpen (play_sound does the same)
+        {RVA_HUD_PAGE_LOADED, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0xE8, 0x35, 0xE0, 0x07, 0x00, 0x48, 0x8B, 0x15, 0x7E, 0x42, 0xFE, 0x01, 0x48, 0x8B, 0x1D, 0x3F, 0xF5, 0x9D, 0x02, 0x45, 0x33, 0xC0, 0x48, 0xC7, 0x44, 0x24, 0x38, 0x0F, 0x00, 0x00, 0x00, 0x4C, 0x89, 0x44, 0x24, 0x30, 0x44, 0x88, 0x44, 0x24, 0x20, 0x44, 0x38, 0x02, 0x74, 0x16, 0x49, 0x83, 0xC8, 0xFF, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00, 0x49, 0xFF, 0xC0, 0x42, 0x80, 0x3C, 0x02, 0x00, 0x75, 0xF6, 0x48, 0x8D, 0x4C, 0x24, 0x20, 0xE8, 0x6C, 0x15, 0x5B, 0xFF, 0x48, 0x8B, 0x03, 0x48, 0x8D, 0x54, 0x24, 0x20, 0x48, 0x8B, 0xCB, 0xFF, 0x50, 0x08, 0x48, 0x83, 0xC4, 0x40, 0x5B, 0xC3}},
         // the page's own "focus FirstItem", down to its calls (focus_named does the same)
         {RVA_FOCUS_FIRST, {0x40, 0x57, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF, 0xFF, 0x48, 0x89, 0x9C, 0x24, 0x90, 0x00, 0x00, 0x00, 0x48, 0x8B, 0xD9, 0x41, 0x83, 0xC8, 0xFF, 0x48, 0x8D, 0x15, 0x70, 0xE3, 0x2A, 0x01, 0x48, 0x8D, 0x4C, 0x24, 0x40, 0xE8, 0xBE, 0x8A, 0x9E, 0x00, 0x90, 0x48, 0x8D, 0x44, 0x24, 0x40, 0x48, 0x89, 0x84, 0x24, 0x98, 0x00, 0x00, 0x00, 0xF0, 0xFF, 0x44, 0x24, 0x50, 0x48, 0x8B, 0xD3, 0x48, 0x8D, 0x8C, 0x24, 0x98, 0x00, 0x00, 0x00, 0xE8, 0x9B, 0x89, 0xFE, 0xFF, 0x48, 0x8B, 0xD8, 0x48, 0x8D, 0x4C, 0x24, 0x40, 0xE8, 0x0E, 0xA9, 0x9E, 0x00, 0x48, 0x85, 0xDB, 0x74, 0x37, 0x48, 0x8B, 0x83, 0xB8, 0x00, 0x00, 0x00, 0x48, 0x8D, 0x8B, 0xB8, 0x00, 0x00, 0x00, 0xFF, 0x50, 0x18, 0x48, 0x8D, 0x93, 0xB8, 0x00, 0x00, 0x00, 0x48, 0x8D, 0x4C, 0x24, 0x28, 0xE8, 0x17, 0x5A, 0x85, 0x00}},
     };
@@ -1872,6 +1914,7 @@ void hook_hub() {
         return;
     }
     if (!show_marketplace_tab()) slog("the code that hides the Marketplace tab doesn't look as expected; MODS shows only with Extra Options' EnableMarketplace");
+    g_sounds_ok = true;
     slog("MODS tab ready");
 }
 
