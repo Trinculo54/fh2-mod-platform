@@ -1386,10 +1386,10 @@ void d_hud_page_loaded(void* page) {
 }
 
 // A page's buttons: vtable +0x578, (page, button, pressed) -> handled. On the options pages A
-// (0x2C) is Accept, which saves and goes back; on Installed mods it opens the mod's page.
+// (18) is Accept, which saves and goes back; on Installed mods it opens the mod's page.
 constexpr uintptr_t RVA_HUD_PAGE_BUTTON_SLOT = 0x2DF07B0;   // HudOptions page vtable +0x578
 constexpr uintptr_t RVA_PAGE_BUTTON          = 0x0CEC3D0;   // the shared implementation
-constexpr int kButtonA                       = 0x2C;
+constexpr int kButtonA                       = 18;     // what the page gets for A (seen in the log)
 using PageButtonFn = bool (*)(void* page, int button, bool pressed);
 PageButtonFn o_hud_page_button = nullptr;
 
