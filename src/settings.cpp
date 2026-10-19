@@ -387,6 +387,7 @@ std::string xml_escape(const std::string& s) {
             case '<': o += "&lt;"; break;
             case '>': o += "&gt;"; break;
             case '"': o += "&quot;"; break;
+            case '\n': o += "&#10;"; break;   // a line break in an attribute
             default: o += c;
         }
     return o;
@@ -474,6 +475,9 @@ struct PageItem {
     std::string label, description;
     std::string value;               // a line of information: shown on the right
     int button = -1;                 // a line of information that opens something: its button number
+    // under the description, each on a line of its own (Installed mods): the version, the same
+    // in red when there's a newer one, and the mod's GitHub page
+    std::string version, version_alert, link;
 };
 
 // A line of information is a Button laid out like a row: label left, value right. The first
@@ -495,15 +499,22 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
         std::scoped_lock lk{g_mu};
         for (std::size_t n = 0; n < items.size(); ++n) {
             const PageItem& it = items[n];
-            const std::string first = n == 0 ? " x:Name=\"" + first_name + "\"" : "";
             const std::string key   = prefix + std::to_string(n);
+            std::string first = n == 0 ? " x:Name=\"" + first_name + "\"" : "";
+            if (!it.version.empty() || !it.version_alert.empty() || !it.link.empty()) {
+                res += "            <local:TileMenuDataItem x:Key=\"" + key + "_B\" Heading=\"" + xml_escape(it.version) + "\" Icon=\"" +
+                       xml_escape(it.version_alert) + "\" Description=\"" + xml_escape(it.link) + "\" />\r\n";
+                first += " local:BindingProxy.B=\"{StaticResource " + key + "_B}\"";
+            }
             if (it.row < 0 || static_cast<std::size_t>(it.row) >= g_rows.size()) {
                 // the row's value rides in the data item's Icon, a string the template shows
                 res += "            <local:TileMenuDataItem x:Key=\"" + key + "\" Heading=\"" + xml_escape(it.label) + "\" Description=\"" +
                        xml_escape(it.description) + "\" Icon=\"" + xml_escape(it.value) + "\" />\r\n";
-                const std::string name = n == 0 ? first_name : button_name(it, false);
+                const std::string name  = n == 0 ? first_name : button_name(it, false);
+                const std::size_t b     = first.find(" local:BindingProxy.B=");
+                const std::string proxy = b == std::string::npos ? "" : first.substr(b);
                 rows += "                                        <Button Tag=\"{StaticResource " + key +
-                        "}\" Template=\"{StaticResource FH2Mod_InfoRow}\"" + (name.empty() ? "" : " x:Name=\"" + name + "\"") +
+                        "}\" Template=\"{StaticResource FH2Mod_InfoRow}\"" + (name.empty() ? "" : " x:Name=\"" + name + "\"") + proxy +
                         " />\r\n";
                 continue;
             }
@@ -537,6 +548,7 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
     std::string res = "\r\n            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowNotice\" UseHidden=\"true\" InvertResult=\"false\" />\r\n"
                       "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowView\" UseHidden=\"false\" InvertResult=\"false\" />\r\n"
                       "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowList\" UseHidden=\"true\" InvertResult=\"false\" />\r\n"
+                      "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_HideView\" UseHidden=\"false\" InvertResult=\"true\" />\r\n"
                       "            <ControlTemplate x:Key=\"FH2Mod_InfoRow\" TargetType=\"{x:Type Button}\">\r\n"
                       "                <Grid VerticalAlignment=\"Center\">\r\n"
                       "                    <Grid.ColumnDefinitions>\r\n"
@@ -552,6 +564,33 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                       "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Center\" />\r\n"
                       "                    </Grid>\r\n"
                       "                </Grid>\r\n"
+                      "            </ControlTemplate>\r\n"
+                      // the description panel (A_ControlTemplate_DescriptionPanel), with the row's
+                      // version, update alert and link under the description when it has them
+                      "            <ControlTemplate x:Key=\"FH2Mod_DescriptionPanel\" TargetType=\"ContentControl\">\r\n"
+                      "                <DockPanel>\r\n"
+                      "                    <ContentControl DockPanel.Dock=\"Top\" Content=\"{local:Loc Assists.IDS_Title_Description}\" "
+                      "Style=\"{StaticResource A_Style_DescriptionPanelHeader}\" />\r\n"
+                      "                    <local:FZMaterial DockPanel.Dock=\"Top\" Style=\"{StaticResource A_Style_FZMaterial_GlassPanel_Background}\">\r\n"
+                      "                        <local:AutoScrollPanel Style=\"{StaticResource A_Style_AutoScrollPanel_Masked}\" "
+                      "AnimationContext=\"{TemplateBinding Content}\" Margin=\"30, 20\">\r\n"
+                      "                            <StackPanel>\r\n"
+                      "                                <local:FZTextBlock Text=\"{TemplateBinding Content}\" "
+                      "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" Margin=\"0\" TextWrapping=\"Wrap\" />\r\n"
+                      "                                <local:FZTextBlock Text=\"{Binding (local:BindingProxy.B).Heading}\" "
+                      "Visibility=\"{Binding (local:BindingProxy.B).Heading, Converter={StaticResource A_StringVisConverter_IconVisibility}}\" "
+                      "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" Margin=\"0,24,0,0\" TextWrapping=\"Wrap\" />\r\n"
+                      "                                <local:FZTextBlock Text=\"{Binding (local:BindingProxy.B).Icon}\" "
+                      "Visibility=\"{Binding (local:BindingProxy.B).Icon, Converter={StaticResource A_StringVisConverter_IconVisibility}}\" "
+                      "Color=\"{StaticResource A_Color_Stat_Negative}\" "
+                      "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" Margin=\"0,24,0,0\" TextWrapping=\"Wrap\" />\r\n"
+                      "                                <local:FZTextBlock Text=\"{Binding (local:BindingProxy.B).Description}\" "
+                      "Visibility=\"{Binding (local:BindingProxy.B).Description, Converter={StaticResource A_StringVisConverter_IconVisibility}}\" "
+                      "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" Margin=\"0,8,0,0\" TextWrapping=\"Wrap\" />\r\n"
+                      "                            </StackPanel>\r\n"
+                      "                        </local:AutoScrollPanel>\r\n"
+                      "                    </local:FZMaterial>\r\n"
+                      "                </DockPanel>\r\n"
                       "            </ControlTemplate>\r\n";
     std::string rows = list_rows(items, "FH2Mod_Item_", "FirstItem", res);
     std::vector<std::string> view_rows;
@@ -629,6 +668,41 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         page.insert(l0 + std::string("<local:CommonListBox").size(), list_vis(0));
         page.insert(l0, "<Grid>\r\n");
     }
+    // our description panel (the same, plus the lines under the description)
+    for (std::size_t at = page.find(desc_panel); at != std::string::npos; at = page.find(desc_panel, at)) {
+        const std::string ours = "Width=\"380\" Height=\"550\" Template=\"{StaticResource FH2Mod_DescriptionPanel}\"";
+        page.replace(at, desc_panel.size(), ours);
+        at += ours.size();
+    }
+    if (views && !views->empty()) {
+        // The help bar: A is Select on the list, Accept (done, back to the list) in a mod's
+        // settings; B is Back in both. Two copies, one collapsed.
+        const std::string help = "<ContentControl x:Name=\"DefaultHelpPanel\"";
+        const std::size_t h0 = page.find(help), h1 = h0 == std::string::npos ? h0 : page.find("/>", h0);
+        if (h1 == std::string::npos) {
+            slog("A_HUDOptions.xaml doesn't look as expected; no " + title + " page");
+            return false;
+        }
+        std::string bar = page.substr(h0, h1 + 2 - h0);
+        auto set_attr = [](std::string& el, const std::string& name, const std::string& value) {
+            const std::size_t a = el.find(name + "=\"");
+            if (a == std::string::npos) {
+                el.insert(el.find(' '), " " + name + "=\"" + value + "\"");
+                return;
+            }
+            const std::size_t v = a + name.size() + 2, e = el.find('"', v);
+            el.replace(v, e - v, value);
+        };
+        std::string list_bar = bar, view_bar = bar;
+        set_attr(list_bar, "local:ControllerButtonPanel.ADescription", "{local:Loc HelpButtons.IDS_Select}");
+        set_attr(list_bar, "local:ControllerButtonPanel.BDescription", "{local:Loc HelpButtons.IDS_Back}");
+        set_attr(list_bar, "Visibility", "{Binding FH2Mod_View_0, Converter={StaticResource FH2Mod_ShowView}}");
+        set_attr(view_bar, "x:Name", "FH2Mod_ViewHelpPanel");
+        set_attr(view_bar, "local:ControllerButtonPanel.ADescription", "{local:Loc HelpButtons.IDS_Accept}");
+        set_attr(view_bar, "local:ControllerButtonPanel.BDescription", "{local:Loc HelpButtons.IDS_Back}");
+        set_attr(view_bar, "Visibility", "{Binding FH2Mod_View_0, Converter={StaticResource FH2Mod_HideView}}");
+        page.replace(h0, h1 + 2 - h0, "<Grid>\r\n" + list_bar + "\r\n" + view_bar + "\r\n</Grid>");
+    }
     const std::size_t t = page.find(title_attr);
     page.replace(t, title_attr.size(), "Content=\"" + xml_escape(title) + "\"");
     // Extra Options adds its rows to pages declared x:Class="ForzaUI.A_HudOptions" as the game
@@ -636,8 +710,10 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
     const std::string cls = "x:Class=\"ForzaUI.A_HudOptions\"";
     if (const std::size_t c = page.find(cls); c != std::string::npos) page.replace(c, cls.size(), "x:Class =\"ForzaUI.A_HudOptions\"");
     // no Y (reset to defaults) on this page
-    const std::size_t y = page.find(help_y), y_end = page.find('"', page.find('"', y) + 1);
-    page.erase(y, y_end + 1 - y);
+    for (std::size_t y = page.find(help_y); y != std::string::npos; y = page.find(help_y, y)) {
+        const std::size_t y_end = page.find('"', page.find('"', y) + 1);
+        page.erase(y, y_end + 1 - y);
+    }
     // the restart notice, under the list and the description; hidden (not collapsed) while
     // there's nothing to say, so the page doesn't move when it shows
     const std::size_t row_end = page.find("</StackPanel>", page.find(desc_panel)) + std::string("</StackPanel>").size();
@@ -794,25 +870,41 @@ std::string extra_options_line() {
 
 PageItem info(const std::string& label, const std::string& description) { return {-1, label, description}; }
 
-// one line about a mod: what it does, whether it's loaded, its update status
+// what a mod is, for its description: what it does, and whether it's loaded
 std::string about_mod(const ModEntry& e) {
-    std::string d = e.description.empty() ? "" : e.description + " ";
-    if (!e.enabled) d += "Turned off: the game doesn't load it. ";
-    else if (!e.platform_mod) d += "A mod from before the platform: it has no settings here. ";
-    if (const std::string u = update_status(e); !u.empty()) d += u + " ";
-    if (!e.repo.empty()) d += "github.com/" + e.repo + " ";
-    if (!d.empty()) d.pop_back();
+    std::string d = e.description.empty() ? "No description." : e.description;
+    if (!e.enabled) d += "\n\nTurned off: the game doesn't load it.";
+    else if (!e.platform_mod) d += "\n\nA mod from before the platform: it has no settings here.";
     return d;
 }
 
-// Installed mods: one row per mod; A opens its page.
+// the lines under a mod's description: its version (in red with a ! when a newer one is out),
+// and its GitHub page
+void add_mod_lines(PageItem& it, const ModEntry& e) {
+    const std::string v = e.version.empty() ? "Version unknown" : "Version " + e.version;
+    std::string latest;
+    if (e.enabled && e.mod && !e.mod->repo.empty() && e.mod->check_updates) latest = latest_known(e.mod);
+    if (!latest.empty() && compare_versions(latest, e.version) > 0) {
+        it.version_alert = "! " + v + " (" + latest + " is out)";
+    } else {
+        std::string state;
+        if (!e.enabled) state = "turned off";
+        else if (!e.mod || e.mod->repo.empty() || !e.mod->check_updates) state = "doesn't check for updates";
+        else state = latest.empty() ? "not checked yet" : "up to date";
+        it.version = v + " (" + state + ")";
+    }
+    if (!e.repo.empty()) it.link = "github.com/" + e.repo;
+}
+
+// Installed mods: one row per mod; A shows its settings.
 std::vector<PageItem> installed_items() {
     std::vector<PageItem> items;
     for (std::size_t i = 0; i < g_entries.size(); ++i) {
         const ModEntry& e = g_entries[i];
-        PageItem it   = info(e.name, about_mod(e) + (about_mod(e).empty() ? "" : " ") + "Press A for its settings.");
-        it.value      = (e.enabled ? "" : "Off  ") + (e.version.empty() ? std::string() : e.version);
-        it.button     = i < kMaxModPages ? static_cast<int>(i) : -1;
+        PageItem it = info(e.name, about_mod(e));
+        it.value    = (e.enabled ? "" : "Off  ") + (e.version.empty() ? std::string() : e.version);
+        it.button   = i < kMaxModPages ? static_cast<int>(i) : -1;
+        add_mod_lines(it, e);
         items.push_back(it);
     }
     if (g_entries.empty())
@@ -824,9 +916,10 @@ std::vector<PageItem> installed_items() {
 std::vector<PageItem> mod_page_items(std::size_t i) {
     std::vector<PageItem> items;
     const ModEntry& e = g_entries[i];
-    std::string d = about_mod(e);
-    d += (d.empty() ? "" : " ") + std::string("Off leaves it in fh2-mods but the game doesn't load it.");
-    items.push_back({g_entry_row[i], "Load " + e.name + with_v(e.version), d});
+    PageItem sw{g_entry_row[i], "Load " + e.name + with_v(e.version),
+                about_mod(e) + "\n\nOff leaves it in fh2-mods, but the game doesn't load it."};
+    add_mod_lines(sw, e);
+    items.push_back(sw);
     std::size_t own = 0;
     if (e.mod) {
         std::scoped_lock lk{g_mu};
@@ -1514,11 +1607,11 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
             if (view == 0) {
                 const int n = g_selected.load();
                 if (n >= 0 && static_cast<std::size_t>(n) < g_entries.size() && n + 1 < kMaxViews) switch_view(page, n + 1);
-            } else if (button == kButtonB) {
-                switch_view(page, 0);
+            } else {
+                switch_view(page, 0);   // B (Back) or A (Accept): done with this mod
             }
         }
-        return true;   // A in a mod's view: nothing (it would leave the page)
+        return true;
     }
     return o_hud_page_button(page, button, pressed);
 }
