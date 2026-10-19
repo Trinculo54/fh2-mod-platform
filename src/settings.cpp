@@ -1246,24 +1246,57 @@ std::vector<PageItem> updates_items() {
 }
 
 
+// About: the platform, Extra Options, the mods folder, reporting a problem, and credits. A
+// opens each row's page (or the folder); g_about_urls has them, "" for a row without one.
+constexpr const char* kPlatformGitHub = "github.com/Trinculo54/fh2-mod-platform";
+constexpr const char* kAuthorGitHub   = "github.com/Trinculo54";
+std::vector<std::string> g_about_urls;
+
+std::string mods_folder() { return narrow((azimuth_dir() / L"fh2-mods").wstring()); }
+
 std::vector<PageItem> about_items() {
-    std::size_t on = 0, off = 0;
-    for (const ModEntry& e : g_entries) (e.enabled ? on : off)++;
     std::vector<PageItem> items;
-    items.push_back(info("FH2 Mod Platform " FH2MOD_PLATFORM_VERSION,
-                         "API " + std::to_string(FH2MOD_API_VERSION) +
-                             ". It's the d3dcompiler_47.dll next to azimuth.exe, and it loads the mods in fh2-mods. "
-                             "github.com/Trinculo54/fh2-mod-platform"));
-    items.push_back(info(std::to_string(on) + " mod(s) loaded" + (off ? ", " + std::to_string(off) + " turned off" : ""),
-                         "Turn a mod off or on under INSTALLED MODS. A mod that's turned off stays in fh2-mods, so turning it "
-                         "back on needs nothing reinstalled."));
+    std::vector<std::string> urls;
+
+    PageItem platform = info("FH2 Mod Platform", "Loads the mods in your fh2-mods folder and gives them this MODS tab, where you "
+                                                 "change their settings, check for updates and turn them on or off. Press A to "
+                                                 "open its GitHub page.");
+    platform.value   = FH2MOD_PLATFORM_VERSION;
+    platform.version = "Version " FH2MOD_PLATFORM_VERSION " (mod API " + std::to_string(FH2MOD_API_VERSION) + ")";
+    platform.link    = kPlatformGitHub;
+    items.push_back(platform);
+    urls.push_back(std::string("https://") + kPlatformGitHub);
+
     const std::string eo = extra_options_line();
-    items.push_back(info("Extra Options: " + (eo.empty() ? std::string("not installed") : eo),
-                         eo.empty() ? "Forza Horizon 2 Extra Options isn't loaded. See GET MODS."
-                                    : "Extra Options is loaded through winmm.dll. Its own options are on the game's settings pages."));
-    items.push_back(info("Log: fh2-mods\\platform.log",
-                         "What the platform and every mod did this time. If something isn't right, it's the file to send along "
-                         "when you report it."));
+    PageItem extra = info("Extra Options", eo.empty() ? "Forza Horizon 2 Extra Options isn't installed. Some mods need it."
+                                                      : "Forza Horizon 2 Extra Options is installed. Its own options are on the "
+                                                        "game's settings pages.");
+    extra.value = eo.empty() ? "Not installed" : "Installed";
+    if (!eo.empty() && eo != "Installed") extra.version = eo;
+    items.push_back(extra);
+    urls.push_back("");
+
+    const std::string folder = mods_folder();
+    PageItem open = info("Open mods folder", "Opens fh2-mods in File Explorer, to add, remove or swap mods. Mods you add there "
+                                             "load the next time you start the game.");
+    open.link = folder;
+    items.push_back(open);
+    urls.push_back(folder);
+
+    PageItem report = info("Report a problem", "Something not working? Press A to open the platform's GitHub issues and say what "
+                                               "happened. Attach platform.log from the mods folder: it has what the platform and "
+                                               "every mod did this time.");
+    report.link = std::string(kPlatformGitHub) + "/issues";
+    items.push_back(report);
+    urls.push_back(std::string("https://") + kPlatformGitHub + "/issues");
+
+    PageItem credits = info("Credits", "FH2 Mod Platform is made by Trinculo54. Press A to open their GitHub page.");
+    credits.value = "Trinculo54";
+    credits.link  = kAuthorGitHub;
+    items.push_back(credits);
+    urls.push_back(std::string("https://") + kAuthorGitHub);
+
+    g_about_urls = urls;
     return items;
 }
 
@@ -1279,7 +1312,7 @@ bool write_hub_page(int p) {
             return write_list_page(hub_file(p).c_str(), "INSTALLED MODS", installed_items(), true, &views, &names);
         }
         case kHubUpdates: return write_list_page(hub_file(p).c_str(), "UPDATES", updates_items(), true);
-        case kHubAbout: return write_list_page(hub_file(p).c_str(), "ABOUT", about_items());
+        case kHubAbout: return write_list_page(hub_file(p).c_str(), "ABOUT", about_items(), true);
         case kHubAllSettings: return write_mods_page();
         default: break;
     }
@@ -1924,8 +1957,10 @@ void switch_view(void* page, int k) {
 // Which HUD page objects are Installed mods and Updates (set when one loads; only compared).
 std::atomic<void*> g_installed_page{nullptr};
 std::atomic<void*> g_updates_page{nullptr};
+std::atomic<void*> g_about_page{nullptr};
 
-// Updates: A on a mod opens its GitHub releases in the browser (shell32 only when asked).
+// Updates and About: A opens a row's page in the browser, or a folder in Explorer (shell32 only
+// when asked).
 void open_url(const std::string& url) {
     std::thread([url] {
         using ShellExecuteFn = HINSTANCE(WINAPI*)(HWND, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, INT);
@@ -1955,6 +1990,12 @@ void d_hud_page_loaded(void* page) {
     } else if (g_updates_page.load() == page) {
         g_updates_page = nullptr;
     }
+    if (was_shown == kHubAbout) {
+        g_about_page = page;
+        g_selected   = 0;
+    } else if (g_about_page.load() == page) {
+        g_about_page = nullptr;
+    }
     if (was_shown == kHubInstalled) {
         g_installed_page = page;
         g_selected       = 0;
@@ -1975,11 +2016,12 @@ using PageButtonFn = bool (*)(void* page, int button, bool pressed);
 PageButtonFn o_hud_page_button = nullptr;
 
 bool d_hud_page_button(void* page, int button, bool pressed) {
-    if (page && page == g_updates_page.load() && button == kButtonA) {
+    if (page && (page == g_updates_page.load() || page == g_about_page.load()) && button == kButtonA) {
+        const std::vector<std::string>& urls = page == g_about_page.load() ? g_about_urls : g_update_urls;
         const int n = g_selected.load();
-        if (pressed && n >= 0 && static_cast<std::size_t>(n) < g_update_urls.size() && !g_update_urls[n].empty()) {
+        if (pressed && n >= 0 && static_cast<std::size_t>(n) < urls.size() && !urls[n].empty()) {
             play_sound(kSoundSelect);
-            open_url(g_update_urls[n]);
+            open_url(urls[n]);   // a page, or the mods folder (Explorer opens it)
         }
         return true;   // not Accept (it would leave the page)
     }
