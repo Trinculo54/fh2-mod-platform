@@ -587,6 +587,17 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
     return rows;
 }
 
+// sets an attribute of one element's XAML (adds it if it's not there)
+void swap_attr(std::string& el, const std::string& name, const std::string& value) {
+    const std::size_t a = el.find(name + "=\"");
+    if (a == std::string::npos) {
+        el.insert(el.find(' '), " " + name + "=\"" + value + "\"");
+        return;
+    }
+    const std::size_t v = a + name.size() + 2, e = el.find('"', v);
+    el.replace(v, e - v, value);
+}
+
 bool write_list_page(const char* file, const std::string& title, const std::vector<PageItem>& items, bool track_selection = false,
                      const std::vector<std::vector<PageItem>>* views = nullptr) {
     std::string page = read_ui("Scenes/Anthem/A_HUDOptions.xaml");
@@ -733,6 +744,17 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         page.replace(e0, e1 + 2 - e0, grid);
         at = page.find(desc_panel, e0 + grid.size());
     }
+    if (track_selection && (!views || views->empty())) {
+        // a list A acts on (Updates): Select / Back
+        const std::string help = "<ContentControl x:Name=\"DefaultHelpPanel\"";
+        const std::size_t h0 = page.find(help), h1 = h0 == std::string::npos ? h0 : page.find("/>", h0);
+        if (h1 != std::string::npos) {
+            std::string bar = page.substr(h0, h1 + 2 - h0);
+            swap_attr(bar, "local:ControllerButtonPanel.ADescription", "{local:Loc HelpButtons.IDS_Select}");
+            swap_attr(bar, "local:ControllerButtonPanel.BDescription", "{local:Loc HelpButtons.IDS_Back}");
+            page.replace(h0, h1 + 2 - h0, bar);
+        }
+    }
     if (views && !views->empty()) {
         // The help bar: A is Select on the list, Accept (done, back to the list) in a mod's
         // settings; B is Back in both. Two copies, one collapsed.
@@ -840,7 +862,7 @@ std::vector<ModEntry> g_entries;     // fh2-mods, in load order (set once, befor
 std::vector<int> g_entry_row;        // each entry's switch row in g_rows
 std::mutex g_page_mu;                // one page written at a time
 
-enum HubPage { kHubInstalled = 1, kHubUpdates, kHubGetMods, kHubAbout, kHubMaking, kHubAllSettings, kHubModPage = 10 };
+enum HubPage { kHubInstalled = 1, kHubUpdates, kHubGetMods, kHubAbout, kHubAllSettings = 6, kHubModPage = 10 };
 constexpr std::size_t kMaxModPages = 64;   // A_ModPage_10 .. A_ModPage_73: mod n's page is 10 + n
 
 // "A_ModPage_01" (12 letters, like "A_HudOptions")
@@ -1009,8 +1031,11 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
 
 // Updates: the mods with a newer version out, then how the checks work (only that, saying
 // so, when there are none).
+std::vector<std::string> g_update_urls;   // Updates' rows: the GitHub page A opens ("" for none)
+
 std::vector<PageItem> updates_items() {
     std::vector<PageItem> items;
+    std::vector<std::string> urls;
     for (const ModEntry& e : g_entries) {
         if (!e.enabled || !e.mod || e.mod->repo.empty() || !e.mod->check_updates) continue;
         const std::string latest = latest_known(e.mod);
@@ -1020,11 +1045,15 @@ std::vector<PageItem> updates_items() {
                                    "Azimuth folder, then start the game again.");
         it.value_alert = "! " + e.version + " !";
         add_mod_lines(it, e);
+        it.description += " Press A to open it.";
         items.push_back(it);
+        urls.push_back("https://github.com/" + e.mod->repo + "/releases/latest");
     }
     const std::string how = "Mods that name their GitHub page check it for new releases at most every 6 hours. A mod with a new "
                             "release also says so on the title screen, under PRESS (A) TO START, and with a ! on the MODS tab.";
     items.push_back(info("How update checks work", items.empty() ? "There aren't any updates at the moment. " + how : how));
+    urls.push_back("");
+    g_update_urls = urls;
     return items;
 }
 
@@ -1075,22 +1104,6 @@ std::vector<PageItem> about_items() {
     return items;
 }
 
-std::vector<PageItem> making_items() {
-    std::vector<PageItem> items;
-    items.push_back(info("Making a mod",
-                         "A mod is a DLL in fh2-mods with an fh2mod_init function, built against fh2mod.h. "
-                         "github.com/Trinculo54/fh2-mod-platform has the header, an example mod and docs/writing-a-mod.md."));
-    items.push_back(info("Settings on this tab",
-                         "add_setting puts On/Off and slider rows under your mod on INSTALLED MODS (and on Settings > Mods). "
-                         "FH2ModInfo.description (API 6) is the line shown with your mod."));
-    items.push_back(info("Update checks",
-                         "Give FH2ModInfo.github_repo as \"Owner/Repo\" and the platform checks your releases, shows them under "
-                         "UPDATES and on the title screen."));
-    items.push_back(info("Game files and strings",
-                         "set_file, add_sql and set_string change the game's files, database and text for as long as your mod "
-                         "is installed, and the platform puts everything back when it isn't. See docs/api.md."));
-    return items;
-}
 
 bool write_hub_page(int p) {
     std::scoped_lock lk{g_page_mu};
@@ -1100,10 +1113,9 @@ bool write_hub_page(int p) {
             for (std::size_t i = 0; i < g_entries.size() && i + 1 < static_cast<std::size_t>(kMaxViews); ++i) views.push_back(mod_page_items(i));
             return write_list_page(hub_file(p).c_str(), "INSTALLED MODS", installed_items(), true, &views);
         }
-        case kHubUpdates: return write_list_page(hub_file(p).c_str(), "UPDATES", updates_items());
+        case kHubUpdates: return write_list_page(hub_file(p).c_str(), "UPDATES", updates_items(), true);
         case kHubGetMods: return write_list_page(hub_file(p).c_str(), "GET MODS", get_mods_items());
         case kHubAbout: return write_list_page(hub_file(p).c_str(), "ABOUT", about_items());
-        case kHubMaking: return write_list_page(hub_file(p).c_str(), "MAKING MODS", making_items());
         case kHubAllSettings: return write_mods_page();
         default: break;
     }
@@ -1180,12 +1192,13 @@ bool write_pause_menu() {
         int x, y;
     };
     static const Tile tiles[] = {
-        {"PART_Button_CarPacks", "FH2Mod_Tile_Updates", "UPDATES", "Icons/PauseMenu/Restart.png", "2x1", "HorizontalIconTile", 0, 0},
-        {"PART_Button_ExpansionPacks", "FH2Mod_Tile_GetMods", "GET MODS", "Icons/PauseMenu/Extras.png", "2x1", "HorizontalIconTile", 0, 1},
-        {"PART_Button_SeasonPass", "FH2Mod_Tile_Making", "MAKING MODS", "Icons/PauseMenu/TuningSetup.png", "1x2", "VerticalIconTile", 2, 0},
-        {"PART_Button_FH2Mod_Installed", "FH2Mod_Tile_Installed", "INSTALLED MODS", "Icons/TiledMenus/Tuning1x1.png", "2x2", "VerticalIconTile", 3, 0},
-        {"PART_Button_Extras", "FH2Mod_Tile_About", "ABOUT", "Icons/PauseMenu/Stats.png", "1x1", "IconTile", 5, 0},
-        {"PART_Button_VIPMembership", "FH2Mod_Tile_AllSettings", "ALL SETTINGS", "Icons/PauseMenu/TuneCar.png", "1x1", "IconTile", 5, 1},
+        // three columns of two: Installed mods big on the left, then two pairs (the Season Pass
+        // tile, the store's, is left out: nothing wires it)
+        {"PART_Button_FH2Mod_Installed", "FH2Mod_Tile_Installed", "INSTALLED MODS", "Icons/TiledMenus/Tuning1x1.png", "2x2", "VerticalIconTile", 0, 0},
+        {"PART_Button_CarPacks", "FH2Mod_Tile_Updates", "UPDATES", "Icons/PauseMenu/Restart.png", "2x1", "HorizontalIconTile", 2, 0},
+        {"PART_Button_ExpansionPacks", "FH2Mod_Tile_GetMods", "GET MODS", "Icons/PauseMenu/Extras.png", "2x1", "HorizontalIconTile", 2, 1},
+        {"PART_Button_Extras", "FH2Mod_Tile_About", "ABOUT", "Icons/PauseMenu/Stats.png", "2x1", "HorizontalIconTile", 4, 0},
+        {"PART_Button_VIPMembership", "FH2Mod_Tile_AllSettings", "ALL SETTINGS", "Icons/PauseMenu/TuneCar.png", "2x1", "HorizontalIconTile", 4, 1},
     };
     std::string res, buttons = "\r\n";
     int index = 1;
@@ -1599,14 +1612,13 @@ constexpr uintptr_t RVA_PAUSE_WIRE_BTN  = 0x0D9F9F0;   // (page, const char* nam
 constexpr uintptr_t RVA_TILE_CAR_PACKS  = 0x0DBD720;
 constexpr uintptr_t RVA_TILE_EXPANSIONS = 0x0DBDD00;
 constexpr uintptr_t RVA_TILE_EXTRAS     = 0x0DBDD60;
-constexpr uintptr_t RVA_TILE_SEASONPASS = 0x0DBF8F0;
 constexpr uintptr_t RVA_TILE_VIP        = 0x0DBFE40;
 // 0x140DD8FD0(page, "PART_GROUP_Marketplace", 1) hides the tab; Extra Options' EnableMarketplace
 // makes these 0, and so does the platform.
 constexpr uintptr_t RVA_MARKETPLACE_HIDE[] = {0x0DDACAD, 0x0DDAE1F, 0x0DDB2F5, 0x0DDB910, 0x0DDBB3E};
 
 WireTilesFn o_pause_menu_wire = nullptr;
-TileFn o_car_packs = nullptr, o_expansions = nullptr, o_extras = nullptr, o_season_pass = nullptr, o_vip = nullptr;
+TileFn o_car_packs = nullptr, o_expansions = nullptr, o_extras = nullptr, o_vip = nullptr;
 
 void open_hub_page(void* page, int which) {
     write_hub_page(which);   // up to date (update checks finish after the game starts)
@@ -1683,8 +1695,22 @@ void switch_view(void* page, int k) {
     slog(k ? "showing " + g_entries[k - 1].name + "'s settings" : std::string("back to the list"));
 }
 
-// Which HUD page object is Installed mods (set when one loads; only compared, never used).
+// Which HUD page objects are Installed mods and Updates (set when one loads; only compared).
 std::atomic<void*> g_installed_page{nullptr};
+std::atomic<void*> g_updates_page{nullptr};
+
+// Updates: A on a mod opens its GitHub releases in the browser (shell32 only when asked).
+void open_url(const std::string& url) {
+    std::thread([url] {
+        using ShellExecuteFn = HINSTANCE(WINAPI*)(HWND, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, INT);
+        HMODULE shell = LoadLibraryW(L"shell32.dll");
+        auto fn       = shell ? reinterpret_cast<ShellExecuteFn>(GetProcAddress(shell, "ShellExecuteW")) : nullptr;
+        if (!fn || reinterpret_cast<INT_PTR>(fn(nullptr, L"open", widen(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL)) <= 32)
+            slog("couldn't open " + url);
+        else
+            slog("opened " + url);
+    }).detach();
+}
 
 std::string hexp(const void* p) {
     char b[24];
@@ -1696,7 +1722,14 @@ void d_hud_page_loaded(void* page) {
     o_hud_page_loaded(page);
     const int shown = g_hub_shown.load();
     slog("debug: HUD page " + hexp(page) + " loaded, MODS tab page " + std::to_string(shown));
-    if (g_hub_shown.exchange(0) == kHubInstalled) {
+    const int was_shown = g_hub_shown.exchange(0);
+    if (was_shown == kHubUpdates) {
+        g_updates_page = page;
+        g_selected     = 0;
+    } else if (g_updates_page.load() == page) {
+        g_updates_page = nullptr;
+    }
+    if (was_shown == kHubInstalled) {
         g_installed_page = page;
         g_selected       = 0;
         g_view           = 0;
@@ -1715,6 +1748,12 @@ using PageButtonFn = bool (*)(void* page, int button, bool pressed);
 PageButtonFn o_hud_page_button = nullptr;
 
 bool d_hud_page_button(void* page, int button, bool pressed) {
+    if (page && page == g_updates_page.load() && button == kButtonA) {
+        const int n = g_selected.load();
+        if (pressed && n >= 0 && static_cast<std::size_t>(n) < g_update_urls.size() && !g_update_urls[n].empty())
+            open_url(g_update_urls[n]);
+        return true;   // not Accept (it would leave the page)
+    }
     if (g_in_hub)
         slog("debug: button " + std::to_string(button) + (pressed ? " down" : " up") + " on " + hexp(page) +
              (page == g_installed_page.load() ? " (Installed mods)" : "") + ", row " + std::to_string(g_selected.load()));
@@ -1741,7 +1780,6 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
 void d_tile_updates(void* page) { open_hub_page(page, kHubUpdates); }
 void d_tile_get_mods(void* page) { open_hub_page(page, kHubGetMods); }
 void d_tile_about(void* page) { open_hub_page(page, kHubAbout); }
-void d_tile_making(void* page) { open_hub_page(page, kHubMaking); }
 void d_tile_all_settings(void* page) { open_hub_page(page, kHubAllSettings); }
 void tile_installed(void* page) { open_hub_page(page, kHubInstalled); }
 
@@ -1800,7 +1838,6 @@ void hook_hub() {
         {RVA_TILE_CAR_PACKS, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0x72, 0x82, 0x4D, 0xFF, 0x80, 0xB8}},
         {RVA_TILE_EXPANSIONS, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0x92, 0x7C, 0x4D, 0xFF, 0x80, 0xB8}},
         {RVA_TILE_EXTRAS, {0x40, 0x55, 0x56, 0x57, 0x48, 0x8B, 0xEC, 0x48, 0x83, 0xEC, 0x70, 0x48, 0xC7, 0x45, 0xB0, 0xFE}},
-        {RVA_TILE_SEASONPASS, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x70, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF, 0xFF, 0x48}},
         {RVA_TILE_VIP, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x70, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF, 0xFF, 0x48}},
         // the page's own "focus FirstItem", down to its calls (focus_named does the same)
         {RVA_FOCUS_FIRST, {0x40, 0x57, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF, 0xFF, 0x48, 0x89, 0x9C, 0x24, 0x90, 0x00, 0x00, 0x00, 0x48, 0x8B, 0xD9, 0x41, 0x83, 0xC8, 0xFF, 0x48, 0x8D, 0x15, 0x70, 0xE3, 0x2A, 0x01, 0x48, 0x8D, 0x4C, 0x24, 0x40, 0xE8, 0xBE, 0x8A, 0x9E, 0x00, 0x90, 0x48, 0x8D, 0x44, 0x24, 0x40, 0x48, 0x89, 0x84, 0x24, 0x98, 0x00, 0x00, 0x00, 0xF0, 0xFF, 0x44, 0x24, 0x50, 0x48, 0x8B, 0xD3, 0x48, 0x8D, 0x8C, 0x24, 0x98, 0x00, 0x00, 0x00, 0xE8, 0x9B, 0x89, 0xFE, 0xFF, 0x48, 0x8B, 0xD8, 0x48, 0x8D, 0x4C, 0x24, 0x40, 0xE8, 0x0E, 0xA9, 0x9E, 0x00, 0x48, 0x85, 0xDB, 0x74, 0x37, 0x48, 0x8B, 0x83, 0xB8, 0x00, 0x00, 0x00, 0x48, 0x8D, 0x8B, 0xB8, 0x00, 0x00, 0x00, 0xFF, 0x50, 0x18, 0x48, 0x8D, 0x93, 0xB8, 0x00, 0x00, 0x00, 0x48, 0x8D, 0x4C, 0x24, 0x28, 0xE8, 0x17, 0x5A, 0x85, 0x00}},
@@ -1830,7 +1867,6 @@ void hook_hub() {
         {"Marketplace: Car Packs tile", RVA_TILE_CAR_PACKS, reinterpret_cast<void*>(&d_tile_updates), &o_car_packs},
         {"Marketplace: Expansion Packs tile", RVA_TILE_EXPANSIONS, reinterpret_cast<void*>(&d_tile_get_mods), &o_expansions},
         {"Marketplace: Extras tile", RVA_TILE_EXTRAS, reinterpret_cast<void*>(&d_tile_about), &o_extras},
-        {"Marketplace: Season Pass tile", RVA_TILE_SEASONPASS, reinterpret_cast<void*>(&d_tile_making), &o_season_pass},
         {"Marketplace: VIP tile", RVA_TILE_VIP, reinterpret_cast<void*>(&d_tile_all_settings), &o_vip},
     };
     std::vector<FH2Hook*> made;
@@ -2062,7 +2098,8 @@ void settings_start(const FH2ModApi* api) {
     // the MODS tab
     g_hub_files = write_pause_menu() && write_pause_flow();
     remove_leftover_file("stateflow/ui_screens.xml");
-    for (int p = kHubInstalled; p <= kHubMaking && g_hub_files; ++p) g_hub_files = write_hub_page(p);
+    for (int p = kHubInstalled; p <= kHubAbout && g_hub_files; ++p) g_hub_files = write_hub_page(p);
+    remove_leftover_file("UI/Scenes/Anthem/A_ModPage_05.xaml");   // Making mods, before 2.5.0's release
     if (!g_hub_files) {
         clear_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseMenu.xaml");
         clear_file(&g_owner_mod, "stateflow/pause.xml");
