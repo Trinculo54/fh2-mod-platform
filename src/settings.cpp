@@ -403,48 +403,68 @@ std::string slider_resources(const Row& r, std::size_t i) {
     return res;
 }
 
-// The Mods page: A_HUDOptions.xaml with its rows swapped for the mods'.
-bool write_mods_page() {
+// A page laid out like the HUD options page (A_HUDOptions.xaml), with a list of our own. An item
+// is one of our rows, or a line of information: a row with a label and a description and no
+// value to change.
+struct PageItem {
+    int row = -1;                    // index in g_rows, or -1 for a line of information
+    std::string label, description;
+};
+
+FH2Mod g_hub_owner;                  // the MODS tab's own rows (a switch per mod)
+
+bool write_list_page(const char* file, const std::string& title, const std::vector<PageItem>& items) {
     std::string page = read_ui("Scenes/Anthem/A_HUDOptions.xaml");
     if (page.empty()) return false;
     std::string res = "\r\n            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowNotice\" UseHidden=\"true\" InvertResult=\"false\" />\r\n";
     std::string rows = "\r\n";
     {
         std::scoped_lock lk{g_mu};
-        for (std::size_t i = 0; i < g_rows.size(); ++i) {
-            const Row& r     = g_rows[i];
-            std::string desc = r.description;
-            if (r.restart) desc += (desc.empty() ? "" : " ") + std::string("Takes effect the next time you start the game.");
-            desc += (desc.empty() ? "" : " ") + std::string("(") + r.mod->name + ")";
-            res += "            <local:TileMenuDataItem x:Key=\"FH2Mod_Item_" + std::to_string(i) + "\" Heading=\"" +
-                   xml_escape(r.label) + "\" Description=\"" + xml_escape(desc) + "\" />\r\n";
-            if (r.slider) {
-                res += slider_resources(r, i);
-                rows += "                                        <Slider Value=\"{Binding " + r.prop + "}\" Tag=\"{StaticResource FH2Mod_Item_" +
-                        std::to_string(i) + "}\" Style=\"{StaticResource FH2Mod_Slider_" + std::to_string(i) + "}\"" +
-                        (i == 0 ? " x:Name=\"FirstItem\"" : "") + " />\r\n";
+        for (std::size_t n = 0; n < items.size(); ++n) {
+            const PageItem& it = items[n];
+            const std::string first = n == 0 ? " x:Name=\"FirstItem\"" : "";
+            const std::string key   = "FH2Mod_Item_" + std::to_string(n);
+            if (it.row < 0 || static_cast<std::size_t>(it.row) >= g_rows.size()) {
+                res += "            <local:TileMenuDataItem x:Key=\"" + key + "\" Heading=\"" + xml_escape(it.label) + "\" Description=\"" +
+                       xml_escape(it.description) + "\" />\r\n";
+                rows += "                                        <local:SpinnerControl Label=\"" + xml_escape(it.label) +
+                        "\" Tag=\"{StaticResource " + key + "}\" Style=\"{StaticResource A_Style_SpinnerControl_Default}\"" + first +
+                        " />\r\n";
                 continue;
             }
-            rows += "                                        <local:SpinnerControl Label=\"" + xml_escape(r.label) +
-                    "\" Tag=\"{StaticResource FH2Mod_Item_" + std::to_string(i) + "}\" SelectedIndex=\"{Binding " + r.prop +
-                    "}\" ItemsSource=\"{Binding OnOffOptions}\" Style=\"{StaticResource A_Style_SpinnerControl_Default}\"" +
-                    (i == 0 ? " x:Name=\"FirstItem\"" : "") + " />\r\n";
+            const Row& r     = g_rows[it.row];
+            const std::string label = it.label.empty() ? r.label : it.label;
+            std::string desc = it.description.empty() ? r.description : it.description;
+            if (r.restart) desc += (desc.empty() ? "" : " ") + std::string("Takes effect the next time you start the game.");
+            if (r.mod != &g_hub_owner) desc += (desc.empty() ? "" : " ") + std::string("(") + r.mod->name + ")";
+            res += "            <local:TileMenuDataItem x:Key=\"" + key + "\" Heading=\"" + xml_escape(label) + "\" Description=\"" +
+                   xml_escape(desc) + "\" />\r\n";
+            if (r.slider) {
+                res += slider_resources(r, it.row);
+                rows += "                                        <Slider Value=\"{Binding " + r.prop + "}\" Tag=\"{StaticResource " + key +
+                        "}\" Style=\"{StaticResource FH2Mod_Slider_" + std::to_string(it.row) + "}\"" + first + " />\r\n";
+                continue;
+            }
+            rows += "                                        <local:SpinnerControl Label=\"" + xml_escape(label) + "\" Tag=\"{StaticResource " +
+                    key + "}\" SelectedIndex=\"{Binding " + r.prop +
+                    "}\" ItemsSource=\"{Binding OnOffOptions}\" Style=\"{StaticResource A_Style_SpinnerControl_Default}\"" + first +
+                    " />\r\n";
         }
     }
     res += "        ";
     rows += "                                ";
-    const std::string title = "Content=\"{local:Loc ScreenTitles.IDS_HUDOptions}\"";
-    const std::string help_y = "local:ControllerButtonPanel.YDescription=";
+    const std::string title_attr = "Content=\"{local:Loc ScreenTitles.IDS_HUDOptions}\"";
+    const std::string help_y     = "local:ControllerButtonPanel.YDescription=";
     const std::string desc_panel = "Style=\"{StaticResource A_Style_DescriptionPanel}\"";
-    if (page.find(title) == std::string::npos || page.find(help_y) == std::string::npos ||
+    if (page.find(title_attr) == std::string::npos || page.find(help_y) == std::string::npos ||
         page.find(desc_panel) == std::string::npos ||
         !replace_between(page, "<ResourceDictionary>", "</ResourceDictionary>", res, false) ||
         !replace_between(page, "<local:CommonListBox", "</local:CommonListBox>", rows, true)) {
-        slog("A_HUDOptions.xaml doesn't look as expected; no Mods page");
+        slog("A_HUDOptions.xaml doesn't look as expected; no " + title + " page");
         return false;
     }
-    const std::size_t t = page.find(title);
-    page.replace(t, title.size(), "Content=\"MODS\"");
+    const std::size_t t = page.find(title_attr);
+    page.replace(t, title_attr.size(), "Content=\"" + xml_escape(title) + "\"");
     // Extra Options adds its rows to pages declared x:Class="ForzaUI.A_HudOptions" as the game
     // loads them; a space before the '=' is the same XML but keeps them on the HUD page.
     const std::string cls = "x:Class=\"ForzaUI.A_HudOptions\"";
@@ -464,7 +484,18 @@ bool write_mods_page() {
                 "                                               Style=\"{StaticResource A_Style_FZTextBlock_Body_Tight}\" TextWrapping=\"Wrap\" />\r\n"
                 "                        </Border>\r\n"
                 "                    </local:FZMaterial>");
-    return set_file(&g_owner_mod, "UI/Scenes/Anthem/A_ModOptions.xaml", page.data(), page.size()) != 0;
+    return set_file(&g_owner_mod, (std::string("UI/Scenes/Anthem/") + file).c_str(), page.data(), page.size()) != 0;
+}
+
+// The Mods page (Settings > Mods, and the MODS tab's All settings): every mod's rows.
+bool write_mods_page() {
+    std::vector<PageItem> items;
+    {
+        std::scoped_lock lk{g_mu};
+        for (std::size_t i = 0; i < g_rows.size(); ++i)
+            if (g_rows[i].mod != &g_hub_owner) items.push_back({static_cast<int>(i), "", ""});
+    }
+    return write_list_page("A_ModOptions.xaml", "MODS", items);
 }
 
 // Pause > Settings: a sixth column with a tall MODS tile.
@@ -496,6 +527,298 @@ bool write_settings_page() {
                 "            <local:TileMenuDataItem x:Key=\"FH2Mod_MenuDataItem_Mods\" Heading=\"MODS\" "
                 "Icon=\"/ForzaUI;component/Textures/Anthem/Icons/TiledMenus/Tuning1x1.png\" />\r\n");
     return set_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseOptions.xaml", page.data(), page.size()) != 0;
+}
+
+// ---- the MODS tab: its pages -----------------------------------------------------------------
+//
+// Pause > MARKETPLACE has been dead since the store closed. The platform turns it into a MODS
+// tab: A_PauseMenu.xaml's Marketplace tiles become the tab's six tiles, and each opens a page
+// laid out like the Mods page (A_ModPage_01..05.xaml, or A_ModOptions.xaml for All settings).
+// Installed mods has a switch per mod in fh2-mods, with that mod's own rows under it.
+std::vector<ModEntry> g_entries;     // fh2-mods, in load order (set once, before the hooks)
+std::vector<int> g_entry_row;        // each entry's switch row in g_rows
+std::mutex g_page_mu;                // one page written at a time
+
+enum HubPage { kHubInstalled = 1, kHubUpdates, kHubGetMods, kHubAbout, kHubMaking, kHubAllSettings };
+
+std::string hub_file(int p) { return "A_ModPage_0" + std::to_string(p) + ".xaml"; }
+
+void hub_switch_changed(void* user, const char*, int v) {
+    const auto i = reinterpret_cast<std::uintptr_t>(user);
+    if (i < g_entries.size()) set_mod_enabled(g_entries[i].dll, v != 0);
+}
+
+void add_hub_rows() {
+    g_entries = mod_entries();
+    std::scoped_lock lk{g_mu};
+    for (std::size_t i = 0; i < g_entries.size(); ++i) {
+        const ModEntry& e = g_entries[i];
+        Row& r     = g_rows.emplace_back();
+        r.mod      = &g_hub_owner;
+        r.key      = "Mod_" + std::to_string(i);
+        r.label    = e.name;
+        r.prop     = "FH2Mod_" + std::to_string(g_rows.size() - 1);
+        r.value    = e.enabled ? 1 : 0;
+        r.boot     = r.value;
+        r.restart  = true;
+        r.on_change = &hub_switch_changed;
+        r.user     = reinterpret_cast<void*>(static_cast<std::uintptr_t>(i));
+        g_entry_row.push_back(static_cast<int>(g_rows.size() - 1));
+    }
+}
+
+std::string with_v(const std::string& version) { return version.empty() ? "" : " " + version; }
+
+// "Up to date.", "Version 1.3.0 is out.", ...
+std::string update_status(const ModEntry& e) {
+    if (!e.enabled) return "";
+    if (!e.mod) return e.platform_mod ? "" : "It doesn't check for updates.";
+    if (e.mod->repo.empty() || !e.mod->check_updates) return "It doesn't check for updates.";
+    const std::string latest = latest_known(e.mod);
+    if (latest.empty()) return "Not checked for updates yet.";
+    if (compare_versions(latest, e.version) > 0) return "Version " + latest + " is out: github.com/" + e.mod->repo + "/releases";
+    return "Up to date.";
+}
+
+std::string alnum_lower(const std::string& s) {
+    std::string o;
+    for (char c : s)
+        if (std::isalnum(static_cast<unsigned char>(c))) o += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return o;
+}
+
+const ModEntry* installed(const char* key) {
+    for (const ModEntry& e : g_entries) {
+        std::string stem = narrow(e.dll);
+        if (stem.size() > 4) stem.resize(stem.size() - 4);
+        if (alnum_lower(e.name).find(key) != std::string::npos || alnum_lower(stem).find(key) != std::string::npos) return &e;
+    }
+    return nullptr;
+}
+
+// Extra Options' log starts with "<name> <version> - ..."; empty when it isn't loaded from the
+// game's folder.
+std::string extra_options_line() {
+    HMODULE w = GetModuleHandleW(L"winmm.dll");
+    wchar_t path[MAX_PATH], sys[MAX_PATH];
+    if (!w || !GetModuleFileNameW(w, path, MAX_PATH)) return "";
+    const UINT s = GetSystemDirectoryW(sys, MAX_PATH);
+    std::filesystem::path dir = std::filesystem::path{path}.parent_path();
+    if (s && s < MAX_PATH && lstrcmpiW(dir.c_str(), sys) == 0) return "";
+    std::string line = "Installed";
+    if (FILE* f = _wfopen((dir / L"FH2_ExtraOptions.log").c_str(), L"rb")) {
+        char b[256] = {};
+        if (std::fgets(b, sizeof b, f)) {
+            std::string l = b;
+            if (const auto d = l.find(" - "); d != std::string::npos) l.resize(d);
+            while (!l.empty() && (l.back() == '\r' || l.back() == '\n')) l.pop_back();
+            if (!l.empty()) line = l;
+        }
+        std::fclose(f);
+    }
+    return line;
+}
+
+PageItem info(const std::string& label, const std::string& description) { return {-1, label, description}; }
+
+std::vector<PageItem> installed_items() {
+    std::vector<PageItem> items;
+    std::vector<bool> shown;
+    {
+        std::scoped_lock lk{g_mu};
+        shown.assign(g_rows.size(), false);
+        for (std::size_t i = 0; i < g_entries.size(); ++i) {
+            const ModEntry& e = g_entries[i];
+            std::string d = e.description.empty() ? "" : e.description + " ";
+            if (!e.enabled) d += "Turned off: the game doesn't load it. ";
+            else if (!e.platform_mod) d += "A mod from before the platform: it has no settings here. ";
+            if (const std::string u = update_status(e); !u.empty()) d += u + " ";
+            if (!d.empty()) d.pop_back();
+            items.push_back({g_entry_row[i], e.name + with_v(e.version), d});
+            shown[g_entry_row[i]] = true;
+            if (!e.mod) continue;
+            for (std::size_t r = 0; r < g_rows.size(); ++r)
+                if (g_rows[r].mod == e.mod) {
+                    items.push_back({static_cast<int>(r), "      " + g_rows[r].label, ""});
+                    shown[r] = true;
+                }
+        }
+        // rows of a mod not in fh2-mods (shouldn't happen), so nothing goes missing
+        for (std::size_t r = 0; r < g_rows.size(); ++r)
+            if (!shown[r] && g_rows[r].mod != &g_hub_owner) items.push_back({static_cast<int>(r), "", ""});
+    }
+    if (g_entries.empty())
+        items.push_back(info("No mods installed", "Mods go in the fh2-mods folder next to azimuth.exe. See GET MODS for some to try."));
+    return items;
+}
+
+std::vector<PageItem> updates_items() {
+    std::vector<PageItem> items;
+    items.push_back(info("FH2 Mod Platform " FH2MOD_PLATFORM_VERSION,
+                         "The platform comes with every mod: installing a mod's newest release brings the newest platform too."));
+    for (const ModEntry& e : g_entries) {
+        std::string label = e.name + with_v(e.version);
+        std::string d;
+        if (!e.enabled) d = "Turned off, so not checked.";
+        else d = update_status(e);
+        if (e.mod && !e.mod->repo.empty() && e.mod->check_updates) {
+            const std::string latest = latest_known(e.mod);
+            if (!latest.empty() && compare_versions(latest, e.version) > 0) label += ": " + latest + " is out";
+            else if (!latest.empty()) label += ": up to date";
+            d += " Release notes: github.com/" + e.mod->repo + "/releases";
+        }
+        items.push_back(info(label, d.empty() ? "No update information for this mod." : d));
+    }
+    items.push_back(info("How update checks work",
+                         "Mods that name their GitHub page check it for new releases at most every 6 hours. A mod with a new "
+                         "release also says so on the title screen, under PRESS (A) TO START."));
+    return items;
+}
+
+std::vector<PageItem> get_mods_items() {
+    struct Known {
+        const char *key, *name, *repo, *what;
+    };
+    static const Known known[] = {
+        {"universalradio", "FH2 Universal Radio", "Trinculo54/FH2-Universal-Radio", "Plays Spotify and more on the in-game radio."},
+        {"wheresmybuddy", "WheresMyBuddy", "Trinculo54/WheresMyBuddy", "Puts your Xbox friends in the game as Drivatars."},
+        {"wreckingball", "WreckingBall", "Trinculo54/WreckingBall",
+         "Makes trees, fences, railings, roadside clutter and telephone poles break when you drive into them."},
+    };
+    std::vector<PageItem> items;
+    items.push_back(info("Installing a mod",
+                         "Download the zip from the mod's GitHub releases page and extract it into your Azimuth folder, next to "
+                         "azimuth.exe, then start the game again. Its DLL goes into fh2-mods by itself."));
+    for (const Known& k : known) {
+        const ModEntry* e = installed(k.key);
+        items.push_back(info(std::string(k.name) + (e ? " (installed)" : ""),
+                             std::string(k.what) + " github.com/" + k.repo + "/releases"));
+    }
+    const std::string eo = extra_options_line();
+    items.push_back(info(std::string("Forza Horizon 2 Extra Options") + (eo.empty() ? "" : " (installed)"),
+                         "Not a platform mod: it loads through winmm.dll and works alongside the platform, adding options of its "
+                         "own to the game's menus. github.com/RokkuDayo/forzahorizon2_extraoptions"));
+    return items;
+}
+
+std::vector<PageItem> about_items() {
+    std::size_t on = 0, off = 0;
+    for (const ModEntry& e : g_entries) (e.enabled ? on : off)++;
+    std::vector<PageItem> items;
+    items.push_back(info("FH2 Mod Platform " FH2MOD_PLATFORM_VERSION,
+                         "API " + std::to_string(FH2MOD_API_VERSION) +
+                             ". It's the d3dcompiler_47.dll next to azimuth.exe, and it loads the mods in fh2-mods. "
+                             "github.com/Trinculo54/fh2-mod-platform"));
+    items.push_back(info(std::to_string(on) + " mod(s) loaded" + (off ? ", " + std::to_string(off) + " turned off" : ""),
+                         "Turn a mod off or on under INSTALLED MODS. A mod that's turned off stays in fh2-mods, so turning it "
+                         "back on needs nothing reinstalled."));
+    const std::string eo = extra_options_line();
+    items.push_back(info("Extra Options: " + (eo.empty() ? std::string("not installed") : eo),
+                         eo.empty() ? "Forza Horizon 2 Extra Options isn't loaded. See GET MODS."
+                                    : "Extra Options is loaded through winmm.dll. Its own options are on the game's settings pages."));
+    items.push_back(info("Log: fh2-mods\\platform.log",
+                         "What the platform and every mod did this time. If something isn't right, it's the file to send along "
+                         "when you report it."));
+    return items;
+}
+
+std::vector<PageItem> making_items() {
+    std::vector<PageItem> items;
+    items.push_back(info("Making a mod",
+                         "A mod is a DLL in fh2-mods with an fh2mod_init function, built against fh2mod.h. "
+                         "github.com/Trinculo54/fh2-mod-platform has the header, an example mod and docs/writing-a-mod.md."));
+    items.push_back(info("Settings on this tab",
+                         "add_setting puts On/Off and slider rows under your mod on INSTALLED MODS (and on Settings > Mods). "
+                         "FH2ModInfo.description (API 6) is the line shown with your mod."));
+    items.push_back(info("Update checks",
+                         "Give FH2ModInfo.github_repo as \"Owner/Repo\" and the platform checks your releases, shows them under "
+                         "UPDATES and on the title screen."));
+    items.push_back(info("Game files and strings",
+                         "set_file, add_sql and set_string change the game's files, database and text for as long as your mod "
+                         "is installed, and the platform puts everything back when it isn't. See docs/api.md."));
+    return items;
+}
+
+bool write_hub_page(int p) {
+    std::scoped_lock lk{g_page_mu};
+    switch (p) {
+        case kHubInstalled: return write_list_page(hub_file(p).c_str(), "INSTALLED MODS", installed_items());
+        case kHubUpdates: return write_list_page(hub_file(p).c_str(), "UPDATES", updates_items());
+        case kHubGetMods: return write_list_page(hub_file(p).c_str(), "GET MODS", get_mods_items());
+        case kHubAbout: return write_list_page(hub_file(p).c_str(), "ABOUT", about_items());
+        case kHubMaking: return write_list_page(hub_file(p).c_str(), "MAKING MODS", making_items());
+        case kHubAllSettings: return write_mods_page();
+        default: return false;
+    }
+}
+
+// Pause > MARKETPLACE -> MODS, with the tab's tiles where the store's were.
+bool write_pause_menu() {
+    std::string page = read_ui("Scenes/Anthem/A_PauseMenu.xaml");
+    if (page.empty()) return false;
+    const std::string tab      = "Content=\"{local:Loc PauseMenu.IDS_CatTitle_Marketplace}\"";
+    const std::string badge    = "Tag=\"{Binding NotificationBadgeMarketplace}\"";
+    const std::string items_at = "x:Key=\"A_MenuDataItem_VIPPass\" />";
+    const std::string scope    = "x:Name=\"PART_SCOPE_Marketplace\">";
+    if (page.find(tab) == std::string::npos || page.find(items_at) == std::string::npos ||
+        page.find(scope) == std::string::npos) {
+        slog("A_PauseMenu.xaml doesn't look as expected; no MODS tab");
+        return false;
+    }
+    struct Tile {
+        const char *name, *item, *heading, *icon, *size, *tmpl;
+        int x, y;
+    };
+    static const Tile tiles[] = {
+        {"PART_Button_CarPacks", "FH2Mod_Tile_Updates", "UPDATES", "Icons/PauseMenu/Restart.png", "2x1", "HorizontalIconTile", 0, 0},
+        {"PART_Button_ExpansionPacks", "FH2Mod_Tile_GetMods", "GET MODS", "Icons/PauseMenu/Extras.png", "2x1", "HorizontalIconTile", 0, 1},
+        {"PART_Button_SeasonPass", "FH2Mod_Tile_Making", "MAKING MODS", "Icons/PauseMenu/TuningSetup.png", "1x2", "VerticalIconTile", 2, 0},
+        {"PART_Button_FH2Mod_Installed", "FH2Mod_Tile_Installed", "INSTALLED MODS", "Icons/TiledMenus/Tuning1x1.png", "2x2", "VerticalIconTile", 3, 0},
+        {"PART_Button_Extras", "FH2Mod_Tile_About", "ABOUT", "Icons/PauseMenu/Stats.png", "1x1", "IconTile", 5, 0},
+        {"PART_Button_VIPMembership", "FH2Mod_Tile_AllSettings", "ALL SETTINGS", "Icons/PauseMenu/TuneCar.png", "1x1", "IconTile", 5, 1},
+    };
+    std::string res, buttons = "\r\n";
+    int index = 1;
+    for (const Tile& t : tiles) {
+        res += std::string("\r\n            <local:TileMenuDataItem x:Key=\"") + t.item + "\" Heading=\"" + t.heading +
+               "\" Icon=\"/ForzaUI;component/Textures/Anthem/" + t.icon + "\" />";
+        buttons += std::string("                        <Button Canvas.Left=\"{StaticResource A_Double_TileCoord_X_") + std::to_string(t.x) +
+                   "}\"\r\n                                Canvas.Top=\"{StaticResource A_Double_TileCoord_Y_" + std::to_string(t.y) +
+                   "}\"\r\n                                DataContext=\"{StaticResource " + t.item +
+                   "}\"\r\n                                Style=\"{StaticResource A_Style_Button_Tile_" + t.size +
+                   "}\"\r\n                                Template=\"{StaticResource A_ControlTemplate_" + t.tmpl +
+                   "}\"\r\n                                local:TileMenuNavigationManager.TileState=\"Enabled\""
+                   "\r\n                                local:TileMenuNavigationManager.GridX=\"" + std::to_string(t.x) +
+                   "\"\r\n                                local:TileMenuNavigationManager.GridY=\"" + std::to_string(t.y) +
+                   "\"\r\n                                local:UIPageTransitionManager.TransitionIndex=\"" + std::to_string(index++) +
+                   "\"\r\n                                x:Name=\"" + t.name + "\" />\r\n";
+    }
+    buttons += "                    ";
+    if (!replace_between(page, scope, "</Canvas>", buttons, false)) return false;
+    page.insert(page.find(items_at) + items_at.size(), res);
+    page.replace(page.find(tab), tab.size(), "Content=\"MODS\"");
+    if (const std::size_t b = page.find(badge); b != std::string::npos) page.erase(b, badge.size());
+    return set_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseMenu.xaml", page.data(), page.size()) != 0;
+}
+
+// The Marketplace tiles' events go to a node of ours that shows the HUD page (as the MODS
+// page) and comes back to the pause menu.
+bool write_pause_flow() {
+    const auto zip = game_mount() / L"media" / L"stateflow.zip";
+    std::vector<char> x = unzip_file(zip, "pause.xml");
+    std::string flow(x.begin(), x.end());
+    const std::string exit = "<exit id=\"car_packs\" target=\"_marketplace_car_pack.enter\" />";
+    const std::string node = "<node id=\"_marketplace_extras\"";
+    const std::size_t e = flow.find(exit), n = flow.find(node);
+    if (flow.empty() || e == std::string::npos || n == std::string::npos || flow.find(exit, e + 1) != std::string::npos) {
+        slog("stateflow pause.xml doesn't look as expected; no MODS tab");
+        return false;
+    }
+    flow.insert(n, "<node id=\"_fh2mod_page\" state=\"ui_screens.show_hud_options\">\r\n"
+                   "      <exit id=\"back\" target=\"pause_menu.enterback\" />\r\n"
+                   "    </node>\r\n\r\n    ");
+    flow.replace(e, exit.size(), "<exit id=\"car_packs\" target=\"_fh2mod_page\" />");
+    return set_file(&g_owner_mod, "stateflow/pause.xml", flow.data(), flow.size()) != 0;
 }
 
 // ---- the Mods tile ---------------------------------------------------------------------------
@@ -544,27 +867,42 @@ void widen_nav(void* page) {
     }
 }
 
-// L"Anthem\A_HudOptions" -> L"Anthem\A_ModOptions", in place (same length)
-bool point_at_mods_page(uint8_t* rec) {
+// L"Anthem\A_HudOptions" -> L"Anthem\A_ModOptions" (or another 12-letter page), in place
+bool point_at_page(uint8_t* rec, const wchar_t* page) {
     __try {
         const uint64_t size = *reinterpret_cast<uint64_t*>(rec + 0x38);
         const uint64_t cap  = *reinterpret_cast<uint64_t*>(rec + 0x40);
         wchar_t* p = cap > 7 ? *reinterpret_cast<wchar_t**>(rec + 0x28) : reinterpret_cast<wchar_t*>(rec + 0x28);
         if (size != 19 || !readable(p, 40) || std::wcsncmp(p, L"Anthem\\A_HudOptions", 19) != 0) return false;
-        p[9]  = L'M';
-        p[10] = L'o';
-        p[11] = L'd';
+        std::wmemcpy(p + 7, page, 12);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
 }
 
+// the MODS tab: which page its tile asked for, and when
+std::atomic<int> g_hub_page{0};
+std::atomic<uint64_t> g_hub_asked{0};
+bool g_in_hub = false;                   // on one of the MODS tab's pages (UI thread only)
+
 uint8_t* d_hud_scene(uint8_t* out) {
     uint8_t* r = o_hud_scene(out);
-    const uint64_t asked = g_mods_asked.load();
-    if (asked && GetTickCount64() - asked < 1500 && !point_at_mods_page(r))
-        slog("the HUD page's scene record doesn't look as expected; opened the HUD page");
+    const uint64_t now = GetTickCount64(), asked = g_mods_asked.load(), hub = g_hub_asked.load();
+    const wchar_t* page = nullptr;
+    wchar_t name[13];
+    if (hub && now - hub < 1500) {
+        const int p = g_hub_page.load();
+        if (p == kHubAllSettings) {
+            page = L"A_ModOptions";
+        } else {
+            std::swprintf(name, 13, L"A_ModPage_0%d", p);
+            page = name;
+        }
+    } else if (asked && now - asked < 1500) {
+        page = L"A_ModOptions";
+    }
+    if (page && !point_at_page(r, page)) slog("the HUD page's scene record doesn't look as expected; opened the HUD page");
     return r;
 }
 
@@ -626,6 +964,7 @@ struct PopupFn {
     void* page;   // the Settings page it was shown over
 };
 void handle_choice(PopupFn* self);
+void (*g_popup_back)(void* page) = nullptr;   // "Go back": reopen the page the popup came from
 void* fn_copy(PopupFn* self, void* where) {
     auto* n = where ? static_cast<PopupFn*>(where) : static_cast<PopupFn*>(HeapAlloc(GetProcessHeap(), 0, sizeof(PopupFn)));
     *n = *self;
@@ -783,14 +1122,17 @@ void handle_choice(PopupFn* self) {
         case kRestartLater: slog("Restart later"); break;
         case kGoBack:
             slog("Go back");
-            mods_tile_pressed(self->page);
+            if (g_popup_back) g_popup_back(self->page);
             break;
         default: break;
     }
 }
 
+bool g_settings_tile = false;   // Pause > Settings has the Mods tile (some mod has rows)
+
 void d_wire_tiles(void* page) {
     g_mods_asked = 0;
+    if (!g_settings_tile) return o_wire_tiles(page);
     widen_nav(page);
     o_wire_tiles(page);
     wire_mods_tile(page);
@@ -801,9 +1143,150 @@ void d_wire_tiles(void* page) {
         std::string now = current_values();
         if (now != g_asked_values) {
             g_asked_values = now;
+            g_popup_back   = &mods_tile_pressed;
             if (show_popup(page)) slog("asked about restarting");
         }
     }
+}
+
+// ---- the MODS tab: its tiles ---------------------------------------------------------------
+// The pause menu's tiles are wired in 0x140DC6E30 with 0x140D9F9F0(page, "PART_Button_X",
+// &pmf). The Marketplace ones each fire a state-machine event (car_packs, expansion_packs) or
+// open the store. All of ours go through the Car Packs handler (0x140DBD720), whose car_packs
+// event pause.xml now sends to a node that shows the HUD page; the scene record hook then
+// points it at the page the tile asked for. The 2x2 tile was a live store tile wired by the
+// game; ours is a plain button, wired here.
+constexpr uintptr_t RVA_PAUSE_MENU_WIRE = 0x0DC6E30;   // PauseMenu: wire the tiles (page)
+constexpr uintptr_t RVA_PAUSE_WIRE_BTN  = 0x0D9F9F0;   // (page, const char* name, const Pmf*)
+constexpr uintptr_t RVA_TILE_CAR_PACKS  = 0x0DBD720;
+constexpr uintptr_t RVA_TILE_EXPANSIONS = 0x0DBDD00;
+constexpr uintptr_t RVA_TILE_EXTRAS     = 0x0DBDD60;
+constexpr uintptr_t RVA_TILE_SEASONPASS = 0x0DBF8F0;
+constexpr uintptr_t RVA_TILE_VIP        = 0x0DBFE40;
+// 0x140DD8FD0(page, "PART_GROUP_Marketplace", 1) hides the tab; Extra Options' EnableMarketplace
+// makes these 0, and so does the platform.
+constexpr uintptr_t RVA_MARKETPLACE_HIDE[] = {0x0DDACAD, 0x0DDAE1F, 0x0DDB2F5, 0x0DDB910, 0x0DDBB3E};
+
+WireTilesFn o_pause_menu_wire = nullptr;
+TileFn o_car_packs = nullptr, o_expansions = nullptr, o_extras = nullptr, o_season_pass = nullptr, o_vip = nullptr;
+
+void open_hub_page(void* page, int which) {
+    write_hub_page(which);   // up to date (update checks finish after the game starts)
+    g_in_hub    = true;
+    g_hub_page  = which;
+    g_hub_asked = GetTickCount64();
+    o_car_packs(page);
+}
+void d_tile_updates(void* page) { open_hub_page(page, kHubUpdates); }
+void d_tile_get_mods(void* page) { open_hub_page(page, kHubGetMods); }
+void d_tile_about(void* page) { open_hub_page(page, kHubAbout); }
+void d_tile_making(void* page) { open_hub_page(page, kHubMaking); }
+void d_tile_all_settings(void* page) { open_hub_page(page, kHubAllSettings); }
+void tile_installed(void* page) { open_hub_page(page, kHubInstalled); }
+
+void wire_installed_tile(void* page) {
+    static const Pmf pmf{reinterpret_cast<void*>(&tile_installed), 0, 0};
+    __try {
+        reinterpret_cast<WireButtonFn>(g_base + RVA_PAUSE_WIRE_BTN)(page, "PART_Button_FH2Mod_Installed", &pmf);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void d_pause_menu_wire(void* page) {
+    g_hub_asked = 0;
+    o_pause_menu_wire(page);
+    wire_installed_tile(page);
+    // back from the MODS tab with a change that needs a restart?
+    const bool from_hub = g_in_hub;
+    g_in_hub            = false;
+    if (from_hub && g_popup_ok && restart_pending()) {
+        std::string now = current_values();
+        if (now != g_asked_values) {
+            g_asked_values = now;
+            g_popup_back   = &tile_installed;
+            if (show_popup(page)) slog("asked about restarting");
+        }
+    }
+}
+
+bool show_marketplace_tab() {
+    static const uint8_t hide[] = {0x41, 0xB8, 0x01, 0x00, 0x00, 0x00}, show[] = {0x41, 0xB8, 0x00, 0x00, 0x00, 0x00};
+    for (uintptr_t rva : RVA_MARKETPLACE_HIDE)
+        if (!code_matches(rva, hide, sizeof hide) && !code_matches(rva, show, sizeof show)) return false;
+    for (uintptr_t rva : RVA_MARKETPLACE_HIDE) {
+        auto* at  = reinterpret_cast<uint8_t*>(g_base + rva);
+        DWORD old = 0;
+        if (!VirtualProtect(at + 2, 1, PAGE_EXECUTE_READWRITE, &old)) return false;
+        at[2] = 0;
+        VirtualProtect(at + 2, 1, old, &old);
+    }
+    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(g_base + RVA_MARKETPLACE_HIDE[0]), 0x2000);
+    return true;
+}
+
+bool g_hub_files = false;   // the tab's files were written
+
+void hook_hub() {
+    struct Check {
+        uintptr_t rva;
+        std::vector<uint8_t> bytes;
+    };
+    const Check checks[] = {
+        {RVA_PAUSE_MENU_WIRE, {0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC}},
+        {RVA_PAUSE_WIRE_BTN, {0x48, 0x8B, 0xC4, 0x57, 0x48, 0x81, 0xEC, 0x90, 0x00, 0x00, 0x00, 0x48, 0xC7, 0x40, 0xA0, 0xFE}},
+        {RVA_TILE_CAR_PACKS, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0x72, 0x82, 0x4D, 0xFF, 0x80, 0xB8}},
+        {RVA_TILE_EXPANSIONS, {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0x92, 0x7C, 0x4D, 0xFF, 0x80, 0xB8}},
+        {RVA_TILE_EXTRAS, {0x40, 0x55, 0x56, 0x57, 0x48, 0x8B, 0xEC, 0x48, 0x83, 0xEC, 0x70, 0x48, 0xC7, 0x45, 0xB0, 0xFE}},
+        {RVA_TILE_SEASONPASS, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x70, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF, 0xFF, 0x48}},
+        {RVA_TILE_VIP, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x70, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF, 0xFF, 0x48}},
+    };
+    auto undo_files = [] {
+        clear_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseMenu.xaml");
+        clear_file(&g_owner_mod, "stateflow/pause.xml");
+    };
+    if (!g_hub_files) return;
+    for (const Check& c : checks)
+        if (!code_matches(c.rva, c.bytes.data(), c.bytes.size())) {
+            char b[16];
+            std::snprintf(b, sizeof b, "%llX", static_cast<unsigned long long>(c.rva));
+            slog(std::string("the game's code at game+") + b + " doesn't look as expected; no MODS tab");
+            undo_files();
+            return;
+        }
+    FH2Mod* m = &g_owner_mod;
+    struct H {
+        const char* name;
+        uintptr_t rva;
+        void* detour;
+        TileFn* original;
+    };
+    const H hooks[] = {
+        {"Marketplace: Car Packs tile", RVA_TILE_CAR_PACKS, reinterpret_cast<void*>(&d_tile_updates), &o_car_packs},
+        {"Marketplace: Expansion Packs tile", RVA_TILE_EXPANSIONS, reinterpret_cast<void*>(&d_tile_get_mods), &o_expansions},
+        {"Marketplace: Extras tile", RVA_TILE_EXTRAS, reinterpret_cast<void*>(&d_tile_about), &o_extras},
+        {"Marketplace: Season Pass tile", RVA_TILE_SEASONPASS, reinterpret_cast<void*>(&d_tile_making), &o_season_pass},
+        {"Marketplace: VIP tile", RVA_TILE_VIP, reinterpret_cast<void*>(&d_tile_all_settings), &o_vip},
+    };
+    std::vector<FH2Hook*> made;
+    bool ok = true;
+    for (const H& h : hooks) {
+        FH2Hook* k = g_api->hook_function(m, h.name, reinterpret_cast<void*>(g_base + h.rva), h.detour, reinterpret_cast<void**>(h.original));
+        ok         = ok && k;
+        if (k) made.push_back(k);
+    }
+    FH2Hook* wire = g_api->hook_function(m, "PauseMenu: wire the tiles", reinterpret_cast<void*>(g_base + RVA_PAUSE_MENU_WIRE),
+                                         reinterpret_cast<void*>(&d_pause_menu_wire), reinterpret_cast<void**>(&o_pause_menu_wire));
+    ok = ok && wire;
+    if (wire) made.push_back(wire);
+    for (FH2Hook* k : made) ok = ok && g_api->enable_hooks(m, k);
+    if (!ok) {
+        slog("hooking the pause menu failed; no MODS tab");
+        for (FH2Hook* k : made) g_api->disable_hooks(m, k);
+        undo_files();
+        return;
+    }
+    if (!show_marketplace_tab()) slog("the code that hides the Marketplace tab doesn't look as expected; MODS shows only with Extra Options' EnableMarketplace");
+    slog("MODS tab ready");
 }
 
 // ---- hooking up ----------------------------------------------------------------------------
@@ -883,12 +1366,13 @@ void hook_game() {
         !g_api->hook_function(m, "HUD options scene record", reinterpret_cast<void*>(g_base + RVA_HUD_SCENE_RECORD),
                               reinterpret_cast<void*>(&d_hud_scene), reinterpret_cast<void**>(&o_hud_scene)) ||
         !g_api->enable_hooks(m, nullptr)) {
-        slog("hooking the Settings page failed; no Mods tile");
+        slog("hooking the Settings page failed; no Mods tile or MODS tab");
         g_api->disable_hooks(m, nullptr);
         clear_file(m, nullptr);
         return;
     }
     slog("ready");
+    hook_hub();
 }
 
 } // namespace
@@ -966,34 +1450,48 @@ void settings_set_slider(FH2Mod* m, const char* key, float value) {
     if (Row* r = find_row(m, key); r && r->slider) r->fvalue = snap(*r, value);
 }
 
-// After every mod's fh2mod_init: write the pages and hook the game, if any mod added a row.
+// After every mod's fh2mod_init: write the pages (the MODS tab's, and Settings > Mods if any
+// mod added a row) and hook the game.
 void settings_start(const FH2ModApi* api) {
     g_api = api;
     g_owner_mod.name  = kWho;
     g_owner_mod.wname = widen(kWho);
+    g_hub_owner.name  = "MODS tab";
+    g_hub_owner.wname = widen(g_hub_owner.name);
     std::size_t n = 0;
     {
         std::scoped_lock lk{g_mu};
         n = g_rows.size();
     }
+    add_hub_rows();
     g_written = true;
-    if (!n) {
-        // No rows this time (the mods that had some were removed): take the tile and the
-        // page back out before the game reads its menus, rather than with the clean-up later.
-        remove_leftover_file("UI/Scenes/Anthem/A_PauseOptions.xaml");
-        remove_leftover_file("UI/Scenes/Anthem/A_ModOptions.xaml");
-        return;
-    }
+    const char* const files[] = {"UI/Scenes/Anthem/A_PauseOptions.xaml", "UI/Scenes/Anthem/A_ModOptions.xaml",
+                                 "UI/Scenes/Anthem/A_PauseMenu.xaml",    "stateflow/pause.xml"};
     if (game_mount().empty()) {
-        slog("the game folder wasn't found; no Mods page");
+        slog("the game folder wasn't found; no Mods page or MODS tab");
+        for (const char* f : files) remove_leftover_file(f);
         return;
     }
-    if (!write_mods_page() || !write_settings_page()) {
-        clear_file(&g_owner_mod, nullptr);
-        return;
+    // the MODS tab
+    g_hub_files = write_pause_menu() && write_pause_flow();
+    for (int p = kHubInstalled; p <= kHubMaking && g_hub_files; ++p) g_hub_files = write_hub_page(p);
+    if (!g_hub_files) {
+        clear_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseMenu.xaml");
+        clear_file(&g_owner_mod, "stateflow/pause.xml");
     }
-    slog(std::to_string(n) + " row(s) on the Mods page");
-    std::thread(hook_game).detach();
+    // Settings > Mods (also the tab's All settings)
+    bool mods_page = write_mods_page();
+    g_settings_tile = n && mods_page && write_settings_page();
+    if (!g_settings_tile) {
+        // No rows this time (the mods that had some were removed): take the tile back out
+        // before the game reads its menus, rather than with the clean-up later.
+        remove_leftover_file("UI/Scenes/Anthem/A_PauseOptions.xaml");
+        clear_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseOptions.xaml");
+    }
+    if (!mods_page) remove_leftover_file("UI/Scenes/Anthem/A_ModOptions.xaml");
+    slog(std::to_string(n) + " row(s) on the Mods page, " + std::to_string(g_entries.size()) + " mod(s) on the MODS tab" +
+         (g_hub_files ? "" : " (not shown)"));
+    if (g_hub_files || g_settings_tile) std::thread(hook_game).detach();
 }
 
 FH2Mod* settings_owner() { return &g_owner_mod; }

@@ -57,6 +57,11 @@ std::vector<std::unique_ptr<FH2Mod>> g_mods;
 std::map<std::string, std::string> g_table_names; // lower -> as first given
 std::set<std::string> g_dirty;                    // lower-case table names
 std::wstring g_current_dll;                       // the DLL whose fh2mod_init is running
+struct Found {                                    // every DLL in fh2-mods, in load order
+    std::wstring file;
+    bool loaded = false, disabled = false, has_init = false;
+};
+std::vector<Found> g_found;
 
 std::mutex g_log_mu;
 FILE* g_log = nullptr;
@@ -91,6 +96,11 @@ std::string lower(std::string s) {
 
 // FileVersion of a loaded module, straight from its resources (no
 // version.dll needed).
+std::wstring lower_w(std::wstring s) {
+    for (auto& c : s) c = static_cast<wchar_t>(towlower(c));
+    return s;
+}
+
 std::string version_string(HMODULE mod) {
     HRSRC r = FindResourceW(mod, MAKEINTRESOURCEW(1), MAKEINTRESOURCEW(16) /* RT_VERSION */);
     if (!r) return {};
@@ -266,6 +276,7 @@ void check_updates(FH2Mod* m) {
         return;
     }
     std::scoped_lock lk{g_mu};
+    m->latest        = latest;
     const bool newer = compare_versions(latest, m->version) > 0;
     const char* when = cached ? ", checked earlier" : "";
     log_line(m->name, newer ? "update available: " + latest + " (github.com/" + m->repo + "/releases)"
@@ -297,6 +308,8 @@ FH2Mod* api_register(const FH2ModInfo* info) {
     m->repo            = info->github_repo ? info->github_repo : "";
     m->platform_version = info->platform_version ? info->platform_version : "";
     m->check_updates   = info->check_updates != 0;
+    if (info->size >= offsetof(FH2ModInfo, description) + sizeof(const char*) && info->description)
+        m->description = info->description;   // API 6
     m->wname           = widen(m->name);
     FH2Mod* raw        = m.get();
     {
@@ -490,11 +503,25 @@ DWORD WINAPI load_mods(LPVOID) {
             files.push_back(e.path().filename().wstring());
     std::sort(files.begin(), files.end());
     std::vector<LoadedDll> dlls;
+    const auto off = disabled_mods();
     for (const auto& f : files) {
+        {
+            std::scoped_lock lk{g_mu};
+            g_found.push_back({f, false, off.count(lower_w(f)) != 0, false});
+        }
+        if (off.count(lower_w(f))) {
+            plog(narrow(f) + " is turned off on the MODS tab; not loaded");
+            continue;
+        }
         // ALTERED_SEARCH_PATH: a mod's own dependencies resolve from fh2-mods first.
         const auto path = (g_azimuth / "fh2-mods" / f).wstring();
         if (HMODULE h = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) {
             loaded.push_back({f, h});
+            {
+                std::scoped_lock lk{g_mu};
+                g_found.back().loaded   = true;
+                g_found.back().has_init = GetProcAddress(h, "fh2mod_init") != nullptr;
+            }
             const auto* base = reinterpret_cast<const char*>(h);
             const auto* nt   = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
                 base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
@@ -587,6 +614,115 @@ DWORD WINAPI load_mods(LPVOID) {
 }
 
 } // namespace
+
+// ---- the MODS tab's list of mods -----------------------------------------------------
+//
+// fh2-mods\platform-disabled.txt lists the DLLs turned off on the MODS tab, one per line; the
+// loader skips them. fh2-mods\platform-mods.txt remembers each mod's name, version and
+// description from the last launch it was loaded, so a turned-off mod still shows by name.
+
+namespace {
+fs::path disabled_path() { return g_azimuth / "fh2-mods" / "platform-disabled.txt"; }
+fs::path known_path() { return g_azimuth / "fh2-mods" / "platform-mods.txt"; }
+
+std::vector<std::wstring> read_lines(const fs::path& p) {
+    std::vector<std::wstring> out;
+    FILE* f = _wfopen(p.c_str(), L"r, ccs=UTF-8");
+    if (!f) return out;
+    wchar_t line[4096];
+    while (std::fgetws(line, 4096, f)) {
+        std::wstring l = line;
+        while (!l.empty() && (l.back() == L'\n' || l.back() == L'\r')) l.pop_back();
+        if (!l.empty() && l[0] != L'#') out.push_back(l);
+    }
+    std::fclose(f);
+    return out;
+}
+
+void write_lines(const fs::path& p, const std::wstring& header, const std::vector<std::wstring>& lines) {
+    const fs::path tmp = p.wstring() + L".tmp";
+    FILE* f = _wfopen(tmp.c_str(), L"w, ccs=UTF-8");
+    if (!f) return;
+    std::fputws(header.c_str(), f);
+    for (const auto& l : lines) {
+        std::fputws(l.c_str(), f);
+        std::fputws(L"\n", f);
+    }
+    std::fclose(f);
+    MoveFileExW(tmp.c_str(), p.c_str(), MOVEFILE_REPLACE_EXISTING);
+}
+
+std::vector<std::wstring> split_tabs(const std::wstring& l) {
+    std::vector<std::wstring> out(1);
+    for (wchar_t c : l)
+        if (c == L'\t') out.emplace_back();
+        else out.back() += c;
+    return out;
+}
+} // namespace
+
+std::set<std::wstring> disabled_mods() {
+    std::set<std::wstring> out;
+    for (const auto& l : read_lines(disabled_path())) out.insert(lower_w(l));
+    return out;
+}
+
+void set_mod_enabled(const std::wstring& dll, bool on) {
+    auto off = disabled_mods();
+    if (on) off.erase(lower_w(dll));
+    else off.insert(lower_w(dll));
+    write_lines(disabled_path(), L"# DLLs in fh2-mods turned off on the MODS tab; the platform doesn't load them.\n",
+                std::vector<std::wstring>(off.begin(), off.end()));
+    log_line("", narrow(dll) + (on ? " turned back on" : " turned off") + " on the MODS tab; takes effect the next time the game starts");
+}
+
+std::string latest_known(const FH2Mod* m) {
+    std::scoped_lock lk{g_mu};
+    return m ? m->latest : std::string();
+}
+
+std::vector<ModEntry> mod_entries() {
+    // remembered: dll -> name, version, description
+    std::map<std::wstring, std::vector<std::wstring>> known;
+    for (const auto& l : read_lines(known_path())) {
+        auto f = split_tabs(l);
+        if (f.size() >= 3) known[lower_w(f[0])] = f;
+    }
+    std::vector<ModEntry> out;
+    std::vector<std::wstring> remember;
+    std::scoped_lock lk{g_mu};
+    for (const auto& f : g_found) {
+        ModEntry e;
+        e.dll          = f.file;
+        e.enabled      = !f.disabled;
+        e.platform_mod = f.has_init;
+        for (const auto& m : g_mods)
+            if (lower_w(m->dll) == lower_w(f.file)) {
+                e.mod         = m.get();
+                e.name        = m->name;
+                e.version     = m->version;
+                e.description = m->description;
+                e.repo        = m->repo;
+                e.platform_mod = true;
+                break;
+            }
+        if (!e.mod) {
+            if (auto it = known.find(lower_w(f.file)); it != known.end()) {
+                e.name    = narrow(it->second[1]);
+                e.version = narrow(it->second[2]);
+                if (it->second.size() > 3) e.description = narrow(it->second[3]);
+                e.platform_mod = true;
+            } else {
+                e.name = narrow(f.file.substr(0, f.file.size() > 4 ? f.file.size() - 4 : f.file.size()));
+            }
+        }
+        if (e.mod || e.platform_mod)
+            remember.push_back(f.file + L"\t" + widen(e.name) + L"\t" + widen(e.version) + L"\t" + widen(e.description));
+        out.push_back(e);
+    }
+    write_lines(known_path(), L"# What the MODS tab remembers about each mod (DLL, name, version, description).\n", remember);
+    return out;
+}
 
 } // namespace fh2platform
 
