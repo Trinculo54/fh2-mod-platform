@@ -2470,7 +2470,7 @@ void settings_set_slider(FH2Mod* m, const char* key, float value) {
 // The freeroam HUD (A_Hud.xaml): when a mod didn't load or start, a notice like the game's
 // own small ones (HUDMinorNotificationControl's look, but high up, where the big ones go, and
 // with a bigger title) saying which, and to
-// look under MODS. It fades in a couple of seconds after the HUD first shows, stays a few
+// look under MODS. It fades in a couple of seconds after the HUD first shows, stays nine
 // seconds and goes, once a session (FH2Mod_ModNotice). With nothing wrong, the game's HUD.
 bool write_hud_notice() {
     std::vector<std::string> names;
@@ -2502,15 +2502,15 @@ bool write_hud_notice() {
                       t, v, ease_in ? "EaseIn" : "EaseOut");
         return std::string(b);
     };
-    // in at 2s (0.5s, as the game's), held 6s, out (0.5s)
+    // in at 2s (0.5s, as the game's), held 9s, out (0.5s)
     std::string fade = "                                <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"(UIElement.Opacity)\">\r\n" +
-                       key(0, 0, false) + key(0, 2.0, false) + key(1, 2.5, false) + key(1, 8.5, true) + key(0, 9.0, true) +
+                       key(0, 0, false) + key(0, 2.0, false) + key(1, 2.5, false) + key(1, 11.5, true) + key(0, 12.0, true) +
                        "                                </DoubleAnimationUsingKeyFrames>\r\n";
     std::string scale;
     for (const char* axis : {"ScaleX", "ScaleY"})
         scale += std::string("                                <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"(UIElement.RenderTransform).(TransformGroup.Children)[0].(ScaleTransform.") +
-                 axis + ")\">\r\n" + key(0.8, 0, false) + key(0.8, 2.0, false) + key(1, 2.5, false) + key(1, 8.5, true) +
-                 key(0.96, 9.0, true) + "                                </DoubleAnimationUsingKeyFrames>\r\n";
+                 axis + ")\">\r\n" + key(0.8, 0, false) + key(0.8, 2.0, false) + key(1, 2.5, false) + key(1, 11.5, true) +
+                 key(0.96, 12.0, true) + "                                </DoubleAnimationUsingKeyFrames>\r\n";
     const std::string style =
         "            <Style x:Key=\"FH2Mod_Style_ModNotice\" TargetType=\"StackPanel\">\r\n"
         "                <Style.Triggers>\r\n"
@@ -2533,7 +2533,7 @@ bool write_hud_notice() {
         "                        <ScaleTransform ScaleX=\"0.8\" ScaleY=\"0.8\" />\r\n"
         "                    </TransformGroup>\r\n"
         "                </StackPanel.RenderTransform>\r\n"
-        "                <local:FZMaterial Preset=\"{DynamicResource A_FZMaterialPresetGlassRoundtangle_HudItem}\" Color=\"#22FFFFFF\">\r\n"
+        "                <local:FZMaterial Preset=\"{DynamicResource A_FZMaterialPresetGlassRoundtangle_HudItem}\" Color=\"#99101418\">\r\n"
         "                    <Border BorderThickness=\"2\" BorderBrush=\"#16FFFFFF\" CornerRadius=\"4\">\r\n"
         "                        <StackPanel Orientation=\"Vertical\" HorizontalAlignment=\"Center\" Margin=\"16,8,16,8\">\r\n"
         "                            <local:FZTextBlock Style=\"{StaticResource A_Style_FZTextBlock_HudLarge}\" Text=\"" + xml_escape(title) +
