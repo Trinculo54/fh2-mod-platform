@@ -2468,7 +2468,8 @@ void settings_set_slider(FH2Mod* m, const char* key, float value) {
 }
 
 // The freeroam HUD (A_Hud.xaml): when a mod didn't load or start, a notice like the game's
-// own small ones (HUDMinorNotificationControl's look, in the same place) saying which, and to
+// own small ones (HUDMinorNotificationControl's look, but high up, where the big ones go, and
+// with a bigger title) saying which, and to
 // look under MODS. It fades in a couple of seconds after the HUD first shows, stays a few
 // seconds and goes, once a session (FH2Mod_ModNotice). With nothing wrong, the game's HUD.
 bool write_hud_notice() {
@@ -2526,7 +2527,7 @@ bool write_hud_notice() {
     const std::string notice =
         "\r\n            <!-- FH2 Mod Platform: mods that didn't load -->\r\n"
         "            <StackPanel Style=\"{StaticResource FH2Mod_Style_ModNotice}\" Opacity=\"0\" HorizontalAlignment=\"Center\" "
-        "VerticalAlignment=\"Bottom\" Margin=\"0,0,0,130\" RenderTransformOrigin=\"0.5,0.5\">\r\n"
+        "VerticalAlignment=\"Top\" Margin=\"0,220,0,0\" RenderTransformOrigin=\"0.5,0.5\">\r\n"
         "                <StackPanel.RenderTransform>\r\n"
         "                    <TransformGroup>\r\n"
         "                        <ScaleTransform ScaleX=\"0.8\" ScaleY=\"0.8\" />\r\n"
@@ -2535,7 +2536,7 @@ bool write_hud_notice() {
         "                <local:FZMaterial Preset=\"{DynamicResource A_FZMaterialPresetGlassRoundtangle_HudItem}\" Color=\"#22FFFFFF\">\r\n"
         "                    <Border BorderThickness=\"2\" BorderBrush=\"#16FFFFFF\" CornerRadius=\"4\">\r\n"
         "                        <StackPanel Orientation=\"Vertical\" HorizontalAlignment=\"Left\" Margin=\"16,8,16,8\">\r\n"
-        "                            <local:FZTextBlock Style=\"{StaticResource A_Style_FZTextBlock_HudMedium}\" Text=\"" + xml_escape(title) +
+        "                            <local:FZTextBlock Style=\"{StaticResource A_Style_FZTextBlock_HudLarge}\" Text=\"" + xml_escape(title) +
         "\" Effect=\"{StaticResource A_DropShadowEffect_DefaultHud}\" Margin=\"0,0,4,-3\" />\r\n"
         "                            <local:FZTextBlock Style=\"{StaticResource A_Style_FZTextBlock_HudMedium}\" Text=\"" + xml_escape(text) +
         "\" Effect=\"{StaticResource A_DropShadowEffect_DefaultHud}\" Margin=\"0,0,4,0\" />\r\n"
