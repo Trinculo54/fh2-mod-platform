@@ -749,7 +749,7 @@ std::string update_status(const ModEntry& e) {
     if (e.mod->repo.empty() || !e.mod->check_updates) return "It doesn't check for updates.";
     const std::string latest = latest_known(e.mod);
     if (latest.empty()) return "Not checked for updates yet.";
-    if (compare_versions(latest, e.version) > 0) return "Version " + latest + " is out: github.com/" + e.mod->repo + "/releases";
+    if (compare_versions(latest, e.version) > 0) return "Version " + latest + " is out.";
     return "Up to date.";
 }
 
@@ -800,6 +800,7 @@ std::string about_mod(const ModEntry& e) {
     if (!e.enabled) d += "Turned off: the game doesn't load it. ";
     else if (!e.platform_mod) d += "A mod from before the platform: it has no settings here. ";
     if (const std::string u = update_status(e); !u.empty()) d += u + " ";
+    if (!e.repo.empty()) d += "github.com/" + e.repo + " ";
     if (!d.empty()) d.pop_back();
     return d;
 }

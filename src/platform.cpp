@@ -711,16 +711,18 @@ std::vector<ModEntry> mod_entries() {
                 e.name    = narrow(it->second[1]);
                 e.version = narrow(it->second[2]);
                 if (it->second.size() > 3) e.description = narrow(it->second[3]);
+                if (it->second.size() > 4) e.repo = narrow(it->second[4]);
                 e.platform_mod = true;
             } else {
                 e.name = narrow(f.file.substr(0, f.file.size() > 4 ? f.file.size() - 4 : f.file.size()));
             }
         }
         if (e.mod || e.platform_mod)
-            remember.push_back(f.file + L"\t" + widen(e.name) + L"\t" + widen(e.version) + L"\t" + widen(e.description));
+            remember.push_back(f.file + L"\t" + widen(e.name) + L"\t" + widen(e.version) + L"\t" + widen(e.description) + L"\t" +
+                               widen(e.repo));
         out.push_back(e);
     }
-    write_lines(known_path(), L"# What the MODS tab remembers about each mod (DLL, name, version, description).\n", remember);
+    write_lines(known_path(), L"# What the MODS tab remembers about each mod (DLL, name, version, description, GitHub repo).\n", remember);
     return out;
 }
 
