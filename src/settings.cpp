@@ -286,6 +286,26 @@ uint8_t* descriptor_for(Row* r) {
     return r->desc;
 }
 
+// FH2Mod_Selected: the list's SelectedIndex (it follows the focus), bound two-way on Installed
+// mods so a press of A knows which mod's row it was on.
+std::atomic<int> g_selected{0};
+uint8_t* g_selected_desc = nullptr;
+void** __cdecl selected_get(void** out, void*, void*) {
+    int v = g_selected.load();
+    *out  = nullptr;
+    reinterpret_cast<BoxIntFn>(g_base + RVA_BOX_INT)(out, &v);
+    return out;
+}
+void __cdecl selected_set(void*, void*, uint8_t* value) {
+    if (value && readable(value + 0x28, 4)) g_selected = *reinterpret_cast<int*>(value + 0x28);
+}
+uint8_t* selected_descriptor() {
+    std::scoped_lock lk{g_desc_mu};
+    if (!g_selected_desc)
+        g_selected_desc = new_descriptor("FH2Mod_Selected", reinterpret_cast<void*>(&selected_get), reinterpret_cast<void*>(&selected_set), nullptr);
+    return g_selected_desc;
+}
+
 uint8_t* notice_descriptor() {
     std::scoped_lock lk{g_desc_mu};
     if (!g_notice_desc) {
@@ -313,6 +333,7 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     const wchar_t* n = avui_string(name);
     if (!n || std::wcsncmp(n, L"FH2Mod_", 7) != 0) return nullptr;
     if (std::wcscmp(n, L"FH2Mod_RestartNotice") == 0) return notice_descriptor();
+    if (std::wcscmp(n, L"FH2Mod_Selected") == 0) return selected_descriptor();
     Row* r = row_by_prop(n);
     return r ? descriptor_for(r) : nullptr;
 }
@@ -424,7 +445,7 @@ std::string button_name(const PageItem& it, bool first) {
 
 FH2Mod g_hub_owner;                  // the MODS tab's own rows (a switch per mod)
 
-bool write_list_page(const char* file, const std::string& title, const std::vector<PageItem>& items) {
+bool write_list_page(const char* file, const std::string& title, const std::vector<PageItem>& items, bool track_selection = false) {
     std::string page = read_ui("Scenes/Anthem/A_HUDOptions.xaml");
     if (page.empty()) return false;
     std::string res = "\r\n            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowNotice\" UseHidden=\"true\" InvertResult=\"false\" />\r\n"
@@ -491,6 +512,15 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         !replace_between(page, "<local:CommonListBox", "</local:CommonListBox>", rows, true)) {
         slog("A_HUDOptions.xaml doesn't look as expected; no " + title + " page");
         return false;
+    }
+    if (track_selection) {
+        const std::string list = "x:Name=\"OptionsList\"";
+        const std::size_t l    = page.find(list);
+        if (l == std::string::npos) {
+            slog("A_HUDOptions.xaml doesn't look as expected; no " + title + " page");
+            return false;
+        }
+        page.insert(l + list.size(), " SelectedIndex=\"{Binding FH2Mod_Selected, Mode=TwoWay}\"");
     }
     const std::size_t t = page.find(title_attr);
     page.replace(t, title_attr.size(), "Content=\"" + xml_escape(title) + "\"");
@@ -795,7 +825,7 @@ std::vector<PageItem> making_items() {
 bool write_hub_page(int p) {
     std::scoped_lock lk{g_page_mu};
     switch (p) {
-        case kHubInstalled: return write_list_page(hub_file(p).c_str(), "INSTALLED MODS", installed_items());
+        case kHubInstalled: return write_list_page(hub_file(p).c_str(), "INSTALLED MODS", installed_items(), true);
         case kHubUpdates: return write_list_page(hub_file(p).c_str(), "UPDATES", updates_items());
         case kHubGetMods: return write_list_page(hub_file(p).c_str(), "GET MODS", get_mods_items());
         case kHubAbout: return write_list_page(hub_file(p).c_str(), "ABOUT", about_items());
@@ -1330,34 +1360,36 @@ void open_mod_page(void* page, std::size_t n) {
     }
 }
 
-template <std::size_t N>
-void mod_row_pressed(void* page) { open_mod_page(page, N); }
-
-template <std::size_t... I>
-constexpr std::array<TileFn, sizeof...(I)> mod_row_fns(std::index_sequence<I...>) {
-    return {&mod_row_pressed<I>...};
-}
-const std::array<TileFn, kMaxModPages> g_mod_row_fns = mod_row_fns(std::make_index_sequence<kMaxModPages>{});
-
-void wire_button(void* page, const char* name, const Pmf* pmf) {
-    __try {
-        reinterpret_cast<WireButtonFn>(g_base + RVA_WIRE_BUTTON)(page, name, pmf);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-    }
-}
+// Which HUD page object is Installed mods (set when one loads; only compared, never used).
+std::atomic<void*> g_installed_page{nullptr};
 
 void d_hud_page_loaded(void* page) {
     o_hud_page_loaded(page);
-    if (g_hub_shown.exchange(0) != kHubInstalled) return;
-    static std::array<Pmf, kMaxModPages> pmfs = [] {
-        std::array<Pmf, kMaxModPages> a{};
-        for (std::size_t i = 0; i < a.size(); ++i) a[i] = {reinterpret_cast<void*>(g_mod_row_fns[i]), 0, 0};
-        return a;
-    }();
-    for (std::size_t i = 0; i < g_entries.size() && i < kMaxModPages; ++i) {
-        const std::string name = i == 0 ? "FirstItem" : "PART_Button_FH2Mod_" + std::to_string(i);
-        wire_button(page, name.c_str(), &pmfs[i]);
+    if (g_hub_shown.exchange(0) == kHubInstalled) {
+        g_installed_page = page;
+        g_selected       = 0;
+    } else if (g_installed_page.load() == page) {
+        g_installed_page = nullptr;
     }
+}
+
+// A page's buttons: vtable +0x578, (page, button, pressed) -> handled. On the options pages A
+// (0x2C) is Accept, which saves and goes back; on Installed mods it opens the mod's page.
+constexpr uintptr_t RVA_HUD_PAGE_BUTTON_SLOT = 0x2DF07B0;   // HudOptions page vtable +0x578
+constexpr uintptr_t RVA_PAGE_BUTTON          = 0x0CEC3D0;   // the shared implementation
+constexpr int kButtonA                       = 0x2C;
+using PageButtonFn = bool (*)(void* page, int button, bool pressed);
+PageButtonFn o_hud_page_button = nullptr;
+
+bool d_hud_page_button(void* page, int button, bool pressed) {
+    if (button == kButtonA && page && page == g_installed_page.load()) {
+        if (pressed) {
+            const int n = g_selected.load();
+            if (n >= 0 && static_cast<std::size_t>(n) < g_entries.size() && static_cast<std::size_t>(n) < kMaxModPages) open_mod_page(page, n);
+        }
+        return true;
+    }
+    return o_hud_page_button(page, button, pressed);
 }
 
 void d_tile_updates(void* page) { open_hub_page(page, kHubUpdates); }
@@ -1470,6 +1502,17 @@ void hook_hub() {
                                           reinterpret_cast<void**>(&o_hud_page_loaded));
     ok = ok && loaded;
     if (loaded) made.push_back(loaded);
+    void** bslot = reinterpret_cast<void**>(g_base + RVA_HUD_PAGE_BUTTON_SLOT);
+    if (!readable(bslot, 8) || *bslot != reinterpret_cast<void*>(g_base + RVA_PAGE_BUTTON)) {
+        slog("the HUD page's vtable doesn't look as expected; no MODS tab");
+        for (FH2Hook* k : made) g_api->disable_hooks(m, k);
+        undo_files();
+        return;
+    }
+    FH2Hook* button = g_api->hook_pointer(m, "HUD options page: buttons", bslot, reinterpret_cast<void*>(&d_hud_page_button),
+                                          reinterpret_cast<void**>(&o_hud_page_button));
+    ok = ok && button;
+    if (button) made.push_back(button);
     FH2Hook* wire = g_api->hook_function(m, "PauseMenu: wire the tiles", reinterpret_cast<void*>(g_base + RVA_PAUSE_MENU_WIRE),
                                          reinterpret_cast<void*>(&d_pause_menu_wire), reinterpret_cast<void**>(&o_pause_menu_wire));
     ok = ok && wire;
