@@ -258,6 +258,7 @@ typedef void (*FH2SliderChangedFn)(void* user, const char* key, float value);
 
 #define FH2_SETTING_ON_OFF 0
 #define FH2_SETTING_SLIDER 1
+#define FH2_SETTING_LINK   2   /* API 6 */
 
 /* One row on the Mods page (API 4; sliders API 5). */
 struct FH2Setting {
@@ -279,6 +280,15 @@ struct FH2Setting {
     float display_scale;           /* the number shown is the value times this, so 100 shows 0.12 as 12; 0 = 1 */
     int decimals;                  /* digits shown after the decimal point, 0 to 3 */
     FH2SliderChangedFn on_slide;   /* may be NULL */
+
+    /* ---- API 6 (platform 2.5.0): links. With kind = FH2_SETTING_LINK the row
+       opens a web page in the player's browser when they press A on it: your
+       dashboard, your docs. It shows on your mod's own page under MODS >
+       Installed mods (not on Settings > Mods), with the address under its
+       description. value, needs_restart, on_change and the slider fields are
+       ignored. On an older platform it would come out as an On/Off row, so
+       only add one when api_version >= 6. ---- */
+    const char* url;               /* "http://..." or "https://..." */
 };
 
 /* What a mod exports. */
