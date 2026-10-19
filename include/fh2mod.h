@@ -360,6 +360,13 @@ typedef struct FH2ModApi {
     /* Moves the focus to the Button, Slider or SpinnerControl named `name`
        in the page's XAML, from on_button. Returns 1 if it did. */
     int (*focus_page_element)(FH2Mod* mod, const char* page_key, const char* name);
+    /* A line of text on the tile your page has taken over, at its bottom
+       left in the game's own style for a tile's count (a club tile's
+       member count): a score, say. Plain ASCII, up to 40 characters; NULL
+       or "" shows nothing. Call it from any thread, whenever it changes:
+       the pause menu reads it each time it's shown. Returns 1, or 0 if you
+       have no page called `page_key` or it isn't on a tile. */
+    int (*set_page_tile_text)(FH2Mod* mod, const char* page_key, const char* text);
 } FH2ModApi;
 
 /* Called on the game's UI thread when the player changes a row: keep it

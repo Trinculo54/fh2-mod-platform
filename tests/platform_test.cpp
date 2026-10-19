@@ -194,6 +194,7 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] page slots ok"));
         CHECK(has(log, "[TestMod] set_page_xaml: Stats's content isn't well-formed (</Grid> doesn't match <Button>)"));
         CHECK(has(log, "[TestMod] set_page_rows: row 1 of Stats isn't the size of the first"));
+        CHECK(has(log, "[TestMod] tile text ok") && has(log, "[TestMod] set_page_tile_text: Other isn't on a tile"));
         // The game's menus were given: the pages are written. (Not with the game mapped: this
         // test's copy of it doesn't pass the menus' code checks, so the platform takes them out.)
         if (fs::exists(L"FH2\\Mount\\media\\UI.zip") && argc <= 2) {
@@ -209,6 +210,13 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(tile, "<Grid x:Name=\"TestContent\">") && !has(tile, "BasicOptions") && has(tile, "x:Key=\"FH2Mod_ShowIf\""));
             CHECK(has(tile, "<Color x:Key=\"Test_Color\">") && has(tile, "<Grid>\r\n<ContentControl x:Name=\"DefaultHelpPanel\" Style="));
             CHECK(has(tile, "x:Name=\"BottomBar\"") && has(tile, "x:Class =\"ForzaUI.A_HudOptions\""));
+            // the Achievements tiles show the page's tile text
+            const auto pause = slurp(scenes / "A_PauseMenu.xaml");
+            const std::string text_tag = "Tag=\"{Binding FH2Mod_TileText_0, RelativeSource={RelativeSource AncestorType=Page, Mode=FindAncestor}}\"";
+            const std::size_t first = pause.find(text_tag);
+            CHECK(first != std::string::npos && pause.find(text_tag, first + 1) != std::string::npos);
+            CHECK(has(pause, "<ControlTemplate x:Key=\"FH2Mod_Template_IconTileText\"") &&
+                  has(pause, "Template=\"{StaticResource FH2Mod_Template_IconTileText}\""));
         }
     } else {
         // TestMod gone: its tables and notice are cleaned up, HelloMod's stays.

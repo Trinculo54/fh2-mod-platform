@@ -68,6 +68,7 @@ int pages_set_xaml(FH2Mod* mod, const char* page_key, const char* resources, con
 int pages_get_slot(FH2Mod* mod, const char* page_key, int slot);
 int pages_set_slot(FH2Mod* mod, const char* page_key, int slot, int value);
 int pages_focus(FH2Mod* mod, const char* page_key, const char* name);
+int pages_set_tile_text(FH2Mod* mod, const char* page_key, const char* text);
 // After every fh2mod_init: writes the pages and hooks the game if any mod added a row.
 void settings_start(const FH2ModApi* api);
 

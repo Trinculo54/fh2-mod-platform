@@ -61,6 +61,10 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->add_page(g_mod, &other);
     api->add_page(g_mod, &other);                         // refused: already there
     api->set_page_rows(g_mod, "Missing", rows, 1);        // refused: no such page
+    // text on the page's tile; not on a page without one
+    if (api->set_page_tile_text(g_mod, "Stats", "12 / 34 G") && !api->set_page_tile_text(g_mod, "Other", "x") &&
+        !api->set_page_tile_text(g_mod, "Missing", "x"))
+        api->log(g_mod, "tile text ok");
 
     CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
         Sleep(300);

@@ -129,6 +129,7 @@ struct ModPage {
     std::string xaml_resources, xaml_content, xaml_help;
     std::string xaml_written;        // the content as last written (what's on screen)
     std::array<std::atomic<int>, FH2_PAGE_SLOTS> slots{};
+    std::string tile_text;           // on its tile (set_page_tile_text)
 };
 std::deque<ModPage> g_pages;         // guarded by g_mu (pages are never removed)
 constexpr std::size_t kMaxPages    = 64;
@@ -140,11 +141,12 @@ constexpr std::size_t kMaxPageRows = 1000;
 struct GameTile {
     const char* name;
     uintptr_t calls[2];              // the CALL instructions (rva)
+    const char* buttons[2];          // the tiles in A_PauseMenu.xaml
 };
 constexpr GameTile kTiles[] = {
     // PART_Button_Achievements (0x140DBD610) and the Storm Island tab's
     // PART_Button_Panama_Achievements (0x140DBF150, which first checks the tile has the focus)
-    {"Achievements", {0x0DBD635, 0x0DBF185}},
+    {"Achievements", {0x0DBD635, 0x0DBF185}, {"PART_Button_Achievements", "PART_Button_Panama_Achievements"}},
 };
 constexpr std::size_t kTileCount = sizeof kTiles / sizeof kTiles[0];
 // the page in g_pages that has each tile, or -1 (guarded by g_mu)
@@ -493,6 +495,55 @@ uint8_t* badge_descriptor(bool error) {
     return d;
 }
 
+// FH2Mod_TileText_<t>: the text on tile t from its page's set_page_tile_text, as an AVUI String
+// of the tabs' badge type (like FH2Mod_UpdateBadge). Each text's String is made once and never
+// freed (a few per session); the getter notes what it read from, the pause menu page, so the
+// next time that page is wired it's told the text may have changed.
+uint8_t* g_tile_text_desc[kTileCount] = {};
+std::atomic<void*> g_tile_text_obj[kTileCount] = {};
+std::mutex g_tile_text_mu;
+std::deque<std::pair<std::string, uint8_t*>> g_tile_strings;   // guarded by g_tile_text_mu
+uint8_t* tile_string(const std::string& text) {
+    std::scoped_lock lk{g_tile_text_mu};
+    for (auto& [t, str] : g_tile_strings)
+        if (t == text) return str;
+    uint8_t* str = static_cast<uint8_t*>(_aligned_malloc(0x80, 16));
+    std::memset(str, 0, 0x80);
+    reinterpret_cast<void (*)(void*, const char*, int)>(g_base + 0x1663220)(str, text.c_str(), -1);
+    *reinterpret_cast<int32_t*>(str + 0x10) += 1 << 20;   // never freed
+    g_tile_strings.emplace_back(text, str);
+    return str;
+}
+std::string tile_text_of(std::size_t t) {
+    std::scoped_lock lk{g_mu};
+    const int j = t < kTileCount ? g_tile_page[t] : -1;
+    return j >= 0 ? g_pages[j].tile_text : std::string();
+}
+void** __cdecl tile_text_get(void** out, void* desc, void* obj) {
+    *out = nullptr;
+    for (std::size_t t = 0; t < kTileCount; ++t) {
+        if (g_tile_text_desc[t] != desc) continue;
+        if (obj) g_tile_text_obj[t] = obj;
+        uint8_t* v = tile_string(tile_text_of(t));
+        InterlockedIncrement(reinterpret_cast<volatile LONG*>(v + 0x10));   // the caller releases it
+        *out = v;
+        break;
+    }
+    return out;
+}
+uint8_t* tile_text_descriptor(std::size_t t) {
+    std::scoped_lock lk{g_desc_mu};
+    static const uint8_t expect[] = {0x48, 0x8D, 0x05, 0x59, 0xB0, 0x02, 0x02, 0xC3};
+    if (!g_tile_text_desc[t] && code_matches(RVA_BADGE_TYPE, expect, sizeof expect)) {
+        static std::deque<std::string> names;   // the descriptor keeps the pointer
+        names.push_back("FH2Mod_TileText_" + std::to_string(t));
+        void* type = reinterpret_cast<TypeFn>(g_base + RVA_BADGE_TYPE)(0);
+        g_tile_text_desc[t] = new_descriptor(names.back().c_str(), reinterpret_cast<void*>(&tile_text_get),
+                                             reinterpret_cast<void*>(&badge_set), type);
+    }
+    return g_tile_text_desc[t];
+}
+
 uint8_t* notice_descriptor() {
     std::scoped_lock lk{g_desc_mu};
     if (!g_notice_desc) {
@@ -718,6 +769,7 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     if (const int k = name_number(n, L"FH2Mod_ViewBack_", kMaxViews); k >= 0)
         return flag_descriptor(g_view_back_desc[k], "FH2Mod_ViewBack_" + std::to_string(k));
     if (const int b = name_number(n, L"FH2Mod_Bar_", kViewKinds); b >= 0) return flag_descriptor(g_bar_desc[b], "FH2Mod_Bar_" + std::to_string(b));
+    if (const int t = name_number(n, L"FH2Mod_TileText_", static_cast<int>(kTileCount)); t >= 0) return tile_text_descriptor(t);
     if (std::wcsncmp(n, L"FH2Mod_Slot_", 12) == 0) return slot_descriptor(n);
     Row* r = row_by_prop(n);
     return r ? descriptor_for(r) : nullptr;
@@ -1994,6 +2046,53 @@ std::string tile_template(const std::string& key, const char* strokes, const cha
            "            </ControlTemplate>";
 }
 
+// A tile a mod's page has taken over shows the page's set_page_tile_text: its Button gets
+// Tag="{Binding FH2Mod_TileText_<t>}" (from the page) and the game's icon tile template
+// (A_ControlTemplate_IconTile, Shared_TiledMenus.xaml) with one more line, the Tag, in the
+// pause menu's own style for the club tile's member count. Returns false if the tile isn't as
+// expected (it's left as it is).
+const char* const kIconTileText = "FH2Mod_Template_IconTileText";
+std::string icon_tile_text_template() {
+    return std::string("\r\n            <ControlTemplate x:Key=\"") + kIconTileText + "\" TargetType=\"{x:Type Button}\">\r\n"
+           "                <Grid Style=\"{StaticResource A_Style_FrameworkElement_DefaultTransition}\" "
+           "local:UIPageTransitionManager.TransitionIndex=\"{Binding (local:UIPageTransitionManager.TransitionIndex), RelativeSource={RelativeSource TemplatedParent}}\">\r\n"
+           "                    <Grid Style=\"{StaticResource A_Style_Grid_HiddenWhenLocked}\">\r\n"
+           "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_TileShadow}\" />\r\n"
+           "                    </Grid>\r\n"
+           "                    <Grid Style=\"{StaticResource A_Style_Grid_MotionBlur}\">\r\n"
+           "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_TileBackground}\" />\r\n"
+           "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_LockableIcon}\" "
+           "ImageSource=\"{Binding DataContext.Icon, RelativeSource={RelativeSource TemplatedParent}}\" HorizontalAlignment=\"Stretch\" VerticalAlignment=\"Stretch\" />\r\n"
+           "                        <ContentControl Content=\"{Binding (local:BindingProxy.A), RelativeSource={RelativeSource TemplatedParent}}\" "
+           "Style=\"{StaticResource A_Style_ContentControl_NotificationBadge}\" HorizontalAlignment=\"Left\" VerticalAlignment=\"Bottom\" "
+           "Height=\"30\" Panel.ZIndex=\"1\" Margin=\"20,0,0,20\" />\r\n"
+           "                        <Grid Margin=\"{StaticResource A_Thickness_TilePadding}\">\r\n"
+           "                            <local:FZTextBlock x:Name=\"NameText\" Text=\"{Binding DataContext.Heading, RelativeSource={RelativeSource TemplatedParent}}\" "
+           "Style=\"{StaticResource A_Style_FZTextBlock_TileTitle}\" MaxWidth=\"{Binding Width, RelativeSource={RelativeSource TemplatedParent}}\" />\r\n"
+           "                            <local:FZTextBlock Text=\"{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}\" "
+           "Style=\"{StaticResource A_Style_FZTextBlock_TileClubMemberCount}\" />\r\n"
+           "                            <local:FZMaterial Style=\"{StaticResource A_Style_Tile_LockIcon}\" />\r\n"
+           "                        </Grid>\r\n"
+           "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_TileSelectionBar}\" />\r\n"
+           "                    </Grid>\r\n"
+           "                </Grid>\r\n"
+           "            </ControlTemplate>";
+}
+bool add_tile_text(std::string& page, const char* button, std::size_t t) {
+    const std::size_t named = page.find(std::string("x:Name=\"") + button + "\"");
+    if (named == std::string::npos) return false;
+    const std::size_t a = page.rfind("<Button", named), b = page.find("/>", named);
+    if (a == std::string::npos || b == std::string::npos) return false;
+    std::string el = page.substr(a, b - a);
+    const std::string from = "Template=\"{StaticResource A_ControlTemplate_IconTile}\"";
+    const std::size_t at   = el.find(from);
+    if (at == std::string::npos || el.find("Tag=") != std::string::npos) return false;
+    el.replace(at, from.size(), std::string("Template=\"{StaticResource ") + kIconTileText + "}\"\r\n                                Tag=\"{Binding FH2Mod_TileText_" +
+                                    std::to_string(t) + ", RelativeSource={RelativeSource AncestorType=Page, Mode=FindAncestor}}\"");
+    page.replace(a, b - a, el);
+    return true;
+}
+
 bool write_pause_menu() {
     std::string page = read_ui("Scenes/Anthem/A_PauseMenu.xaml");
     if (page.empty()) return false;
@@ -2051,6 +2150,19 @@ bool write_pause_menu() {
     }
     buttons += "                    ";
     if (!replace_between(page, scope, "</Canvas>", buttons, false)) return false;
+    // the tiles mods' pages have: their text (the template goes in after the club tile's style)
+    bool texts = false;
+    for (std::size_t t = 0; t < kTileCount; ++t) {
+        {
+            std::scoped_lock lk{g_mu};
+            if (g_tile_page[t] < 0) continue;
+        }
+        for (const char* b : kTiles[t].buttons)
+            if (add_tile_text(page, b, t)) texts = true;
+            else slog(std::string(b) + " doesn't look as expected; it shows no text");
+    }
+    if (texts && page.find("x:Key=\"A_Style_FZTextBlock_TileClubMemberCount\"") < page.find(items_at)) res += icon_tile_text_template();
+    else if (texts) return false;
     page.insert(page.find(items_at) + items_at.size(), res);
     const std::size_t tab_at = page.find(tab);
     page.replace(tab_at, tab.size(), "Content=\"MODS\"");
@@ -2956,6 +3068,9 @@ void d_pause_menu_wire(void* page) {
     g_hub_return = false;
     o_pause_menu_wire(page);
     wire_installed_tile(page);
+    // a page's tile text may have changed since this page's bindings read it
+    for (std::size_t t = 0; t < kTileCount; ++t)
+        if (g_tile_text_desc[t] && page && g_tile_text_obj[t].load() == page) notify_changed(page, g_tile_text_desc[t]);
     // back from the MODS tab with a change that needs a restart?
     const bool from_hub = g_in_hub;
     g_in_hub            = false;
@@ -3484,6 +3599,22 @@ int pages_set_slot(FH2Mod* m, const char* key, int slot, int value) {
     // on the UI thread, in a callback for the page that's up: its bindings see it now (not the
     // slot a binding is setting right now, from on_slot: that binding is in the middle of it)
     if (old != value && g_in_callback && g_custom_shown.load() == j) notify_slot(slot, slot != g_setting_slot);
+    return 1;
+}
+
+int pages_set_tile_text(FH2Mod* m, const char* key, const char* text) {
+    std::string clean;
+    for (const char* c = text ? text : ""; *c && clean.size() < 40; ++c)
+        clean += (*c >= 0x20 && *c < 0x7F) ? *c : '?';
+    std::scoped_lock lk{g_mu};
+    const int j = page_index(m, key);
+    if (j < 0) return 0;
+    ModPage& pg = g_pages[j];
+    if (pg.tile < 0 || g_tile_page[pg.tile] != j) {
+        log_line(m->name, std::string("set_page_tile_text: ") + key + " isn't on a tile");
+        return 0;
+    }
+    pg.tile_text = clean;
     return 1;
 }
 
