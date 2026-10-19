@@ -1207,6 +1207,7 @@ bool write_pause_menu() {
     for (const Tile& t : tiles) {
         std::string heading = t.heading;
         if (std::string(t.item) == "FH2Mod_Tile_Updates" && out > 0) heading += " (" + std::to_string(out) + ")";
+        if (std::string(t.item) == "FH2Mod_Tile_Installed") heading += " (" + std::to_string(g_entries.size()) + ")";   // in fh2-mods, on or off
         res += std::string("\r\n            <local:TileMenuDataItem x:Key=\"") + t.item + "\" Heading=\"" + heading +
                "\" Icon=\"/ForzaUI;component/Textures/Anthem/" + t.icon + "\" />";
         buttons += std::string("                        <Button Canvas.Left=\"{StaticResource A_Double_TileCoord_X_") + std::to_string(t.x) +
