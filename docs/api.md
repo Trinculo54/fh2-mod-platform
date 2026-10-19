@@ -431,14 +431,17 @@ As with rows, the XAML is copied, and the page is written from the last you set 
 
 **Slots** are what makes it move. Each page has 16 ints, slot 0 to 15, which its XAML binds by name: `{Binding FH2Mod_Slot_<n>, Mode=TwoWay}` (a list's `SelectedIndex`, say), and `{Binding FH2Mod_Slot_<n>_Is_<v>}`, true while slot n is v (v from 0 to 9999). The platform puts three converters in the page's resources for `Visibility`: `FH2Mod_ShowIf` (collapsed when false), `FH2Mod_ShowIfHidden` (hidden when false: it keeps its place, and can take the focus as soon as it shows) and `FH2Mod_HideIf`. Slots are 0 when the page opens; set any you want otherwise from `on_open`. When a binding changes one, `on_slot` tells you. `get_page_slot` reads one; `set_page_slot` changes one, and from inside `on_button` the page's bindings see it at once. From `on_slot` they do too, except for the slot a binding is setting at that moment. Set from anywhere else, a slot is only stored: the page doesn't show it, and opening resets it.
 
-**Buttons.** A and B go to `on_button` first (`FH2_BUTTON_A`, `FH2_BUTTON_B`). Return `FH2_PAGE_IGNORED` for what they usually do (B leaves the page; A does nothing on a page of your own design), or `FH2_PAGE_HANDLED`, `FH2_PAGE_HANDLED_SELECT` or `FH2_PAGE_HANDLED_BACK`, which also play the menus' select or back sound. From `on_button`, `focus_page_element` moves the focus to a `Button`, `Slider` or `local:SpinnerControl` your XAML names (`x:Name`); other elements can't take the focus that way. A list whose `KeyboardNavigation.DirectionalNavigation` is `Contained` keeps the d-pad inside it, so moving between two lists is yours to do: A into the second, B back, say. Other buttons aren't passed on yet; the log names their codes the first time each is pressed on a page of your own design.
+A list's `SelectedIndex` follows the focus, and goes to -1 while the focus is outside the list: the game's list items are only selected while they have it. So don't show things straight from a list's selection if the focus is going to leave it. Bind the list to one slot, and in `on_slot` copy the value to another when it's 0 or more; show things from that one. Otherwise, when the focus moves to what you're showing, it hides, and the game moves the focus back to the page's main list.
 
-A two-pane page, a list of sections and the selected section's items beside it:
+**Buttons.** A and B go to `on_button` first (`FH2_BUTTON_A`, `FH2_BUTTON_B`). Return `FH2_PAGE_IGNORED` for what they usually do (B leaves the page; A does nothing on a page of your own design), or `FH2_PAGE_HANDLED`, `FH2_PAGE_HANDLED_SELECT` or `FH2_PAGE_HANDLED_BACK`, which also play the menus' select or back sound. From `on_button`, `focus_page_element` moves the focus to a `Button`, `Slider` or `local:SpinnerControl` your XAML names (`x:Name`); other elements can't take the focus that way. A list whose `KeyboardNavigation.DirectionalNavigation` is `Contained` keeps the d-pad inside it, so moving between two lists is yours to do: A into the second, B back, say. The page puts the focus back on `OptionsList` whenever it's lost, so while the focus is on another list, switch `OptionsList` off (`IsEnabled` bound to a slot), and switch it back on before focusing it again. Other buttons aren't passed on yet; the log names their codes the first time each is pressed on a page of your own design.
+
+A two-pane page, a list of sections and the last selected section's items beside it (slot 0: the list's selection, slot 1: which list has the focus, slot 2: the section shown):
 
 ```xml
 <!-- content (abridged) -->
 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">
     <local:CommonListBox x:Name="OptionsList" SelectedIndex="{Binding FH2Mod_Slot_0, Mode=TwoWay}"
+                         IsEnabled="{Binding FH2Mod_Slot_1_Is_0}"
                          KeyboardNavigation.DirectionalNavigation="Contained" Width="400" Height="600"
                          Style="{StaticResource A_Style_ListBox_List_Default}"
                          ItemContainerStyle="{StaticResource A_Style_ListBoxItem_List_Default}">
@@ -446,10 +449,10 @@ A two-pane page, a list of sections and the selected section's items beside it:
         <Button x:Name="Section_1" Template="{StaticResource My_Plain}"> ... section 1 ... </Button>
     </local:CommonListBox>
     <Grid>
-        <local:CommonListBox x:Name="Items_0" Visibility="{Binding FH2Mod_Slot_0_Is_0, Converter={StaticResource FH2Mod_ShowIfHidden}}" ...>
+        <local:CommonListBox x:Name="Items_0" Visibility="{Binding FH2Mod_Slot_2_Is_0, Converter={StaticResource FH2Mod_ShowIfHidden}}" ...>
             <Button x:Name="Item_0_0" ... />
         </local:CommonListBox>
-        <local:CommonListBox x:Name="Items_1" Visibility="{Binding FH2Mod_Slot_0_Is_1, Converter={StaticResource FH2Mod_ShowIfHidden}}" ...>
+        <local:CommonListBox x:Name="Items_1" Visibility="{Binding FH2Mod_Slot_2_Is_1, Converter={StaticResource FH2Mod_ShowIfHidden}}" ...>
             <Button x:Name="Item_1_0" ... />
         </local:CommonListBox>
     </Grid>
@@ -457,16 +460,23 @@ A two-pane page, a list of sections and the selected section's items beside it:
 ```
 
 ```cpp
+static void page_slot(void*, const char* key, int slot, int value) {
+    if (slot == 0 && value >= 0) g_api->set_page_slot(g_mod, key, 2, value);   // a section: show it
+}
+
 static int page_button(void*, const char* key, int button) {
-    const int pane = g_api->get_page_slot(g_mod, key, 1), section = g_api->get_page_slot(g_mod, key, 0);
-    if (button == FH2_BUTTON_A && pane == 0) {   // into the section's items
-        if (!g_api->focus_page_element(g_mod, key, ("Item_" + std::to_string(section) + "_0").c_str())) return FH2_PAGE_HANDLED;
+    const int pane = g_api->get_page_slot(g_mod, key, 1), section = g_api->get_page_slot(g_mod, key, 2);
+    if (button == FH2_BUTTON_A && pane == 0) {   // into the section's items (the sections off first)
         g_api->set_page_slot(g_mod, key, 1, 1);
+        if (!g_api->focus_page_element(g_mod, key, ("Item_" + std::to_string(section) + "_0").c_str())) {
+            g_api->set_page_slot(g_mod, key, 1, 0);
+            return FH2_PAGE_HANDLED;
+        }
         return FH2_PAGE_HANDLED_SELECT;
     }
-    if (button == FH2_BUTTON_B && pane == 1) {   // back to the section
-        g_api->focus_page_element(g_mod, key, section == 0 ? "FirstItem" : ("Section_" + std::to_string(section)).c_str());
+    if (button == FH2_BUTTON_B && pane == 1) {   // back to the section (the sections on first)
         g_api->set_page_slot(g_mod, key, 1, 0);
+        g_api->focus_page_element(g_mod, key, section == 0 ? "FirstItem" : ("Section_" + std::to_string(section)).c_str());
         return FH2_PAGE_HANDLED_BACK;
     }
     return FH2_PAGE_IGNORED;   // B on the sections leaves the page
