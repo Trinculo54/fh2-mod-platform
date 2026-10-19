@@ -500,26 +500,25 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
         for (std::size_t n = 0; n < items.size(); ++n) {
             const PageItem& it = items[n];
             const std::string key   = prefix + std::to_string(n);
-            std::string first = n == 0 ? " x:Name=\"" + first_name + "\"" : "";
-            if (!it.version.empty() || !it.version_alert.empty() || !it.link.empty()) {
-                res += "            <local:TileMenuDataItem x:Key=\"" + key + "_B\" Heading=\"" + xml_escape(it.version) + "\" Icon=\"" +
-                       xml_escape(it.version_alert) + "\" Description=\"" + xml_escape(it.link) + "\" />\r\n";
-                first += " local:BindingProxy.B=\"{StaticResource " + key + "_B}\"";
-            }
-            if (!it.note.empty()) {
-                res += "            <local:TileMenuDataItem x:Key=\"" + key + "_C\" Heading=\"" + xml_escape(it.note) + "\" />\r\n";
-                first += " local:BindingProxy.C=\"{StaticResource " + key + "_C}\"";
-            }
+            const std::string first = n == 0 ? " x:Name=\"" + first_name + "\"" : "";
+            // The row's data item: Description for the panel, and for the footer under it (see
+            // add_footers) Icon = the version line, UseAlternateColors = it's out of date (red),
+            // Heading = the GitHub page. A line of information keeps its label and value on the
+            // button (BindingProxy.A, .C) for FH2Mod_InfoRow.
+            const std::string version = it.version_alert.empty() ? it.version : it.version_alert;
+            auto data_item = [&](const std::string& desc) {
+                std::string d = desc;
+                if (!it.note.empty()) d += (d.empty() ? "" : " ") + it.note;
+                res += "            <local:TileMenuDataItem x:Key=\"" + key + "\" Heading=\"" + xml_escape(it.link) + "\" Description=\"" +
+                       xml_escape(d) + "\" Icon=\"" + xml_escape(version) + "\" UseAlternateColors=\"" +
+                       (it.version_alert.empty() ? "False" : "True") + "\" />\r\n";
+            };
             if (it.row < 0 || static_cast<std::size_t>(it.row) >= g_rows.size()) {
-                // the row's value rides in the data item's Icon, a string the template shows
-                res += "            <local:TileMenuDataItem x:Key=\"" + key + "\" Heading=\"" + xml_escape(it.label) + "\" Description=\"" +
-                       xml_escape(it.description) + "\" Icon=\"" + xml_escape(it.value) + "\" />\r\n";
-                const std::string name  = n == 0 ? first_name : button_name(it, false);
-                const std::size_t b     = first.find(" local:BindingProxy.");
-                const std::string proxy = b == std::string::npos ? "" : first.substr(b);
+                data_item(it.description);
+                const std::string name = n == 0 ? first_name : button_name(it, false);
                 rows += "                                        <Button Tag=\"{StaticResource " + key +
-                        "}\" Template=\"{StaticResource FH2Mod_InfoRow}\"" + (name.empty() ? "" : " x:Name=\"" + name + "\"") + proxy +
-                        " />\r\n";
+                        "}\" local:BindingProxy.A=\"" + xml_escape(it.label) + "\" local:BindingProxy.C=\"" + xml_escape(it.value) +
+                        "\" Template=\"{StaticResource FH2Mod_InfoRow}\"" + (name.empty() ? "" : " x:Name=\"" + name + "\"") + " />\r\n";
                 continue;
             }
             const Row& r     = g_rows[it.row];
@@ -527,8 +526,7 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
             std::string desc = it.description.empty() ? r.description : it.description;
             if (r.restart) desc += (desc.empty() ? "" : " ") + std::string("Takes effect the next time you start the game.");
             if (r.mod != &g_hub_owner) desc += (desc.empty() ? "" : " ") + std::string("(") + r.mod->name + ")";
-            res += "            <local:TileMenuDataItem x:Key=\"" + key + "\" Heading=\"" + xml_escape(label) + "\" Description=\"" +
-                   xml_escape(desc) + "\" />\r\n";
+            data_item(desc);
             if (r.slider) {
                 res += slider_resources(r, it.row);
                 rows += "                                        <Slider Value=\"{Binding " + r.prop + "}\" Tag=\"{StaticResource " + key +
@@ -560,49 +558,16 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                       "                        <ColumnDefinition />\r\n"
                       "                    </Grid.ColumnDefinitions>\r\n"
                       "                    <Grid Grid.Column=\"0\">\r\n"
-                      "                        <local:FZTextBlock Text=\"{Binding Tag.Heading, RelativeSource={RelativeSource TemplatedParent}}\" "
+                      "                        <local:FZTextBlock Text=\"{Binding (local:BindingProxy.A), RelativeSource={RelativeSource TemplatedParent}}\" "
                       "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Left\" />\r\n"
                       "                    </Grid>\r\n"
                       "                    <Grid Grid.Column=\"1\">\r\n"
-                      "                        <local:FZTextBlock Text=\"{Binding Tag.Icon, RelativeSource={RelativeSource TemplatedParent}}\" "
+                      "                        <local:FZTextBlock Text=\"{Binding (local:BindingProxy.C), RelativeSource={RelativeSource TemplatedParent}}\" "
                       "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Center\" />\r\n"
                       "                    </Grid>\r\n"
                       "                </Grid>\r\n"
-                      "            </ControlTemplate>\r\n"
-                      // the description panel (A_ControlTemplate_DescriptionPanel), with the row's
-                      // version, update alert and link under the description when it has them
-                      "            <ControlTemplate x:Key=\"FH2Mod_DescriptionPanel\" TargetType=\"ContentControl\">\r\n"
-                      "                <DockPanel>\r\n"
-                      "                    <ContentControl DockPanel.Dock=\"Top\" Content=\"{local:Loc Assists.IDS_Title_Description}\" "
-                      "Style=\"{StaticResource A_Style_DescriptionPanelHeader}\" />\r\n"
-                      "                    <local:FZMaterial DockPanel.Dock=\"Top\" Style=\"{StaticResource A_Style_FZMaterial_GlassPanel_Background}\">\r\n"
-                      "                        <local:AutoScrollPanel Style=\"{StaticResource A_Style_AutoScrollPanel_Masked}\" "
-                      "AnimationContext=\"{TemplateBinding Content}\" Margin=\"30, 20\">\r\n"
-                      "                            <StackPanel>\r\n"
-                      "                                <local:FZTextBlock Text=\"{TemplateBinding Content}\" "
-                      "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" Margin=\"0\" TextWrapping=\"Wrap\" />\r\n"
-                      "                                <StackPanel DataContext=\"{Binding (local:BindingProxy.C)}\">\r\n"
-                      "                                    <local:FZTextBlock Text=\"{Binding Heading}\" "
-                      "Visibility=\"{Binding Heading, Converter={StaticResource A_StringVisConverter_IconVisibility}}\" "
-                      "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" Margin=\"0,24,0,0\" TextWrapping=\"Wrap\" />\r\n"
-                      "                                </StackPanel>\r\n"
-                      "                                <StackPanel DataContext=\"{Binding (local:BindingProxy.B)}\">\r\n"
-                      "                                    <local:FZTextBlock Text=\"{Binding Heading}\" "
-                      "Visibility=\"{Binding Heading, Converter={StaticResource A_StringVisConverter_IconVisibility}}\" "
-                      "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" Margin=\"0,24,0,0\" TextWrapping=\"Wrap\" />\r\n"
-                      "                                    <local:FZTextBlock Text=\"{Binding Icon}\" "
-                      "Visibility=\"{Binding Icon, Converter={StaticResource A_StringVisConverter_IconVisibility}}\" "
-                      "Color=\"{StaticResource A_Color_Stat_Negative}\" "
-                      "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" Margin=\"0,24,0,0\" TextWrapping=\"Wrap\" />\r\n"
-                      "                                    <local:FZTextBlock Text=\"{Binding Description}\" "
-                      "Visibility=\"{Binding Description, Converter={StaticResource A_StringVisConverter_IconVisibility}}\" "
-                      "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" Margin=\"0,8,0,0\" TextWrapping=\"Wrap\" />\r\n"
-                      "                                </StackPanel>\r\n"
-                      "                            </StackPanel>\r\n"
-                      "                        </local:AutoScrollPanel>\r\n"
-                      "                    </local:FZMaterial>\r\n"
-                      "                </DockPanel>\r\n"
                       "            </ControlTemplate>\r\n";
+
     std::string rows = list_rows(items, "FH2Mod_Item_", "FirstItem", res);
     std::vector<std::string> view_rows;
     if (views)
@@ -679,14 +644,42 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         page.insert(l0 + std::string("<local:CommonListBox").size(), list_vis(0));
         page.insert(l0, "<Grid>\r\n");
     }
-    // our description panel (the same, plus the lines under the description)
-    // TEST (crash hunt): only on Updates for now; Installed mods crashed with it
-    const bool use_desc_template = std::string(file) == "A_ModPage_02.xaml";
-    for (std::size_t at = use_desc_template ? page.find(desc_panel) : std::string::npos; at != std::string::npos;
-         at = page.find(desc_panel, at)) {
-        const std::string ours = "Width=\"380\" Height=\"550\" Template=\"{StaticResource FH2Mod_DescriptionPanel}\"";
-        page.replace(at, desc_panel.size(), ours);
-        at += ours.size();
+    // Under each description panel's text, at the bottom of the panel: the selected row's
+    // version (red when there's a newer one) and GitHub page, from its data item (see
+    // list_rows). Overlaid in a Grid with the game's own panel, not a template of ours: the
+    // game's XAML reader crashed on our copy of the panel's template.
+    for (std::size_t at = page.find(desc_panel); at != std::string::npos;) {
+        const std::size_t e0 = page.rfind("<ContentControl", at), e1 = page.find("/>", at);
+        if (e0 == std::string::npos || e1 == std::string::npos) break;
+        std::string panel = page.substr(e0, e1 + 2 - e0);
+        const std::size_t en = panel.find("ElementName="), en_end = en == std::string::npos ? en : panel.find_first_of("}, ", en);
+        if (en_end == std::string::npos) break;
+        const std::string list = panel.substr(en + 12, en_end - en - 12);
+        std::string vis;   // a view's panel: its Visibility goes on the Grid
+        if (const std::size_t v = panel.find(" Visibility=\""); v != std::string::npos) {
+            std::size_t v_end = v + 13, depth = 0;
+            for (; v_end < panel.size(); ++v_end) {
+                if (panel[v_end] == '{') ++depth;
+                else if (panel[v_end] == '}') --depth;
+                else if (panel[v_end] == '"' && depth == 0) break;
+            }
+            vis = panel.substr(v, v_end + 1 - v);
+            panel.erase(v, v_end + 1 - v);
+        }
+        const std::string text = "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" TextWrapping=\"Wrap\"";
+        const std::string grid =
+            "<Grid" + vis + ">\r\n                        " + panel +
+            "\r\n                        <StackPanel DataContext=\"{Binding SelectedItem, ElementName=" + list +
+            "}\" VerticalAlignment=\"Bottom\" Margin=\"30,0,30,24\">\r\n"
+            "                            <local:FZTextBlock Text=\"{Binding Tag.Icon}\" "
+            "Visibility=\"{Binding Tag.UseAlternateColors, Converter={StaticResource FH2Mod_HideView}}\" " + text + " />\r\n"
+            "                            <local:FZTextBlock Text=\"{Binding Tag.Icon}\" "
+            "Visibility=\"{Binding Tag.UseAlternateColors, Converter={StaticResource FH2Mod_ShowView}}\" "
+            "Color=\"{StaticResource A_Color_Stat_Negative}\" " + text + " />\r\n"
+            "                            <local:FZTextBlock Text=\"{Binding Tag.Heading}\" Margin=\"0,8,0,0\" " + text + " />\r\n"
+            "                        </StackPanel>\r\n                    </Grid>";
+        page.replace(e0, e1 + 2 - e0, grid);
+        at = page.find(desc_panel, e0 + grid.size());
     }
     if (views && !views->empty()) {
         // The help bar: A is Select on the list, Accept (done, back to the list) in a mod's
@@ -903,7 +896,8 @@ void add_mod_lines(PageItem& it, const ModEntry& e) {
     std::string latest;
     if (e.enabled && e.mod && !e.mod->repo.empty() && e.mod->check_updates) latest = latest_known(e.mod);
     if (!latest.empty() && compare_versions(latest, e.version) > 0) {
-        it.version_alert = "! " + v + " (" + latest + " is out)";
+        const std::string l = latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest;
+        it.version_alert    = "! " + v + " (" + l + " is out)";
     } else {
         std::string state;
         if (!e.enabled) state = "turned off";
@@ -923,9 +917,6 @@ std::vector<PageItem> installed_items() {
         it.value    = (e.enabled ? "" : "Off  ") + (e.version.empty() ? std::string() : e.version);
         it.button   = i < kMaxModPages ? static_cast<int>(i) : -1;
         add_mod_lines(it, e);
-        // TEST (crash hunt): the game's own panel here, so the lines go into the description
-        for (const std::string* l : {&it.note, &it.version, &it.version_alert, &it.link})
-            if (!l->empty()) it.description += "   " + *l;
         items.push_back(it);
     }
     if (g_entries.empty())
@@ -974,7 +965,7 @@ std::vector<PageItem> updates_items() {
             d += " Release notes: github.com/" + e.mod->repo + "/releases";
         }
         PageItem it = info(label, d.empty() ? "No update information for this mod." : d);
-        add_mod_lines(it, e);   // TEST (crash hunt): exercises our description panel
+        add_mod_lines(it, e);
         items.push_back(it);
     }
     items.push_back(info("How update checks work",
