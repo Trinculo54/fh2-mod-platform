@@ -289,6 +289,7 @@ uint8_t* descriptor_for(Row* r) {
 // FH2Mod_Selected: the list's SelectedIndex (it follows the focus), bound two-way on Installed
 // mods so a press of A knows which mod's row it was on.
 std::atomic<int> g_selected{0};
+std::atomic<void*> g_view_obj{nullptr};    // what Installed mods' bindings read from (for PropertyChanged)
 uint8_t* g_selected_desc = nullptr;
 void** __cdecl selected_get(void** out, void*, void*) {
     int v = g_selected.load();
@@ -296,7 +297,8 @@ void** __cdecl selected_get(void** out, void*, void*) {
     reinterpret_cast<BoxIntFn>(g_base + RVA_BOX_INT)(out, &v);
     return out;
 }
-void __cdecl selected_set(void*, void*, uint8_t* value) {
+void __cdecl selected_set(void*, void* obj, uint8_t* value) {
+    if (obj) g_view_obj = obj;
     if (value && readable(value + 0x28, 4)) {
         g_selected = *reinterpret_cast<int*>(value + 0x28);
         slog("debug: row " + std::to_string(g_selected.load()) + " selected");
@@ -307,6 +309,32 @@ uint8_t* selected_descriptor() {
     if (!g_selected_desc)
         g_selected_desc = new_descriptor("FH2Mod_Selected", reinterpret_cast<void*>(&selected_get), reinterpret_cast<void*>(&selected_set), nullptr);
     return g_selected_desc;
+}
+
+// FH2Mod_View_<k>: whether view k of Installed mods is showing (0: the list, k: mod k-1's
+// settings). Showing another view hides the rest; see switch_view.
+constexpr int kMaxViews = 65;
+std::atomic<int> g_view{0};
+uint8_t* g_view_desc[kMaxViews] = {};
+void** __cdecl view_get(void** out, void* desc, void*) {
+    bool v = false;
+    for (int k = 0; k < kMaxViews; ++k)
+        if (g_view_desc[k] == desc) v = g_view.load() == k;
+    *out = nullptr;
+    reinterpret_cast<BoxBoolFn>(g_base + RVA_BOX_BOOL)(out, &v);
+    return out;
+}
+void __cdecl view_set(void*, void*, uint8_t*) {}
+uint8_t* view_descriptor(int k) {
+    if (k < 0 || k >= kMaxViews) return nullptr;
+    std::scoped_lock lk{g_desc_mu};
+    if (!g_view_desc[k]) {
+        static std::deque<std::string> names;   // the descriptor keeps the pointer
+        names.push_back("FH2Mod_View_" + std::to_string(k));
+        void* bool_type = reinterpret_cast<TypeFn>(g_base + RVA_BOOL_TYPE)(0);
+        g_view_desc[k]  = new_descriptor(names.back().c_str(), reinterpret_cast<void*>(&view_get), reinterpret_cast<void*>(&view_set), bool_type);
+    }
+    return g_view_desc[k];
 }
 
 uint8_t* notice_descriptor() {
@@ -337,6 +365,15 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     if (!n || std::wcsncmp(n, L"FH2Mod_", 7) != 0) return nullptr;
     if (std::wcscmp(n, L"FH2Mod_RestartNotice") == 0) return notice_descriptor();
     if (std::wcscmp(n, L"FH2Mod_Selected") == 0) return selected_descriptor();
+    if (std::wcsncmp(n, L"FH2Mod_View_", 12) == 0) {
+        int k = 0;
+        for (const wchar_t* d = n + 12; *d; ++d) {
+            if (*d < L'0' || *d > L'9') return nullptr;
+            k = k * 10 + (*d - L'0');
+            if (k >= kMaxViews) return nullptr;
+        }
+        return view_descriptor(k);
+    }
     Row* r = row_by_prop(n);
     return r ? descriptor_for(r) : nullptr;
 }
@@ -448,38 +485,23 @@ std::string button_name(const PageItem& it, bool first) {
 
 FH2Mod g_hub_owner;                  // the MODS tab's own rows (a switch per mod)
 
-bool write_list_page(const char* file, const std::string& title, const std::vector<PageItem>& items, bool track_selection = false) {
-    std::string page = read_ui("Scenes/Anthem/A_HUDOptions.xaml");
-    if (page.empty()) return false;
-    std::string res = "\r\n            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowNotice\" UseHidden=\"true\" InvertResult=\"false\" />\r\n"
-                      "            <ControlTemplate x:Key=\"FH2Mod_InfoRow\" TargetType=\"{x:Type Button}\">\r\n"
-                      "                <Grid VerticalAlignment=\"Center\">\r\n"
-                      "                    <Grid.ColumnDefinitions>\r\n"
-                      "                        <ColumnDefinition />\r\n"
-                      "                        <ColumnDefinition />\r\n"
-                      "                    </Grid.ColumnDefinitions>\r\n"
-                      "                    <Grid Grid.Column=\"0\">\r\n"
-                      "                        <local:FZTextBlock Text=\"{Binding Tag.Heading, RelativeSource={RelativeSource TemplatedParent}}\" "
-                      "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Left\" />\r\n"
-                      "                    </Grid>\r\n"
-                      "                    <Grid Grid.Column=\"1\">\r\n"
-                      "                        <local:FZTextBlock Text=\"{Binding Tag.Icon, RelativeSource={RelativeSource TemplatedParent}}\" "
-                      "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Center\" />\r\n"
-                      "                    </Grid>\r\n"
-                      "                </Grid>\r\n"
-                      "            </ControlTemplate>\r\n";
+// The rows of one list, as XAML; their data items (and slider styles) go into `res`. Keys
+// start with `prefix`; the first row is named `first`.
+std::string list_rows(const std::vector<PageItem>& items, const std::string& prefix, const std::string& first_name, std::string& res);
+
+std::string list_rows(const std::vector<PageItem>& items, const std::string& prefix, const std::string& first_name, std::string& res) {
     std::string rows = "\r\n";
     {
         std::scoped_lock lk{g_mu};
         for (std::size_t n = 0; n < items.size(); ++n) {
             const PageItem& it = items[n];
-            const std::string first = n == 0 ? " x:Name=\"FirstItem\"" : "";
-            const std::string key   = "FH2Mod_Item_" + std::to_string(n);
+            const std::string first = n == 0 ? " x:Name=\"" + first_name + "\"" : "";
+            const std::string key   = prefix + std::to_string(n);
             if (it.row < 0 || static_cast<std::size_t>(it.row) >= g_rows.size()) {
                 // the row's value rides in the data item's Icon, a string the template shows
                 res += "            <local:TileMenuDataItem x:Key=\"" + key + "\" Heading=\"" + xml_escape(it.label) + "\" Description=\"" +
                        xml_escape(it.description) + "\" Icon=\"" + xml_escape(it.value) + "\" />\r\n";
-                const std::string name = button_name(it, n == 0);
+                const std::string name = n == 0 ? first_name : button_name(it, false);
                 rows += "                                        <Button Tag=\"{StaticResource " + key +
                         "}\" Template=\"{StaticResource FH2Mod_InfoRow}\"" + (name.empty() ? "" : " x:Name=\"" + name + "\"") +
                         " />\r\n";
@@ -504,8 +526,38 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                     " />\r\n";
         }
     }
-    res += "        ";
     rows += "                                ";
+    return rows;
+}
+
+bool write_list_page(const char* file, const std::string& title, const std::vector<PageItem>& items, bool track_selection = false,
+                     const std::vector<std::vector<PageItem>>* views = nullptr) {
+    std::string page = read_ui("Scenes/Anthem/A_HUDOptions.xaml");
+    if (page.empty()) return false;
+    std::string res = "\r\n            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowNotice\" UseHidden=\"true\" InvertResult=\"false\" />\r\n"
+                      "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowView\" UseHidden=\"false\" InvertResult=\"false\" />\r\n"
+                      "            <ControlTemplate x:Key=\"FH2Mod_InfoRow\" TargetType=\"{x:Type Button}\">\r\n"
+                      "                <Grid VerticalAlignment=\"Center\">\r\n"
+                      "                    <Grid.ColumnDefinitions>\r\n"
+                      "                        <ColumnDefinition />\r\n"
+                      "                        <ColumnDefinition />\r\n"
+                      "                    </Grid.ColumnDefinitions>\r\n"
+                      "                    <Grid Grid.Column=\"0\">\r\n"
+                      "                        <local:FZTextBlock Text=\"{Binding Tag.Heading, RelativeSource={RelativeSource TemplatedParent}}\" "
+                      "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Left\" />\r\n"
+                      "                    </Grid>\r\n"
+                      "                    <Grid Grid.Column=\"1\">\r\n"
+                      "                        <local:FZTextBlock Text=\"{Binding Tag.Icon, RelativeSource={RelativeSource TemplatedParent}}\" "
+                      "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Center\" />\r\n"
+                      "                    </Grid>\r\n"
+                      "                </Grid>\r\n"
+                      "            </ControlTemplate>\r\n";
+    std::string rows = list_rows(items, "FH2Mod_Item_", "FirstItem", res);
+    std::vector<std::string> view_rows;
+    if (views)
+        for (std::size_t k = 0; k < views->size(); ++k)
+            view_rows.push_back(list_rows((*views)[k], "FH2Mod_V" + std::to_string(k + 1) + "_", "FH2Mod_First_" + std::to_string(k + 1), res));
+    res += "        ";
     const std::string title_attr = "Content=\"{local:Loc ScreenTitles.IDS_HUDOptions}\"";
     const std::string help_y     = "local:ControllerButtonPanel.YDescription=";
     const std::string desc_panel = "Style=\"{StaticResource A_Style_DescriptionPanel}\"";
@@ -524,6 +576,50 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             return false;
         }
         page.insert(l + list.size(), " SelectedIndex=\"{Binding FH2Mod_Selected, Mode=TwoWay}\"");
+    }
+    if (views && !views->empty()) {
+        // Every view is a list of its own, collapsed unless FH2Mod_View_<k> says it's showing;
+        // view 0 is the page's own OptionsList. Each has its own copy of the description panel.
+        const std::size_t l0 = page.find("<local:CommonListBox"), l1 = page.find("</local:CommonListBox>", l0);
+        const std::size_t tag_end = page.find('>', l0);
+        const std::size_t dp = page.find(desc_panel);
+        const std::size_t d0 = dp == std::string::npos ? dp : page.rfind("<ContentControl", dp), d1 = page.find("/>", dp);
+        if (l1 == std::string::npos || d0 == std::string::npos || d1 == std::string::npos || d0 < l1) {
+            slog("A_HUDOptions.xaml doesn't look as expected; no " + title + " page");
+            return false;
+        }
+        const std::string vis0 = " Visibility=\"{Binding FH2Mod_View_0, Converter={StaticResource FH2Mod_ShowView}}\"";
+        std::string panel = page.substr(d0, d1 + 2 - d0);
+        std::string panels;
+        for (std::size_t k = 1; k <= view_rows.size(); ++k) {
+            std::string pk = panel;
+            const std::size_t e = pk.find("ElementName=OptionsList");
+            if (e == std::string::npos) return false;
+            pk.replace(e, std::string("ElementName=OptionsList").size(), "ElementName=FH2Mod_List_" + std::to_string(k));
+            pk.insert(std::string("<ContentControl").size(), " Visibility=\"{Binding FH2Mod_View_" + std::to_string(k) +
+                                                                 ", Converter={StaticResource FH2Mod_ShowView}}\"");
+            panels += "\r\n                        " + pk;
+        }
+        page.insert(d1 + 2, panels);
+        page.insert(d0 + std::string("<ContentControl").size(), vis0);
+        // the lists (all before the panels, so their positions above stand)
+        std::string open_tag = page.substr(l0, tag_end + 1 - l0);
+        std::string lists;
+        for (std::size_t k = 1; k <= view_rows.size(); ++k) {
+            std::string t = open_tag;
+            const std::size_t nm = t.find("x:Name=\"OptionsList\"");
+            if (nm == std::string::npos) return false;
+            t.replace(nm, std::string("x:Name=\"OptionsList\"").size(),
+                      "x:Name=\"FH2Mod_List_" + std::to_string(k) + "\" Visibility=\"{Binding FH2Mod_View_" + std::to_string(k) +
+                          ", Converter={StaticResource FH2Mod_ShowView}}\"");
+            if (const std::size_t si = t.find(" SelectedIndex=\"{Binding FH2Mod_Selected, Mode=TwoWay}\""); si != std::string::npos)
+                t.erase(si, std::string(" SelectedIndex=\"{Binding FH2Mod_Selected, Mode=TwoWay}\"").size());
+            lists += "\r\n" + t + view_rows[k - 1] + "</local:CommonListBox>";
+        }
+        const std::size_t close = l1 + std::string("</local:CommonListBox>").size();
+        page.insert(close, lists + "\r\n</Grid>");
+        page.insert(l0 + std::string("<local:CommonListBox").size(), vis0);
+        page.insert(l0, "<Grid>\r\n");
     }
     const std::size_t t = page.find(title_attr);
     page.replace(t, title_attr.size(), "Content=\"" + xml_escape(title) + "\"");
@@ -828,7 +924,11 @@ std::vector<PageItem> making_items() {
 bool write_hub_page(int p) {
     std::scoped_lock lk{g_page_mu};
     switch (p) {
-        case kHubInstalled: return write_list_page(hub_file(p).c_str(), "INSTALLED MODS", installed_items(), true);
+        case kHubInstalled: {
+            std::vector<std::vector<PageItem>> views;
+            for (std::size_t i = 0; i < g_entries.size() && i + 1 < static_cast<std::size_t>(kMaxViews); ++i) views.push_back(mod_page_items(i));
+            return write_list_page(hub_file(p).c_str(), "INSTALLED MODS", installed_items(), true, &views);
+        }
         case kHubUpdates: return write_list_page(hub_file(p).c_str(), "UPDATES", updates_items());
         case kHubGetMods: return write_list_page(hub_file(p).c_str(), "GET MODS", get_mods_items());
         case kHubAbout: return write_list_page(hub_file(p).c_str(), "ABOUT", about_items());
@@ -895,9 +995,8 @@ bool write_pause_menu() {
 }
 
 // The Marketplace tiles' events go to a node of ours that shows the HUD page (as one of the
-// tab's pages) and comes back to the pause menu. On it, a mod's row fires car_packs (see
-// open_mod_page), which goes to a second HUD page (the mod's) that comes back to the first.
-// ui_screens.xml gets a copy of show_hud_options with that extra way out.
+// tab's pages) and comes back to the pause menu. (A HUD page can only leave by "back": an
+// event of another name, even one the game has, doesn't reach a transition.)
 bool write_pause_flow() {
     const auto zip = game_mount() / L"media" / L"stateflow.zip";
     std::vector<char> x = unzip_file(zip, "pause.xml");
@@ -909,44 +1008,11 @@ bool write_pause_flow() {
         slog("stateflow pause.xml doesn't look as expected; no MODS tab");
         return false;
     }
-    flow.insert(n, "<node id=\"_fh2mod_page\" state=\"ui_screens.fh2mod_show_page\">\r\n"
-                   "      <entry id=\"enter\" />\r\n"
-                   "      <entry id=\"enterback\" />\r\n"
+    flow.insert(n, "<node id=\"_fh2mod_page\" state=\"ui_screens.show_hud_options\">\r\n"
                    "      <exit id=\"back\" target=\"pause_menu.enterback\" />\r\n"
-                   "      <exit id=\"open\" target=\"_fh2mod_mod_page\" />\r\n"
-                   "    </node>\r\n\r\n"
-                   "    <node id=\"_fh2mod_mod_page\" state=\"ui_screens.show_hud_options\">\r\n"
-                   "      <exit id=\"back\" target=\"_fh2mod_page.enterback\" />\r\n"
                    "    </node>\r\n\r\n    ");
-    flow.replace(e, exit.size(), "<exit id=\"car_packs\" target=\"_fh2mod_page.enter\" />");
+    flow.replace(e, exit.size(), "<exit id=\"car_packs\" target=\"_fh2mod_page\" />");
     return set_file(&g_owner_mod, "stateflow/pause.xml", flow.data(), flow.size()) != 0;
-}
-
-bool write_ui_screens_flow() {
-    const auto zip = game_mount() / L"media" / L"stateflow.zip";
-    std::vector<char> x = unzip_file(zip, "ui_screens.xml");
-    std::string flow(x.begin(), x.end());
-    const std::string at = "<state id=\"show_hud_options\">";
-    const std::size_t a = flow.find(at);
-    if (flow.empty() || a == std::string::npos || flow.find(at, a + 1) != std::string::npos ||
-        flow.find("fh2mod_show_page") != std::string::npos) {
-        slog("stateflow ui_screens.xml doesn't look as expected; no MODS tab");
-        return false;
-    }
-    flow.insert(a, "<state id=\"fh2mod_show_page\">\r\n"
-                   "    <entry id=\"enter\" target=\".\" />\r\n"
-                   "    <entry id=\"enterback\" target=\".\" />\r\n"
-                   "    <exit id=\"back\" />\r\n"
-                   "    <exit id=\"open\" />\r\n\r\n"
-                   "    <behavior id=\"UIPageHudOptions\">\r\n"
-                   "      <transition id=\"back\" target=\".back\" />\r\n"
-                   "      <transition id=\"car_packs\" target=\".open\" />\r\n"
-                   "    </behavior>\r\n\r\n"
-                   "    <behavior id=\"OnParentTransition\">\r\n"
-                   "      <transition id=\"ParentTransition\" target=\".back\" />\r\n"
-                   "    </behavior>\r\n"
-                   "  </state>\r\n\r\n  ");
-    return set_file(&g_owner_mod, "stateflow/ui_screens.xml", flow.data(), flow.size()) != 0;
 }
 
 // ---- the Mods tile ---------------------------------------------------------------------------
@@ -1322,46 +1388,72 @@ void open_hub_page(void* page, int which) {
     write_hub_page(which);   // up to date (update checks finish after the game starts)
     g_in_hub     = true;
     g_hub_return = false;
+    g_view       = 0;   // before the page's bindings first read it
     hub_ask(which);
     o_car_packs(page);
 }
-// On Installed mods, mod n's row is a button (FirstItem, or PART_Button_FH2Mod_<n>), wired
-// once the page is loaded (the HUD page class's vtable +0x488, shared with one other page). A
-// press fires car_packs (an event name the game already has; a new one isn't taken) the way the Marketplace tiles fire theirs: 0x141422F10(page,
-// &std::string name), which needs the page's state-machine link at +0x310.
-constexpr uintptr_t RVA_HUD_PAGE_LOADED = 0x0C7AD40;
+// Installed mods holds every view at once: the list (the page's OptionsList) and one list per
+// mod, each collapsed unless its FH2Mod_View_<k> is true. A on the list shows the mod's view
+// and focuses its first row; B there comes back to the list. The page's own A and B (Accept,
+// Cancel) would leave the page, so on it they're ours. Focusing is what the page does with
+// "FirstItem" on showing (0x140C7A730): FindName (0x140C63120) on an AVUI string
+// (0x141663220, freed with 0x1416650A0), then 0x1414D01D0 on the element's +0xB8.
+constexpr uintptr_t RVA_HUD_PAGE_LOADED  = 0x0C7AD40;
 constexpr uintptr_t RVA_HUD_PAGE_VT_SLOT = 0x2DF06C0;   // HudOptions page vtable +0x488
-constexpr uintptr_t RVA_PAGE_FIRE_EVENT = 0x1422F10;
-using FireEventFn = void (*)(void* page, const void* name);
+constexpr uintptr_t RVA_FOCUS_FIRST      = 0x0C7A730;   // checked: it's the code this copies
+constexpr uintptr_t RVA_AVUI_STRING      = 0x1663220;   // (String* out, const char*, int length or -1)
+constexpr uintptr_t RVA_AVUI_STRING_FREE = 0x16650A0;   // (String*)
+constexpr uintptr_t RVA_FIND_NAME        = 0x0C63120;   // Element* (String** name, page)
+constexpr uintptr_t RVA_FOCUS            = 0x14D01D0;   // (Ptr* out, IInputElement*)
+using AvuiStringFn     = void (*)(void* out, const char* text, int length);
+using AvuiStringFreeFn = void (*)(void* s);
+using FindNameFn       = uint8_t* (*)(void** name, void* page);
+using FocusFn          = void (*)(void** out, void* element);
 TileFn o_hud_page_loaded = nullptr;
 
-struct MsvcString {
-    char buf[16];
-    uint64_t size, cap;
-};
+bool focus_named_inner(void* page, const char* name) {
+    alignas(16) uint8_t str[0x80] = {};
+    reinterpret_cast<AvuiStringFn>(g_base + RVA_AVUI_STRING)(str, name, -1);
+    void* ref = str;
+    InterlockedIncrement(reinterpret_cast<volatile LONG*>(str + 0x10));
+    uint8_t* el = reinterpret_cast<FindNameFn>(g_base + RVA_FIND_NAME)(&ref, page);
+    reinterpret_cast<AvuiStringFreeFn>(g_base + RVA_AVUI_STRING_FREE)(str);
+    if (!el) return false;
+    void** iface = reinterpret_cast<void**>(el + 0xB8);
+    reinterpret_cast<void (*)(void*)>((*reinterpret_cast<void***>(iface))[3])(iface);
+    void* out[4] = {};
+    reinterpret_cast<FocusFn>(g_base + RVA_FOCUS)(out, iface);
+    release(static_cast<uint8_t*>(out[1]));
+    return true;
+}
 
-bool fire_open(void* page) {
-    static const MsvcString name{"car_packs", 9, 15};
+bool focus_named(void* page, const char* name) {
     __try {
-        if (!*reinterpret_cast<void**>(static_cast<uint8_t*>(page) + 0x310)) return false;
-        reinterpret_cast<FireEventFn>(g_base + RVA_PAGE_FIRE_EVENT)(page, &name);
-        return true;
+        return focus_named_inner(page, name);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
 }
 
-void open_mod_page(void* page, std::size_t n) {
-    if (n >= g_entries.size()) return;
-    const int p = kHubModPage + static_cast<int>(n);
-    write_hub_page(p);
-    hub_ask(p);
-    g_hub_return = true;
-    if (!fire_open(page)) {
-        g_hub_builds = 0;
-        g_hub_return = false;
-        slog("couldn't open " + g_entries[n].name + "'s page");
+void notify_view(int k) {
+    void* obj = g_view_obj.load();
+    if (obj && k >= 0 && k < kMaxViews && g_view_desc[k]) notify_changed(obj, g_view_desc[k]);
+}
+
+void switch_view(void* page, int k) {
+    const int old = g_view.exchange(k);
+    if (old == k) return;
+    notify_view(old);
+    notify_view(k);
+    std::string name;
+    if (k > 0) {
+        name = "FH2Mod_First_" + std::to_string(k);
+    } else {
+        // back on the mod's own row
+        name = old <= 1 ? "FirstItem" : "PART_Button_FH2Mod_" + std::to_string(old - 1);
     }
+    if (!focus_named(page, name.c_str())) slog("couldn't focus " + name);
+    slog(k ? "showing " + g_entries[k - 1].name + "'s settings" : std::string("back to the list"));
 }
 
 // Which HUD page object is Installed mods (set when one loads; only compared, never used).
@@ -1380,16 +1472,18 @@ void d_hud_page_loaded(void* page) {
     if (g_hub_shown.exchange(0) == kHubInstalled) {
         g_installed_page = page;
         g_selected       = 0;
+        g_view           = 0;
     } else if (g_installed_page.load() == page) {
         g_installed_page = nullptr;
     }
 }
 
-// A page's buttons: vtable +0x578, (page, button, pressed) -> handled. On the options pages A
-// (18) is Accept, which saves and goes back; on Installed mods it opens the mod's page.
+// A page's buttons: vtable +0x578, (page, button, pressed) -> handled. The page gets A as 18
+// and B as 45 (seen in the log); on the options pages both leave the page.
 constexpr uintptr_t RVA_HUD_PAGE_BUTTON_SLOT = 0x2DF07B0;   // HudOptions page vtable +0x578
 constexpr uintptr_t RVA_PAGE_BUTTON          = 0x0CEC3D0;   // the shared implementation
-constexpr int kButtonA                       = 18;     // what the page gets for A (seen in the log)
+constexpr int kButtonA                       = 18;
+constexpr int kButtonB                       = 45;
 using PageButtonFn = bool (*)(void* page, int button, bool pressed);
 PageButtonFn o_hud_page_button = nullptr;
 
@@ -1397,12 +1491,18 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
     if (g_in_hub)
         slog("debug: button " + std::to_string(button) + (pressed ? " down" : " up") + " on " + hexp(page) +
              (page == g_installed_page.load() ? " (Installed mods)" : "") + ", row " + std::to_string(g_selected.load()));
-    if (button == kButtonA && page && page == g_installed_page.load()) {
+    if (page && page == g_installed_page.load() && (button == kButtonA || button == kButtonB)) {
+        const int view = g_view.load();
+        if (view == 0 && button == kButtonB) return o_hud_page_button(page, button, pressed);   // leave the page
         if (pressed) {
-            const int n = g_selected.load();
-            if (n >= 0 && static_cast<std::size_t>(n) < g_entries.size() && static_cast<std::size_t>(n) < kMaxModPages) open_mod_page(page, n);
+            if (view == 0) {
+                const int n = g_selected.load();
+                if (n >= 0 && static_cast<std::size_t>(n) < g_entries.size() && n + 1 < kMaxViews) switch_view(page, n + 1);
+            } else if (button == kButtonB) {
+                switch_view(page, 0);
+            }
         }
-        return true;
+        return true;   // A in a mod's view: nothing (it would leave the page)
     }
     return o_hud_page_button(page, button, pressed);
 }
@@ -1471,6 +1571,8 @@ void hook_hub() {
         {RVA_TILE_EXTRAS, {0x40, 0x55, 0x56, 0x57, 0x48, 0x8B, 0xEC, 0x48, 0x83, 0xEC, 0x70, 0x48, 0xC7, 0x45, 0xB0, 0xFE}},
         {RVA_TILE_SEASONPASS, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x70, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF, 0xFF, 0x48}},
         {RVA_TILE_VIP, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x70, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF, 0xFF, 0x48}},
+        // the page's own "focus FirstItem", down to its calls (focus_named does the same)
+        {RVA_FOCUS_FIRST, {0x40, 0x57, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF, 0xFF, 0x48, 0x89, 0x9C, 0x24, 0x90, 0x00, 0x00, 0x00, 0x48, 0x8B, 0xD9, 0x41, 0x83, 0xC8, 0xFF, 0x48, 0x8D, 0x15, 0x70, 0xE3, 0x2A, 0x01, 0x48, 0x8D, 0x4C, 0x24, 0x40, 0xE8, 0xBE, 0x8A, 0x9E, 0x00, 0x90, 0x48, 0x8D, 0x44, 0x24, 0x40, 0x48, 0x89, 0x84, 0x24, 0x98, 0x00, 0x00, 0x00, 0xF0, 0xFF, 0x44, 0x24, 0x50, 0x48, 0x8B, 0xD3, 0x48, 0x8D, 0x8C, 0x24, 0x98, 0x00, 0x00, 0x00, 0xE8, 0x9B, 0x89, 0xFE, 0xFF, 0x48, 0x8B, 0xD8, 0x48, 0x8D, 0x4C, 0x24, 0x40, 0xE8, 0x0E, 0xA9, 0x9E, 0x00, 0x48, 0x85, 0xDB, 0x74, 0x37, 0x48, 0x8B, 0x83, 0xB8, 0x00, 0x00, 0x00, 0x48, 0x8D, 0x8B, 0xB8, 0x00, 0x00, 0x00, 0xFF, 0x50, 0x18, 0x48, 0x8D, 0x93, 0xB8, 0x00, 0x00, 0x00, 0x48, 0x8D, 0x4C, 0x24, 0x28, 0xE8, 0x17, 0x5A, 0x85, 0x00}},
     };
     auto undo_files = [] {
         clear_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseMenu.xaml");
@@ -1727,10 +1829,9 @@ void settings_start(const FH2ModApi* api) {
         return;
     }
     // the MODS tab
-    g_hub_files = write_pause_menu() && write_pause_flow() && write_ui_screens_flow();
+    g_hub_files = write_pause_menu() && write_pause_flow();
+    remove_leftover_file("stateflow/ui_screens.xml");
     for (int p = kHubInstalled; p <= kHubMaking && g_hub_files; ++p) g_hub_files = write_hub_page(p);
-    for (std::size_t i = 0; i < g_entries.size() && i < kMaxModPages && g_hub_files; ++i)
-        g_hub_files = write_hub_page(kHubModPage + static_cast<int>(i));
     if (!g_hub_files) {
         clear_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseMenu.xaml");
         clear_file(&g_owner_mod, "stateflow/pause.xml");
