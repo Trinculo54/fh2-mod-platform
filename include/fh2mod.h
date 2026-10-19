@@ -338,25 +338,27 @@ typedef struct FH2ModApi {
        you set each time it opens. A page with XAML shows it on its tile;
        under MODS > Installed mods it shows its rows if it has any, and
        otherwise its row says which tile opens it. Returns 1, or 0 if you
-       have no page called `page_key` or `content` has no FirstItem.
+       have no page called `page_key`, `content` has no FirstItem, or a
+       fragment's tags don't balance (the page keeps the XAML it had).
 
        Bindings: slot n (0..15) is an int of the page's, "FH2Mod_Slot_<n>",
        which XAML can bind two-way (a list's SelectedIndex, say), and
-       "FH2Mod_Slot_<n>_Is_<v>" is true while it's v (for Visibility, with
-       the converters FH2Mod_ShowIf, FH2Mod_ShowIfHidden and FH2Mod_HideIf
-       the platform puts in the page's resources). Slots are 0 when the page
-       opens, before on_open. */
+       "FH2Mod_Slot_<n>_Is_<v>" is true while it's v, 0..9999 (for
+       Visibility, with the converters FH2Mod_ShowIf, FH2Mod_ShowIfHidden
+       and FH2Mod_HideIf the platform puts in the page's resources). Slots
+       are 0 when the page opens; set the ones you want otherwise in
+       on_open. */
     int (*set_page_xaml)(FH2Mod* mod, const char* page_key, const char* resources, const char* content, const char* help);
     /* A slot's value (0 if there's no such page or slot). */
     int (*get_page_slot)(FH2Mod* mod, const char* page_key, int slot);
-    /* Sets a slot. From on_open, on_button or on_slot (the game's UI thread)
-       while the page is showing, the page's bindings see it straight away;
-       otherwise it's kept for when the page next reads it. Returns 1, or 0
-       for no such page or slot. */
+    /* Sets a slot. From on_button or on_slot, the page's bindings see it
+       straight away (from on_slot, except the slot being set). From
+       on_open, it's what the page opens with. Anywhere else, it's only
+       stored: the page doesn't show it, and opening resets it. Returns 1,
+       or 0 for no such page or slot. */
     int (*set_page_slot)(FH2Mod* mod, const char* page_key, int slot, int value);
-    /* Moves the focus to the element named `name` on the page, from
-       on_button or on_slot while the page is showing. Returns 1 if it's
-       there. */
+    /* Moves the focus to the Button, Slider or SpinnerControl named `name`
+       in the page's XAML, from on_button. Returns 1 if it did. */
     int (*focus_page_element)(FH2Mod* mod, const char* page_key, const char* name);
 } FH2ModApi;
 
@@ -401,8 +403,8 @@ struct FH2Setting {
     const char* url;               /* "http://..." or "https://..." */
 };
 
-/* Pages (API 8). Both callbacks run on the game's UI thread: keep them short,
-   and don't call into the game from them. */
+/* Pages (API 8). Every page callback runs on the game's UI thread: keep them
+   short, and don't call into the game from them. */
 /* The page is about to be written to be shown: set its rows now if you
    haven't kept them up to date. Opening MODS > Installed mods writes every
    mod's pages, so it's called then too. */

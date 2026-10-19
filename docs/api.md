@@ -410,6 +410,71 @@ if (api->api_version >= 8) {
 
 The log (`[Mods page]`) says when a tile opens a page, and each `on_select` is logged under your mod's name. If the tile's code doesn't look as expected, the tile keeps doing what it did and the page is only under Installed mods. [`game-notes.md`](game-notes.md#menus) explains how the pages are put together.
 
+### Pages of your own design
+
+```c
+int set_page_xaml(FH2Mod* mod, const char* page_key, const char* resources, const char* content, const char* help);
+int get_page_slot(FH2Mod* mod, const char* page_key, int slot);
+int set_page_slot(FH2Mod* mod, const char* page_key, int slot, int value);
+int focus_page_element(FH2Mod* mod, const char* page_key, const char* name);
+
+/* in FH2Page, after user: */
+FH2PageButtonFn on_button;   /* int (*)(void* user, const char* page_key, int button) */
+FH2PageSlotFn on_slot;       /* void (*)(void* user, const char* page_key, int slot, int value) */
+```
+
+Rows give you the options pages' look. For anything else, a page on a tile can be XAML you write: the game's own controls (`CommonListBox`, `Button`, `local:FZTextBlock`, `local:FZMaterial`), styles, colours and textures, laid out however you like. Everything in `media\UI.zip` is there to use: `Resources/Anthem/` has the shared styles, and `Scenes/Anthem/` every page of the game, which are the best examples. Textures are referred to as `/ForzaUI;component/Textures/Anthem/<path>.png` (`media\UI\textures\Anthem.zip` lists them, as `.swatchbin`).
+
+The page keeps the frame of the game's options pages: the blurred background, the player bar, the help bar, and the screen's padding and tilt. `content` takes the place of what the HUD options page has inside that (its title, list and description panel), so it includes your own title (`A_Style_ContentControl_ScreenTitleBlock` is the game's). It has to name one element `x:Name="FirstItem"`, which gets the focus when the page opens; name your main list `OptionsList`, as the game's options pages do. `resources` goes into the page's `ResourceDictionary`, and `help`, if you give one, replaces the help bar's `DefaultHelpPanel` (keep one element with that name); without it the help bar has only Back. The fragments use the page's XML namespaces: `local:` is the game's (ForzaUI). `set_page_xaml` returns 1, or 0 if you have no such page, `content` has no FirstItem, or a fragment's tags don't balance (then the page keeps the XAML it had, and the log says where).
+
+As with rows, the XAML is copied, and the page is written from the last you set each time it opens, so it's static: put your data straight into it, and call `set_page_xaml` again when it changes (or from `on_open`). Under MODS > Installed mods such a page shows its rows if you've set any, and otherwise its row says which tile opens it; a page of your own design needs a tile to be seen.
+
+**Slots** are what makes it move. Each page has 16 ints, slot 0 to 15, which its XAML binds by name: `{Binding FH2Mod_Slot_<n>, Mode=TwoWay}` (a list's `SelectedIndex`, say), and `{Binding FH2Mod_Slot_<n>_Is_<v>}`, true while slot n is v (v from 0 to 9999). The platform puts three converters in the page's resources for `Visibility`: `FH2Mod_ShowIf` (collapsed when false), `FH2Mod_ShowIfHidden` (hidden when false: it keeps its place, and can take the focus as soon as it shows) and `FH2Mod_HideIf`. Slots are 0 when the page opens; set any you want otherwise from `on_open`. When a binding changes one, `on_slot` tells you. `get_page_slot` reads one; `set_page_slot` changes one, and from inside `on_button` the page's bindings see it at once. From `on_slot` they do too, except for the slot a binding is setting at that moment. Set from anywhere else, a slot is only stored: the page doesn't show it, and opening resets it.
+
+**Buttons.** A and B go to `on_button` first (`FH2_BUTTON_A`, `FH2_BUTTON_B`). Return `FH2_PAGE_IGNORED` for what they usually do (B leaves the page; A does nothing on a page of your own design), or `FH2_PAGE_HANDLED`, `FH2_PAGE_HANDLED_SELECT` or `FH2_PAGE_HANDLED_BACK`, which also play the menus' select or back sound. From `on_button`, `focus_page_element` moves the focus to a `Button`, `Slider` or `local:SpinnerControl` your XAML names (`x:Name`); other elements can't take the focus that way. A list whose `KeyboardNavigation.DirectionalNavigation` is `Contained` keeps the d-pad inside it, so moving between two lists is yours to do: A into the second, B back, say. Other buttons aren't passed on yet; the log names their codes the first time each is pressed on a page of your own design.
+
+A two-pane page, a list of sections and the selected section's items beside it:
+
+```xml
+<!-- content (abridged) -->
+<StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">
+    <local:CommonListBox x:Name="OptionsList" SelectedIndex="{Binding FH2Mod_Slot_0, Mode=TwoWay}"
+                         KeyboardNavigation.DirectionalNavigation="Contained" Width="400" Height="600"
+                         Style="{StaticResource A_Style_ListBox_List_Default}"
+                         ItemContainerStyle="{StaticResource A_Style_ListBoxItem_List_Default}">
+        <Button x:Name="FirstItem" Template="{StaticResource My_Plain}"> ... section 0 ... </Button>
+        <Button x:Name="Section_1" Template="{StaticResource My_Plain}"> ... section 1 ... </Button>
+    </local:CommonListBox>
+    <Grid>
+        <local:CommonListBox x:Name="Items_0" Visibility="{Binding FH2Mod_Slot_0_Is_0, Converter={StaticResource FH2Mod_ShowIfHidden}}" ...>
+            <Button x:Name="Item_0_0" ... />
+        </local:CommonListBox>
+        <local:CommonListBox x:Name="Items_1" Visibility="{Binding FH2Mod_Slot_0_Is_1, Converter={StaticResource FH2Mod_ShowIfHidden}}" ...>
+            <Button x:Name="Item_1_0" ... />
+        </local:CommonListBox>
+    </Grid>
+</StackPanel>
+```
+
+```cpp
+static int page_button(void*, const char* key, int button) {
+    const int pane = g_api->get_page_slot(g_mod, key, 1), section = g_api->get_page_slot(g_mod, key, 0);
+    if (button == FH2_BUTTON_A && pane == 0) {   // into the section's items
+        if (!g_api->focus_page_element(g_mod, key, ("Item_" + std::to_string(section) + "_0").c_str())) return FH2_PAGE_HANDLED;
+        g_api->set_page_slot(g_mod, key, 1, 1);
+        return FH2_PAGE_HANDLED_SELECT;
+    }
+    if (button == FH2_BUTTON_B && pane == 1) {   // back to the section
+        g_api->focus_page_element(g_mod, key, section == 0 ? "FirstItem" : ("Section_" + std::to_string(section)).c_str());
+        g_api->set_page_slot(g_mod, key, 1, 0);
+        return FH2_PAGE_HANDLED_BACK;
+    }
+    return FH2_PAGE_IGNORED;   // B on the sections leaves the page
+}
+```
+
+The game's XAML reader isn't forgiving: a page it can't read can take the game down when it opens. Base your XAML on the game's own pages, change a little at a time, and check every `StaticResource` you use exists. The Achievements mod's page (`src/ui.cpp` in its repo) is a complete example.
+
 ## Crash reports
 
 These need no code from you. If the game crashes, the platform writes `fh2-mods\crashes\crash-<date>-<time>.txt` and a minidump (`.dmp`) beside it, and adds the summary to `platform.log`. The report has the exception, the call stack as module+offset (`game+0x...`, `YourMod.dll+0x...`), the mod the crash came from, if any, and every hook in place (see above). The ten newest reports are kept. Open the minidump in Visual Studio or WinDbg with your mod's debug symbols to see the exact line.

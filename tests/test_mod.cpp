@@ -45,6 +45,10 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->set_page_rows(g_mod, "Stats", rows, 4);
     // ... and on its tile, a page of its own design (Installed mods still shows the rows)
     api->set_page_xaml(g_mod, "Stats", "<Color x:Key=\"Test_Color\">#FF102030</Color>", "<StackPanel>no FirstItem</StackPanel>", nullptr);
+    api->set_page_xaml(g_mod, "Stats", nullptr, "<Grid x:Name=\"FirstItem\"><Button></Grid>", nullptr);   // refused: unbalanced
+    FH2PageRow odd[2] = {rows[0], rows[1]};
+    odd[1].size = 8;
+    api->set_page_rows(g_mod, "Stats", odd, 2);                                                             // refused: sizes differ
     api->set_page_xaml(g_mod, "Stats", "<Color x:Key=\"Test_Color\">#FF102030</Color>",
                        "<Grid x:Name=\"TestContent\"><Button x:Name=\"FirstItem\" Visibility=\"{Binding FH2Mod_Slot_2_Is_1, "
                        "Converter={StaticResource FH2Mod_ShowIf}}\" /></Grid>",

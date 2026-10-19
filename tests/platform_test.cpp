@@ -192,6 +192,8 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] set_page_rows: there's no page called Missing"));
         CHECK(has(log, "[TestMod] set_page_xaml: Stats's content has no element named FirstItem"));
         CHECK(has(log, "[TestMod] page slots ok"));
+        CHECK(has(log, "[TestMod] set_page_xaml: Stats's content isn't well-formed (</Grid> doesn't match <Button>)"));
+        CHECK(has(log, "[TestMod] set_page_rows: row 1 of Stats isn't the size of the first"));
         // The game's menus were given: the pages are written. (Not with the game mapped: this
         // test's copy of it doesn't pass the menus' code checks, so the platform takes them out.)
         if (fs::exists(L"FH2\\Mount\\media\\UI.zip") && argc <= 2) {

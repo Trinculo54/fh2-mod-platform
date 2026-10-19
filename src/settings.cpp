@@ -127,6 +127,7 @@ struct ModPage {
     FH2PageSlotFn on_slot     = nullptr;
     bool custom               = false;
     std::string xaml_resources, xaml_content, xaml_help;
+    std::string xaml_written;        // the content as last written (what's on screen)
     std::array<std::atomic<int>, FH2_PAGE_SLOTS> slots{};
 };
 std::deque<ModPage> g_pages;         // guarded by g_mu (pages are never removed)
@@ -536,7 +537,25 @@ uint8_t* mod_notice_descriptor() {
 std::atomic<int> g_custom_shown{-1};       // the page in g_pages whose slots the bindings read
 std::atomic<void*> g_custom_obj{nullptr};  // what its bindings read from (for PropertyChanged); null when it's gone
 thread_local bool g_in_callback = false;   // in a mod's on_button or on_slot for the page showing
-thread_local void* g_callback_page = nullptr;   // ... and that page (for focusing)
+thread_local void* g_callback_page = nullptr;   // in on_button: that page (for focusing); null in on_slot
+thread_local int g_setting_slot = -1;           // in on_slot: the slot a binding is setting
+// Sets the three for a callback, and puts back what they were (callbacks can nest: a slot set
+// from on_button can come back through a binding into on_slot).
+struct InCallback {
+    bool in;
+    void* page;
+    int slot;
+    InCallback(void* p, int setting) : in(g_in_callback), page(g_callback_page), slot(g_setting_slot) {
+        g_in_callback   = true;
+        g_callback_page = p;
+        g_setting_slot  = setting;
+    }
+    ~InCallback() {
+        g_in_callback   = in;
+        g_callback_page = page;
+        g_setting_slot  = slot;
+    }
+};
 uint8_t* g_slot_desc[FH2_PAGE_SLOTS] = {};
 struct SlotIs {
     int slot, value;
@@ -580,8 +599,6 @@ bool call_on_slot(FH2PageSlotFn fn, void* user, const char* key, int slot, int v
     }
 }
 
-void* tile_page_object(int j);   // the page showing page j on its tile, or null
-
 void** __cdecl slot_get(void** out, void* desc, void* obj) {
     if (obj) g_custom_obj = obj;
     int v = slot_value(slot_of(desc));
@@ -610,11 +627,9 @@ void __cdecl slot_set(void* desc, void* obj, uint8_t* value) {
     }
     notify_slot(n, false);
     if (!fn) return;
-    g_in_callback   = true;
-    g_callback_page = tile_page_object(j);
+    // inside the binding's set: no focusing from here, and the slot being set isn't notified again
+    InCallback in{nullptr, n};
     if (!call_on_slot(fn, user, key.c_str(), n, v)) log_line(mod->name, "crashed in its on_slot for page " + key);
-    g_in_callback   = false;
-    g_callback_page = nullptr;
 }
 void** __cdecl slot_is_get(void** out, void* desc, void* obj) {
     if (obj) g_custom_obj = obj;
@@ -1773,6 +1788,7 @@ std::vector<std::vector<RowAct>> g_view_acts;
 std::vector<int> g_view_page, g_view_owner;
 // A page on a tile, as last written: what A does on its rows.
 std::vector<RowAct> g_tile_acts[kTileCount];
+std::atomic<void*> g_tile_page_obj[kTileCount] = {};   // the page object showing a mod's page on a tile (UI thread)
 
 bool write_hub_page(int p) {
     std::scoped_lock lk{g_page_mu};
@@ -1843,6 +1859,7 @@ bool write_hub_page(int p) {
                 res     = pg.xaml_resources;
                 content = pg.xaml_content;
                 help    = pg.xaml_help;
+                g_pages[j].xaml_written = content;
             } else {
                 items  = page_items(pg);
                 title  = pg.title;
@@ -2435,6 +2452,7 @@ void open_hub_page(void* page, int which) {
         }
         g_custom_obj   = nullptr;
         g_custom_shown = j;
+        for (auto& obj : g_tile_page_obj) obj = nullptr;   // the last one is gone
         if (j >= 0) pages_opening(j);
     }
     write_hub_page(which);   // up to date (update checks finish after the game starts)
@@ -2595,7 +2613,6 @@ void select_on_page(int j, const std::string& row) {
 
 // Which HUD page objects are Installed mods and Updates (set when one loads; only compared).
 std::atomic<void*> g_installed_page{nullptr};
-std::atomic<void*> g_tile_page_obj[kTileCount] = {};   // a mod's page on a tile
 std::atomic<void*> g_updates_page{nullptr};
 std::atomic<void*> g_about_page{nullptr};
 
@@ -2615,7 +2632,8 @@ void open_url(const std::string& url) {
 
 
 void d_hud_page_loaded(void* page) {
-    o_hud_page_loaded(page);
+    // Which page this is, before the page's own "loaded" (which focuses FirstItem, and so may set
+    // a slot through a binding) runs: from then on, callbacks and focusing go to this page.
     const int was_shown = g_hub_shown.exchange(0);
     if (was_shown == kHubUpdates) {
         g_updates_page = page;
@@ -2650,6 +2668,7 @@ void d_hud_page_loaded(void* page) {
         g_custom_obj   = nullptr;
         g_custom_shown = -1;
     }
+    o_hud_page_loaded(page);
 }
 
 
@@ -2662,13 +2681,6 @@ constexpr int kButtonA                       = 18;
 constexpr int kButtonB                       = 45;
 using PageButtonFn = bool (*)(void* page, int button, bool pressed);
 PageButtonFn o_hud_page_button = nullptr;
-
-void* tile_page_object(int j) {
-    std::scoped_lock lk{g_mu};
-    for (std::size_t t = 0; t < kTileCount; ++t)
-        if (g_tile_page[t] == j) return g_tile_page_obj[t].load();
-    return nullptr;
-}
 
 bool call_on_button(FH2PageButtonFn fn, void* user, const char* key, int button, int* result) {
     __try {
@@ -2703,15 +2715,13 @@ bool custom_page_button(void* page, int j, int button, bool pressed) {
             key  = g_pages[j].key;
         }
         int r = FH2_PAGE_IGNORED;
+        g_focus_again.clear();   // a press of its own: nothing left over to focus on its release
         if (fn) {
-            g_in_callback   = true;
-            g_callback_page = page;
+            InCallback in{page, -1};
             if (!call_on_button(fn, user, key.c_str(), code, &r)) {
                 log_line(mod->name, "crashed in its on_button for page " + key);
                 r = FH2_PAGE_HANDLED;
             }
-            g_in_callback   = false;
-            g_callback_page = nullptr;
         }
         g_custom_handled[code] = r != FH2_PAGE_IGNORED;
         if (r == FH2_PAGE_HANDLED_SELECT) play_sound(kSoundSelect);
@@ -2906,6 +2916,8 @@ bool g_hud_notice = false;   // A_Hud.xaml has the notice
 void d_pause_menu_wire(void* page) {
     g_custom_obj   = nullptr;   // back on the pause menu: no page of a mod's own design is up
     g_custom_shown = -1;
+    for (auto& obj : g_tile_page_obj) obj = nullptr;
+    g_focus_again.clear();
     g_hub_asked  = 0;
     g_hub_builds = 0;
     g_hub_return = false;
@@ -3216,7 +3228,11 @@ int settings_add(FH2Mod* m, const FH2Setting* s) {
 }
 
 int pages_add(FH2Mod* m, const FH2Page* p) {
-    if (!m || !p || p->size < offsetof(FH2Page, user) + sizeof(void*)) return 0;
+    if (!m || !p) return 0;
+    if (p->size < offsetof(FH2Page, user) + sizeof(void*)) {
+        log_line(m->name, "add_page: the FH2Page's size is too small (set size = sizeof(FH2Page))");
+        return 0;
+    }
     if (!valid_key(p->key)) {
         log_line(m->name, std::string("add_page: \"") + (p->key ? p->key : "") + "\" isn't a usable key (letters, digits, _)");
         return 0;
@@ -3236,7 +3252,10 @@ int pages_add(FH2Mod* m, const FH2Page* p) {
         return 0;
     }
     int tile = -1;
-    if (p->tile && *p->tile) {
+    if (p->tile && *p->tile && g_written) {
+        log_line(m->name, std::string("add_page: ") + p->key + " was added after the pages were written; its tile only works from the next launch "
+                                                               "(add pages from fh2mod_init)");
+    } else if (p->tile && *p->tile) {
         for (std::size_t t = 0; t < kTileCount; ++t)
             if (_stricmp(kTiles[t].name, p->tile) == 0) tile = static_cast<int>(t);
         if (tile < 0) {
@@ -3277,10 +3296,17 @@ int pages_set_rows(FH2Mod* m, const char* key, const FH2PageRow* rows, uint32_t 
     }
     std::vector<PageRowData> data;
     data.reserve(count);
+    // The rows are an array of the mod's FH2PageRow, which may be bigger (newer) or smaller (older)
+    // than the platform's: step by the first row's size, and read only what it covers.
+    const uint32_t stride = count ? rows[0].size : 0;
+    if (count && (stride < offsetof(FH2PageRow, style) || stride % alignof(FH2PageRow) != 0)) {
+        log_line(m->name, std::string("set_page_rows: ") + key + "'s rows have no usable size (set size = sizeof(FH2PageRow)); the rows weren't changed");
+        return 0;
+    }
     for (uint32_t i = 0; i < count; ++i) {
-        const FH2PageRow& r = rows[i];
-        if (r.size < offsetof(FH2PageRow, style)) {
-            log_line(m->name, std::string("set_page_rows: row ") + std::to_string(i) + " of " + key + " has no size; the rows weren't changed");
+        const FH2PageRow& r = *reinterpret_cast<const FH2PageRow*>(reinterpret_cast<const uint8_t*>(rows) + std::size_t{i} * stride);
+        if (r.size != stride) {
+            log_line(m->name, std::string("set_page_rows: row ") + std::to_string(i) + " of " + key + " isn't the size of the first; the rows weren't changed");
             return 0;
         }
         PageRowData& d = data.emplace_back();
@@ -3303,6 +3329,73 @@ int pages_set_rows(FH2Mod* m, const char* key, const FH2PageRow* rows, uint32_t 
 }
 
 namespace {
+// Whether `xaml` has a Button, Slider or SpinnerControl named `name`.
+bool focusable_in(const std::string& xaml, const std::string& name) {
+    const std::string attr = "x:Name=\"" + name + "\"";
+    for (std::size_t at = xaml.find(attr); at != std::string::npos; at = xaml.find(attr, at + 1)) {
+        const std::size_t lt = xaml.rfind('<', at);
+        if (lt == std::string::npos || xaml.find('>', lt) < at) continue;   // not in a tag
+        std::size_t e = lt + 1;
+        while (e < xaml.size() && !std::isspace(static_cast<unsigned char>(xaml[e])) && xaml[e] != '>' && xaml[e] != '/') ++e;
+        const std::string tag = xaml.substr(lt + 1, e - lt - 1);
+        if (tag == "Button" || tag == "Slider" || tag == "local:SpinnerControl") return true;
+    }
+    return false;
+}
+
+// Whether a XAML fragment's tags are balanced (quotes, comments and <?...?> allowed for): what the
+// game's reader would choke on worst, caught before it gets there.
+bool balanced_xml(const std::string& x, std::string& why) {
+    std::vector<std::string> open;
+    for (std::size_t i = 0; i < x.size();) {
+        if (x[i] != '<') {
+            ++i;
+            continue;
+        }
+        if (x.compare(i, 4, "<!--") == 0) {
+            const std::size_t e = x.find("-->", i + 4);
+            if (e == std::string::npos) return why = "a comment isn't closed", false;
+            i = e + 3;
+            continue;
+        }
+        if (x.compare(i, 2, "<?") == 0 || x.compare(i, 2, "<!") == 0) {
+            const std::size_t e = x.find('>', i);
+            if (e == std::string::npos) return why = "a declaration isn't closed", false;
+            i = e + 1;
+            continue;
+        }
+        // the tag's end, past quoted attribute values
+        std::size_t e = i + 1;
+        char quote    = 0;
+        for (; e < x.size(); ++e) {
+            if (quote) {
+                if (x[e] == quote) quote = 0;
+            } else if (x[e] == '"' || x[e] == '\'') {
+                quote = x[e];
+            } else if (x[e] == '>') {
+                break;
+            } else if (x[e] == '<') {
+                return why = "a '<' inside a tag", false;
+            }
+        }
+        if (e >= x.size()) return why = "a tag isn't closed", false;
+        const bool closing = x[i + 1] == '/', self = x[e - 1] == '/';
+        std::size_t n0 = i + (closing ? 2 : 1), n1 = n0;
+        while (n1 < e && !std::isspace(static_cast<unsigned char>(x[n1])) && x[n1] != '/' && x[n1] != '>') ++n1;
+        const std::string name = x.substr(n0, n1 - n0);
+        if (name.empty()) return why = "a tag without a name", false;
+        if (closing) {
+            if (open.empty() || open.back() != name) return why = "</" + name + "> doesn't match " + (open.empty() ? "anything" : "<" + open.back() + ">"), false;
+            open.pop_back();
+        } else if (!self) {
+            open.push_back(name);
+        }
+        i = e + 1;
+    }
+    if (!open.empty()) return why = "<" + open.back() + "> isn't closed", false;
+    return true;
+}
+
 int page_index(FH2Mod* m, const char* key) {   // under g_mu
     if (!m || !key) return -1;
     for (std::size_t j = 0; j < g_pages.size(); ++j)
@@ -3316,6 +3409,13 @@ int pages_set_xaml(FH2Mod* m, const char* key, const char* resources, const char
     if (!content || !std::strstr(content, "x:Name=\"FirstItem\"")) {
         log_line(m->name, std::string("set_page_xaml: ") + key + "'s content has no element named FirstItem; the page wasn't changed");
         return 0;
+    }
+    for (const auto& [what, text] : {std::pair{"resources", resources}, {"content", content}, {"help", help}}) {
+        std::string why;
+        if (text && !balanced_xml(text, why)) {
+            log_line(m->name, std::string("set_page_xaml: ") + key + "'s " + what + " isn't well-formed (" + why + "); the page wasn't changed");
+            return 0;
+        }
     }
     std::scoped_lock lk{g_mu};
     const int j = page_index(m, key);
@@ -3348,8 +3448,9 @@ int pages_set_slot(FH2Mod* m, const char* key, int slot, int value) {
         if (j < 0) return 0;
         old = g_pages[j].slots[slot].exchange(value);
     }
-    // on the UI thread, in a callback for the page that's up: its bindings see it now
-    if (old != value && g_in_callback && g_custom_shown.load() == j) notify_slot(slot, true);
+    // on the UI thread, in a callback for the page that's up: its bindings see it now (not the
+    // slot a binding is setting right now, from on_slot: that binding is in the middle of it)
+    if (old != value && g_in_callback && g_custom_shown.load() == j) notify_slot(slot, slot != g_setting_slot);
     return 1;
 }
 
@@ -3357,7 +3458,14 @@ int pages_focus(FH2Mod* m, const char* key, const char* name) {
     if (!name || !*name || !g_in_callback || !g_callback_page) return 0;
     {
         std::scoped_lock lk{g_mu};
-        if (page_index(m, key) != g_custom_shown.load()) return 0;
+        const int j = page_index(m, key);
+        if (j < 0 || j != g_custom_shown.load()) return 0;
+        // only a control the page's XAML (as written for this opening) names: focusing goes
+        // through the element's input interface, which other things named there don't have
+        if (!focusable_in(g_pages[j].xaml_written, name)) {
+            log_line(m->name, std::string("focus_page_element: ") + name + " isn't a Button, Slider or SpinnerControl on page " + key);
+            return 0;
+        }
     }
     if (!focus_named(g_callback_page, name)) {
         log_line(m->name, std::string("focus_page_element: no element called ") + name + " on page " + key);
