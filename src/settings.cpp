@@ -903,18 +903,24 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         if (const std::size_t tg = block.find(" Tag=\""); tg != std::string::npos) block.erase(tg, block.find('"', tg + 6) + 1 - tg);
         std::string blocks = block;
         if (views && view_titles && !views->empty()) {
-            std::string list_title = block;
-            swap_attr(list_title, "Visibility", "{Binding FH2Mod_View_0, Converter={StaticResource FH2Mod_ShowView}}");
-            blocks = list_title;
+            // On top of each other in a Grid, each in one of its own that the view switch holds
+            // as it does the lists (FH2Mod_Style_ListView_<k>), so the title changes with the
+            // content rather than before it.
+            auto held = [](std::size_t k, const std::string& el) {
+                return "<Grid HorizontalAlignment=\"Left\" Visibility=\"{Binding FH2Mod_View_" + std::to_string(k) +
+                       ", Converter={StaticResource FH2Mod_ShowList}}\" Style=\"{StaticResource FH2Mod_Style_ListView_" + std::to_string(k) +
+                       "}\">" + el + "</Grid>";
+            };
+            blocks = "<Grid>\r\n                        " + held(0, block);
             for (std::size_t k = 1; k <= views->size() && k <= view_titles->size(); ++k) {
                 std::string vt = block;
                 std::string name = (*view_titles)[k - 1];
                 for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
                 swap_attr(vt, "Content", xml_escape(name));
                 swap_attr(vt, "Tag", "{local:Loc ScreenTitles.IDS_MyProfile}");   // the game's grey "SETTINGS"
-                swap_attr(vt, "Visibility", "{Binding FH2Mod_View_" + std::to_string(k) + ", Converter={StaticResource FH2Mod_ShowView}}");
-                blocks += "\r\n                        " + vt;
+                blocks += "\r\n                        " + held(k, vt);
             }
+            blocks += "\r\n                        </Grid>";
         }
         page.replace(e0, e1 + 2 - e0, blocks);
     }
