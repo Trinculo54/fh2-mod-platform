@@ -232,6 +232,30 @@ void open_disk_image() {
          "was already changed outside the platform");
 }
 
+// Every page of the exe's executable sections is executable in memory. True when the sections
+// aren't known (the exe couldn't be read): there's nothing to check against.
+bool code_sections_executable(std::string* first_bad) {
+    const char* base = game_base();
+    if (!base || g_disk.sections.empty()) return true;
+    for (const auto& sec : g_disk.sections) {
+        if (!(sec.Characteristics & IMAGE_SCN_MEM_EXECUTE)) continue;
+        const char* p   = base + sec.VirtualAddress;
+        const char* end = p + sec.Misc.VirtualSize;
+        while (p < end) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            if (VirtualQuery(p, &mbi, sizeof mbi) != sizeof mbi) return false;
+            const bool exec = mbi.State == MEM_COMMIT &&
+                              (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
+            if (!exec) {
+                if (first_bad) *first_bad = where(p) + " isn't executable yet";
+                return false;
+            }
+            p = static_cast<const char*>(mbi.BaseAddress) + mbi.RegionSize;
+        }
+    }
+    return true;
+}
+
 // 1 if the game's bytes at [p, p+n) are as the exe on disk has them, 0 if
 // not, -1 if that can't be told. `pointer` compares one 8-byte pointer,
 // allowing for the image being mapped somewhere other than its preferred
@@ -322,6 +346,31 @@ std::string extra_options_state() {
 
 bool code_ready() { return g_code_ready.load(std::memory_order_acquire); }
 
+void open_disk_image();
+bool code_sections_executable(std::string* first_bad);
+
+// Azimuth maps the game as plain memory and only marks its code executable afterwards; Extra
+// Options can be done before that. Hooking in between fails ("it isn't code"), which happened
+// once: six of WreckingBall's hooks and WheresMyBuddy's within a few milliseconds of "ready".
+// So "ready" also waits until every executable section of the exe on disk is executable here.
+void wait_for_executable_code() {
+    {
+        std::scoped_lock lk{g_mu};
+        open_disk_image();
+    }
+    const ULONGLONG t0 = GetTickCount64();
+    std::string bad;
+    while (!code_sections_executable(&bad)) {
+        if (GetTickCount64() - t0 >= 10000) {
+            plog("hooks: the game's code still isn't all executable after 10 seconds (" + bad + "); going ahead");
+            return;
+        }
+        Sleep(10);
+    }
+    if (const ULONGLONG waited = GetTickCount64() - t0; waited >= 10)
+        plog("hooks: waited " + std::to_string(waited) + " ms for the game's code to be marked executable");
+}
+
 // Watches for the game being mapped, then for Extra Options to finish.
 void watch_for_code() {
     std::thread([] {
@@ -336,6 +385,7 @@ void watch_for_code() {
             }
             Sleep(50);
         }
+        wait_for_executable_code();
         plog("hooks: game code is ready (" + why + ")");
         g_code_ready.store(true, std::memory_order_release);
     }).detach();
@@ -778,9 +828,16 @@ int switch_hooks(FH2Mod* m, FH2Hook* hook, bool on) {
 
 // ---- the API -------------------------------------------------------------------------
 
+// A target in the game that isn't executable yet gets up to 2 seconds (see wait_for_executable_code).
+void settle(const void* code) {
+    if (!in_game(code)) return;
+    for (int i = 0; i < 200 && !executable(code); ++i) Sleep(10);
+}
+
 FH2Hook* api_hook_function(FH2Mod* m, const char* name, void* target, void* detour, void** original) {
     const std::string what = "function " + where(target) + (name ? std::string(" (") + name + ")" : "");
     if (!common_checks(m, what.c_str(), target, detour, original)) return nullptr;
+    settle(target);
     std::scoped_lock lk{g_mu};
     if (!executable(target)) {
         log_line(m->name, "can't hook " + what + ": it isn't code");
@@ -823,6 +880,7 @@ FH2Hook* api_hook_function(FH2Mod* m, const char* name, void* target, void* deto
 FH2Hook* api_hook_call(FH2Mod* m, const char* name, void* call_site, void* detour, void** original) {
     const std::string what = "call " + where(call_site) + (name ? std::string(" (") + name + ")" : "");
     if (!common_checks(m, what.c_str(), call_site, detour, original)) return nullptr;
+    settle(call_site);
     std::scoped_lock lk{g_mu};
     auto* at = static_cast<char*>(call_site);
     Site* s  = find_site(kCall, at);
@@ -850,6 +908,7 @@ FH2Hook* api_hook_call(FH2Mod* m, const char* name, void* call_site, void* detou
 FH2Hook* api_hook_pointer(FH2Mod* m, const char* name, void** slot, void* detour, void** original) {
     const std::string what = "pointer " + where(slot) + (name ? std::string(" (") + name + ")" : "");
     if (!common_checks(m, what.c_str(), slot, detour, original)) return nullptr;
+    if (readable(slot, 8) && !(reinterpret_cast<uintptr_t>(slot) & 7)) settle(*slot);
     std::scoped_lock lk{g_mu};
     auto* at = reinterpret_cast<char*>(slot);
     Site* s  = find_site(kPointer, at);
