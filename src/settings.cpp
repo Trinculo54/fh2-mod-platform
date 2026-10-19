@@ -325,6 +325,25 @@ void** __cdecl view_get(void** out, void* desc, void*) {
     return out;
 }
 void __cdecl view_set(void*, void*, uint8_t*) {}
+// FH2Mod_ViewBack: true once B (or A) has come back to the list from a mod's settings, until
+// the next mod's; its DataTrigger plays the "back" half of the view animation.
+std::atomic<bool> g_view_back{false};
+uint8_t* g_back_desc = nullptr;
+void** __cdecl back_get(void** out, void*, void*) {
+    bool v = g_view_back.load() && g_view.load() == 0;
+    *out   = nullptr;
+    reinterpret_cast<BoxBoolFn>(g_base + RVA_BOX_BOOL)(out, &v);
+    return out;
+}
+uint8_t* back_descriptor() {
+    std::scoped_lock lk{g_desc_mu};
+    if (!g_back_desc) {
+        void* bool_type = reinterpret_cast<TypeFn>(g_base + RVA_BOOL_TYPE)(0);
+        g_back_desc     = new_descriptor("FH2Mod_ViewBack", reinterpret_cast<void*>(&back_get), reinterpret_cast<void*>(&view_set), bool_type);
+    }
+    return g_back_desc;
+}
+
 uint8_t* view_descriptor(int k) {
     if (k < 0 || k >= kMaxViews) return nullptr;
     std::scoped_lock lk{g_desc_mu};
@@ -401,6 +420,7 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     if (std::wcscmp(n, L"FH2Mod_RestartNotice") == 0) return notice_descriptor();
     if (std::wcscmp(n, L"FH2Mod_Selected") == 0) return selected_descriptor();
     if (std::wcscmp(n, L"FH2Mod_UpdateBadge") == 0) return badge_descriptor();
+    if (std::wcscmp(n, L"FH2Mod_ViewBack") == 0) return back_descriptor();
     if (std::wcsncmp(n, L"FH2Mod_View_", 12) == 0) {
         int k = 0;
         for (const wchar_t* d = n + 12; *d; ++d) {
@@ -699,10 +719,56 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                 t.erase(si, std::string(" SelectedIndex=\"{Binding FH2Mod_Selected, Mode=TwoWay}\"").size());
             lists += "\r\n" + t + view_rows[k - 1] + "</local:CommonListBox>";
         }
+        // The view switch animates as the game's menus do between pages (Global_Transitions.xaml:
+        // fade in, and ZPanel.ZOffset to 0 with a quartic ease): into a mod's settings from
+        // behind (+300), back to the list from in front (-300). The list and description panel
+        // sit in a StackPanel styled A_Style_FrameworkElement_DefaultTransition_0; it gets a
+        // style based on that one with a DataTrigger per view.
+        auto zoom = [](const char* from) {
+            return std::string("                            <DataTrigger.EnterActions>\r\n"
+                               "                                <BeginStoryboard>\r\n"
+                               "                                    <Storyboard>\r\n"
+                               "                                        <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"Opacity\">\r\n"
+                               "                                            <LinearDoubleKeyFrame KeyTime=\"0\" Value=\"0\" />\r\n"
+                               "                                            <LinearDoubleKeyFrame KeyTime=\"0:0:0.3\" Value=\"1\" />\r\n"
+                               "                                        </DoubleAnimationUsingKeyFrames>\r\n"
+                               "                                        <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"(local:ZPanel.ZOffset)\">\r\n"
+                               "                                            <LinearDoubleKeyFrame KeyTime=\"0\" Value=\"") +
+                   from +
+                   "\" />\r\n"
+                   "                                            <EasingDoubleKeyFrame KeyTime=\"0:0:0.3\" Value=\"0\">\r\n"
+                   "                                                <EasingDoubleKeyFrame.EasingFunction>\r\n"
+                   "                                                    <QuarticEase EasingMode=\"EaseOut\"/>\r\n"
+                   "                                                </EasingDoubleKeyFrame.EasingFunction>\r\n"
+                   "                                            </EasingDoubleKeyFrame>\r\n"
+                   "                                        </DoubleAnimationUsingKeyFrames>\r\n"
+                   "                                    </Storyboard>\r\n"
+                   "                                </BeginStoryboard>\r\n"
+                   "                            </DataTrigger.EnterActions>\r\n";
+        };
+        std::string style = "\r\n            <Style x:Key=\"FH2Mod_Style_Views\" TargetType=\"{x:Type FrameworkElement}\" "
+                            "BasedOn=\"{StaticResource A_Style_FrameworkElement_DefaultTransition_0}\">\r\n"
+                            "                <Style.Triggers>\r\n";
+        for (std::size_t k = 1; k <= view_rows.size(); ++k)
+            style += "                    <DataTrigger Binding=\"{Binding FH2Mod_View_" + std::to_string(k) + "}\" Value=\"True\">\r\n" +
+                     zoom("300") + "                    </DataTrigger>\r\n";
+        style += "                    <DataTrigger Binding=\"{Binding FH2Mod_ViewBack}\" Value=\"True\">\r\n" + zoom("-300") +
+                 "                    </DataTrigger>\r\n"
+                 "                </Style.Triggers>\r\n"
+                 "            </Style>\r\n        ";
+        const std::string content = "<StackPanel Orientation=\"Horizontal\" Style=\"{StaticResource A_Style_FrameworkElement_DefaultTransition_0}\"";
+        const std::size_t c = page.find(content), rd = page.find("</ResourceDictionary>");
+        const bool animate = c != std::string::npos && c < l0 && rd != std::string::npos && rd < c;
         const std::size_t close = l1 + std::string("</local:CommonListBox>").size();
         page.insert(close, lists + "\r\n</Grid>");
         page.insert(l0 + std::string("<local:CommonListBox").size(), list_vis(0));
         page.insert(l0, "<Grid>\r\n");
+        if (animate) {   // (both before l0, so the positions above stand)
+            page.replace(c, content.size(), "<StackPanel Orientation=\"Horizontal\" Style=\"{StaticResource FH2Mod_Style_Views}\"");
+            page.insert(rd, style);
+        } else {
+            slog("A_HUDOptions.xaml doesn't look as expected; Installed mods won't animate");
+        }
     }
     // Under each description panel's text, at the bottom of the panel: the selected row's
     // version (red when there's a newer one) and GitHub page, from its data item (see
@@ -1677,8 +1743,11 @@ void switch_view(void* page, int k) {
     const int old = g_view.exchange(k);
     if (old == k) return;
     play_sound(k ? kSoundOpen : kSoundClose);
+    slog(std::string("debug: played ") + (k ? "SubMenuOpen" : "SubMenuClose"));
+    g_view_back = k == 0;
     notify_view(old);
     notify_view(k);
+    if (void* obj = g_view_obj.load(); obj && g_back_desc) notify_changed(obj, g_back_desc);
     std::string name;
     if (k > 0) {
         name = "FH2Mod_First_" + std::to_string(k);
@@ -1729,6 +1798,7 @@ void d_hud_page_loaded(void* page) {
         g_installed_page = page;
         g_selected       = 0;
         g_view           = 0;
+        g_view_back      = false;
     } else if (g_installed_page.load() == page) {
         g_installed_page = nullptr;
     }
