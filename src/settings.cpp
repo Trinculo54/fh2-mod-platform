@@ -619,7 +619,7 @@ void swap_attr(std::string& el, const std::string& name, const std::string& valu
 }
 
 bool write_list_page(const char* file, const std::string& title, const std::vector<PageItem>& items, bool track_selection = false,
-                     const std::vector<std::vector<PageItem>>* views = nullptr) {
+                     const std::vector<std::vector<PageItem>>* views = nullptr, const std::vector<std::string>* view_titles = nullptr) {
     std::string page = read_ui("Scenes/Anthem/A_HUDOptions.xaml");
     if (page.empty()) return false;
     std::string res = "\r\n            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowNotice\" UseHidden=\"true\" InvertResult=\"false\" />\r\n"
@@ -892,8 +892,32 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         set_attr(view_bar, "Visibility", "{Binding FH2Mod_View_0, Converter={StaticResource FH2Mod_HideView}}");
         page.replace(h0, h1 + 2 - h0, "<Grid>\r\n" + list_bar + "\r\n" + view_bar + "\r\n</Grid>");
     }
+    // The title: ours alone, without the game's grey "SETTINGS /" before it (a title block with
+    // no Tag shows just its Content). A view (a mod's settings) has its own: "INSTALLED MODS /
+    // <MOD>", shown with it.
     const std::size_t t = page.find(title_attr);
     page.replace(t, title_attr.size(), "Content=\"" + xml_escape(title) + "\"");
+    {
+        const std::size_t e0 = page.rfind("<ContentControl", t), e1 = page.find("/>", t);
+        std::string block    = page.substr(e0, e1 + 2 - e0);
+        if (const std::size_t tg = block.find(" Tag=\""); tg != std::string::npos) block.erase(tg, block.find('"', tg + 6) + 1 - tg);
+        std::string blocks = block;
+        if (views && view_titles && !views->empty()) {
+            std::string list_title = block;
+            swap_attr(list_title, "Visibility", "{Binding FH2Mod_View_0, Converter={StaticResource FH2Mod_ShowView}}");
+            blocks = list_title;
+            for (std::size_t k = 1; k <= views->size() && k <= view_titles->size(); ++k) {
+                std::string vt = block;
+                std::string name = (*view_titles)[k - 1];
+                for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                swap_attr(vt, "Content", xml_escape(name));
+                swap_attr(vt, "Tag", xml_escape(title));
+                swap_attr(vt, "Visibility", "{Binding FH2Mod_View_" + std::to_string(k) + ", Converter={StaticResource FH2Mod_ShowView}}");
+                blocks += "\r\n                        " + vt;
+            }
+        }
+        page.replace(e0, e1 + 2 - e0, blocks);
+    }
     // Extra Options adds its rows to pages declared x:Class="ForzaUI.A_HudOptions" as the game
     // loads them; a space before the '=' is the same XML but keeps them on the HUD page.
     const std::string cls = "x:Class=\"ForzaUI.A_HudOptions\"";
@@ -1206,7 +1230,9 @@ bool write_hub_page(int p) {
         case kHubInstalled: {
             std::vector<std::vector<PageItem>> views;
             for (std::size_t i = 0; i < g_entries.size() && i + 1 < static_cast<std::size_t>(kMaxViews); ++i) views.push_back(mod_page_items(i));
-            return write_list_page(hub_file(p).c_str(), "INSTALLED MODS", installed_items(), true, &views);
+            std::vector<std::string> names;
+            for (std::size_t i = 0; i < views.size(); ++i) names.push_back(g_entries[i].name);
+            return write_list_page(hub_file(p).c_str(), "INSTALLED MODS", installed_items(), true, &views, &names);
         }
         case kHubUpdates: return write_list_page(hub_file(p).c_str(), "UPDATES", updates_items(), true);
         case kHubAbout: return write_list_page(hub_file(p).c_str(), "ABOUT", about_items());
