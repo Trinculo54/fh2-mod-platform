@@ -1,5 +1,5 @@
 // In-game settings (API 4, sliders API 5): On/Off and slider rows for mods on a Mods page of
-// the game's own.
+// the game's own. Also the MODS tab (platform 2.5.0) and the mods' own pages (API 8).
 //
 // What the player sees:
 //  - Pause > Settings gets a sixth tile, MODS. It opens a page laid out like the HUD options
@@ -40,6 +40,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cctype>
@@ -49,6 +50,7 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -104,6 +106,56 @@ struct LinkRow {
 };
 std::deque<LinkRow> g_links;         // guarded by g_mu
 std::atomic<bool> g_written{false};  // the pages have been written
+
+// Pages of the mods' own (API 8): a row on their mod's page under Installed mods opens them
+// (as a view of that page, like the mod's own), and a page can take over a game tile.
+struct PageRowData {
+    std::string key, label, value, description, footer;
+    int style       = FH2_ROW_NORMAL;
+    bool value_alert = false;
+};
+struct ModPage {
+    FH2Mod* mod;
+    std::string key, title, label, description;
+    int tile = -1;                   // index in kTiles, or -1
+    FH2PageOpenFn on_open     = nullptr;
+    FH2PageSelectFn on_select = nullptr;
+    void* user                = nullptr;
+    std::vector<PageRowData> rows;
+    // a page of the mod's own design (set_page_xaml)
+    FH2PageButtonFn on_button = nullptr;
+    FH2PageSlotFn on_slot     = nullptr;
+    bool custom               = false;
+    std::string xaml_resources, xaml_content, xaml_help;
+    std::string xaml_written;        // the content as last written (what's on screen)
+    std::array<std::atomic<int>, FH2_PAGE_SLOTS> slots{};
+    std::string tile_text;           // on its tile (set_page_tile_text)
+    uint32_t tile_back = 0, tile_fore = 0;   // its tile's colours, 0xAARRGGBB; 0 the game's (set_page_tile_colors)
+};
+std::deque<ModPage> g_pages;         // guarded by g_mu (pages are never removed)
+constexpr std::size_t kMaxPages    = 64;
+constexpr std::size_t kMaxPageRows = 1000;
+
+// The game's tiles a page can take over: each one's handler calls 0x140CB47B0(page, &out,
+// 0xFE), a UI command that brought up the Xbox's own achievements app. Those calls (hook_call)
+// open the page instead; the handler's own checks still run first.
+struct GameTile {
+    const char* name;
+    uintptr_t calls[2];              // the CALL instructions (rva)
+    const char* buttons[2];          // the tiles in A_PauseMenu.xaml
+};
+constexpr GameTile kTiles[] = {
+    // PART_Button_Achievements (0x140DBD610) and the Storm Island tab's
+    // PART_Button_Panama_Achievements (0x140DBF150, which first checks the tile has the focus)
+    {"Achievements", {0x0DBD635, 0x0DBF185}, {"PART_Button_Achievements", "PART_Button_Panama_Achievements"}},
+};
+constexpr std::size_t kTileCount = sizeof kTiles / sizeof kTiles[0];
+// the page in g_pages that has each tile, or -1 (guarded by g_mu)
+std::array<int, kTileCount> g_tile_page = [] {
+    std::array<int, kTileCount> a{};
+    a.fill(-1);
+    return a;
+}();
 
 bool valid_key(const char* k) {
     if (!k || !*k) return false;
@@ -343,49 +395,64 @@ uint8_t* view_selected_descriptor() {
     return g_view_selected_desc;
 }
 
-// FH2Mod_View_<k>: whether view k of Installed mods is showing (0: the list, k: mod k-1's
-// settings). Showing another view hides the rest; see switch_view.
-constexpr int kMaxViews = 65;
+// FH2Mod_View_<k>: whether view k of Installed mods is showing (0: the list, 1..64: a mod's
+// settings, then the mods' pages). Showing another view hides the rest; see switch_view.
+// FH2Mod_ViewIn_<k> is the same, but only when the view came forwards (A, from the list or a
+// mod's row), FH2Mod_ViewBack_<k> only when it came back (B); their DataTriggers play the
+// switch's "in" and "back" animations. FH2Mod_Bar_<b>: which help bar shows (kBarList and so on).
+constexpr int kMaxModViews  = 64;
+constexpr int kMaxPageViews = 64;
+constexpr int kMaxViews     = 1 + kMaxModViews + kMaxPageViews;
+enum ViewKind { kViewList = 0, kViewMod, kViewPage, kViewPageSelect, kViewKinds };
 std::atomic<int> g_view{0};
-uint8_t* g_view_desc[kMaxViews] = {};
+std::atomic<bool> g_view_back{false};       // the view showing came back (B), not forwards
+std::array<std::atomic<int>, kMaxViews> g_view_kind{};   // each view's ViewKind, as last written
+uint8_t* g_view_desc[kMaxViews]      = {};
+uint8_t* g_view_in_desc[kMaxViews]   = {};
+uint8_t* g_view_back_desc[kMaxViews] = {};
+uint8_t* g_bar_desc[kViewKinds]      = {};
+int view_kind(int k) { return k >= 0 && k < kMaxViews ? g_view_kind[k].load() : kViewList; }
 void** __cdecl view_get(void** out, void* desc, void*) {
+    const int now = g_view.load();
+    const bool back = g_view_back.load();
     bool v = false;
-    for (int k = 0; k < kMaxViews; ++k)
-        if (g_view_desc[k] == desc) v = g_view.load() == k;
+    for (int k = 0; k < kMaxViews; ++k) {
+        if (g_view_desc[k] == desc) v = now == k;
+        else if (g_view_in_desc[k] == desc) v = now == k && !back;
+        else if (g_view_back_desc[k] == desc) v = now == k && back;
+        else continue;
+        break;
+    }
+    for (int b = 0; b < kViewKinds; ++b)
+        if (g_bar_desc[b] == desc) v = view_kind(now) == b;
     *out = nullptr;
     reinterpret_cast<BoxBoolFn>(g_base + RVA_BOX_BOOL)(out, &v);
     return out;
 }
 void __cdecl view_set(void*, void*, uint8_t*) {}
-// FH2Mod_ViewBack: true once B (or A) has come back to the list from a mod's settings, until
-// the next mod's; its DataTrigger plays the "back" half of the view animation.
-std::atomic<bool> g_view_back{false};
-uint8_t* g_back_desc = nullptr;
-void** __cdecl back_get(void** out, void*, void*) {
-    bool v = g_view_back.load() && g_view.load() == 0;
-    *out   = nullptr;
-    reinterpret_cast<BoxBoolFn>(g_base + RVA_BOX_BOOL)(out, &v);
-    return out;
-}
-uint8_t* back_descriptor() {
-    std::scoped_lock lk{g_desc_mu};
-    if (!g_back_desc) {
-        void* bool_type = reinterpret_cast<TypeFn>(g_base + RVA_BOOL_TYPE)(0);
-        g_back_desc     = new_descriptor("FH2Mod_ViewBack", reinterpret_cast<void*>(&back_get), reinterpret_cast<void*>(&view_set), bool_type);
+
+// "FH2Mod_View_<k>" and the like: the number after `prefix` (below `limit`), or -1
+int name_number(const wchar_t* n, const wchar_t* prefix, int limit) {
+    const std::size_t len = std::wcslen(prefix);
+    if (std::wcsncmp(n, prefix, len) != 0 || !n[len]) return -1;
+    int k = 0;
+    for (const wchar_t* d = n + len; *d; ++d) {
+        if (*d < L'0' || *d > L'9') return -1;
+        k = k * 10 + (*d - L'0');
+        if (k >= limit) return -1;
     }
-    return g_back_desc;
+    return k;
 }
 
-uint8_t* view_descriptor(int k) {
-    if (k < 0 || k >= kMaxViews) return nullptr;
+uint8_t* flag_descriptor(uint8_t*& slot, const std::string& name) {
     std::scoped_lock lk{g_desc_mu};
-    if (!g_view_desc[k]) {
+    if (!slot) {
         static std::deque<std::string> names;   // the descriptor keeps the pointer
-        names.push_back("FH2Mod_View_" + std::to_string(k));
+        names.push_back(name);
         void* bool_type = reinterpret_cast<TypeFn>(g_base + RVA_BOOL_TYPE)(0);
-        g_view_desc[k]  = new_descriptor(names.back().c_str(), reinterpret_cast<void*>(&view_get), reinterpret_cast<void*>(&view_set), bool_type);
+        slot = new_descriptor(names.back().c_str(), reinterpret_cast<void*>(&view_get), reinterpret_cast<void*>(&view_set), bool_type);
     }
-    return g_view_desc[k];
+    return slot;
 }
 
 // FH2Mod_UpdateBadge: "!" on the MODS tab (its Tag, as the other tabs' notification counts)
@@ -429,6 +496,94 @@ uint8_t* badge_descriptor(bool error) {
     return d;
 }
 
+// A tile a mod's page has, from its set_page_tile_text and set_page_tile_colors:
+//  - FH2Mod_TileText_<t>: the text, an AVUI String of the tabs' badge type (like
+//    FH2Mod_UpdateBadge). Each text's String is made once and never freed (a few per session).
+//  - FH2Mod_TileBack_<t>, _TileTitle_<t>, _TileLine_<t>, _TileIcon_<t>: Colors (the type and
+//    boxing of the game's TeamColor property, 0x140C09BD0: 0x1415C8D80 and 0x140BEA4E0, four
+//    floats R, G, B, A from 0 to 1). Unset, they're the game's: the tile background, the tile
+//    title, the club tile's count, and white (the icon untinted).
+// The getter notes what it read from, the pause menu page, so the next time that page is wired
+// it's told they may have changed.
+enum TileProp { kTileText, kTileBack, kTileTitle, kTileLine, kTileIcon, kTileProps };
+const wchar_t* const kTilePropNames[kTileProps] = {L"FH2Mod_TileText_", L"FH2Mod_TileBack_", L"FH2Mod_TileTitle_", L"FH2Mod_TileLine_",
+                                                   L"FH2Mod_TileIcon_"};
+constexpr uintptr_t RVA_COLOR_TYPE = 0x15C8D80;   // the Color type, (0)
+constexpr uintptr_t RVA_BOX_COLOR  = 0xBEA4E0;    // ObjectPtr* box(ObjectPtr* out, const float rgba[4])
+uint8_t* g_tile_desc[kTileProps][kTileCount] = {};
+std::atomic<void*> g_tile_obj[kTileCount] = {};
+std::mutex g_tile_text_mu;
+std::deque<std::pair<std::string, uint8_t*>> g_tile_strings;   // guarded by g_tile_text_mu
+uint8_t* tile_string(const std::string& text) {
+    std::scoped_lock lk{g_tile_text_mu};
+    for (auto& [t, str] : g_tile_strings)
+        if (t == text) return str;
+    uint8_t* str = static_cast<uint8_t*>(_aligned_malloc(0x80, 16));
+    std::memset(str, 0, 0x80);
+    reinterpret_cast<void (*)(void*, const char*, int)>(g_base + 0x1663220)(str, text.c_str(), -1);
+    *reinterpret_cast<int32_t*>(str + 0x10) += 1 << 20;   // never freed
+    g_tile_strings.emplace_back(text, str);
+    return str;
+}
+// The page on tile t's text and colours (as given: 0 for the game's).
+struct TileLook {
+    std::string text;
+    uint32_t back = 0, fore = 0;
+};
+TileLook tile_look(std::size_t t) {
+    std::scoped_lock lk{g_mu};
+    const int j = t < kTileCount ? g_tile_page[t] : -1;
+    if (j < 0) return {};
+    return {g_pages[j].tile_text, g_pages[j].tile_back, g_pages[j].tile_fore};
+}
+uint32_t tile_color(int prop, const TileLook& l) {
+    switch (prop) {
+        case kTileBack: return l.back ? l.back : 0xFFF5F5F5;    // A_Color_Tile_Background
+        case kTileTitle: return l.fore ? l.fore : 0xFF21293A;   // A_Color_Tile_Title
+        case kTileLine: return l.fore ? l.fore : 0xFFFE5723;    // A_Color_Tile_Selected (the club count)
+        default: return l.back ? l.back : 0xFFFFFFFF;           // the icon in the background's colour
+    }
+}
+void** __cdecl tile_prop_get(void** out, void* desc, void* obj) {
+    *out = nullptr;
+    for (std::size_t t = 0; t < kTileCount; ++t)
+        for (int prop = 0; prop < kTileProps; ++prop) {
+            if (g_tile_desc[prop][t] != desc) continue;
+            if (obj) g_tile_obj[t] = obj;
+            const TileLook l = tile_look(t);
+            if (prop == kTileText) {
+                uint8_t* v = tile_string(l.text);
+                InterlockedIncrement(reinterpret_cast<volatile LONG*>(v + 0x10));   // the caller releases it
+                *out = v;
+            } else {
+                const uint32_t c = tile_color(prop, l);
+                alignas(16) float rgba[4] = {((c >> 16) & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, (c & 0xFF) / 255.0f, (c >> 24) / 255.0f};
+                reinterpret_cast<void** (*)(void**, const float*)>(g_base + RVA_BOX_COLOR)(out, rgba);
+            }
+            return out;
+        }
+    return out;
+}
+uint8_t* tile_descriptor(int prop, std::size_t t) {
+    std::scoped_lock lk{g_desc_mu};
+    static const uint8_t badge_type[] = {0x48, 0x8D, 0x05, 0x59, 0xB0, 0x02, 0x02, 0xC3};
+    static const uint8_t color_type[] = {0x80, 0x3D, 0x19, 0xD3, 0x0E, 0x02, 0x00, 0x75, 0x36};
+    static const uint8_t box_color[]  = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0xD9, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00};
+    uint8_t*& d = g_tile_desc[prop][t];
+    if (d) return d;
+    const bool text = prop == kTileText;
+    if (text ? !code_matches(RVA_BADGE_TYPE, badge_type, sizeof badge_type)
+             : !code_matches(RVA_COLOR_TYPE, color_type, sizeof color_type) || !code_matches(RVA_BOX_COLOR, box_color, sizeof box_color))
+        return nullptr;
+    static std::deque<std::string> names;   // the descriptor keeps the pointer
+    std::string name;
+    for (const wchar_t* c = kTilePropNames[prop]; *c; ++c) name += static_cast<char>(*c);
+    names.push_back(name + std::to_string(t));
+    void* type = reinterpret_cast<TypeFn>(g_base + (text ? RVA_BADGE_TYPE : RVA_COLOR_TYPE))(0);
+    d = new_descriptor(names.back().c_str(), reinterpret_cast<void*>(&tile_prop_get), reinterpret_cast<void*>(&badge_set), type);
+    return d;
+}
+
 uint8_t* notice_descriptor() {
     std::scoped_lock lk{g_desc_mu};
     if (!g_notice_desc) {
@@ -466,6 +621,156 @@ uint8_t* mod_notice_descriptor() {
     return g_mod_notice_desc;
 }
 
+// ---- pages of a mod's own design: their slots (API 8) ------------------------------------------
+// FH2Mod_Slot_<n>: an int of the page's, for two-way bindings; FH2Mod_Slot_<n>_Is_<v>: whether
+// it's v. They read the page being opened or shown (g_custom_shown). A mod changes them from its
+// callbacks, which run with g_in_callback set (on the UI thread, while the page is up).
+std::atomic<int> g_custom_shown{-1};       // the page in g_pages whose slots the bindings read
+std::atomic<void*> g_custom_obj{nullptr};  // what its bindings read from (for PropertyChanged); null when it's gone
+thread_local bool g_in_callback = false;   // in a mod's on_button or on_slot for the page showing
+thread_local void* g_callback_page = nullptr;   // in on_button: that page (for focusing); null in on_slot
+thread_local int g_setting_slot = -1;           // in on_slot: the slot a binding is setting
+// Sets the three for a callback, and puts back what they were (callbacks can nest: a slot set
+// from on_button can come back through a binding into on_slot).
+struct InCallback {
+    bool in;
+    void* page;
+    int slot;
+    InCallback(void* p, int setting) : in(g_in_callback), page(g_callback_page), slot(g_setting_slot) {
+        g_in_callback   = true;
+        g_callback_page = p;
+        g_setting_slot  = setting;
+    }
+    ~InCallback() {
+        g_in_callback   = in;
+        g_callback_page = page;
+        g_setting_slot  = slot;
+    }
+};
+uint8_t* g_slot_desc[FH2_PAGE_SLOTS] = {};
+struct SlotIs {
+    int slot, value;
+    uint8_t* desc;
+};
+std::vector<SlotIs> g_slot_is;             // guarded by g_desc_mu
+
+int slot_value(int n) {
+    const int j = g_custom_shown.load();
+    std::scoped_lock lk{g_mu};
+    if (j < 0 || static_cast<std::size_t>(j) >= g_pages.size() || n < 0 || n >= FH2_PAGE_SLOTS) return 0;
+    return g_pages[j].slots[n].load();
+}
+
+int slot_of(void* desc) {
+    for (int n = 0; n < FH2_PAGE_SLOTS; ++n)
+        if (g_slot_desc[n] == desc) return n;
+    return -1;
+}
+
+// Tells the page's bindings slot n changed: its _Is_ properties, and the slot itself if asked.
+void notify_slot(int n, bool self) {
+    void* obj = g_custom_obj.load();
+    if (!obj) return;
+    std::vector<uint8_t*> descs;
+    {
+        std::scoped_lock lk{g_desc_mu};
+        for (const SlotIs& s : g_slot_is)
+            if (s.slot == n) descs.push_back(s.desc);
+        if (self && g_slot_desc[n]) descs.push_back(g_slot_desc[n]);
+    }
+    for (uint8_t* d : descs) notify_changed(obj, d);
+}
+
+bool call_on_slot(FH2PageSlotFn fn, void* user, const char* key, int slot, int value) {
+    __try {
+        fn(user, key, slot, value);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void** __cdecl slot_get(void** out, void* desc, void* obj) {
+    if (obj) g_custom_obj = obj;
+    int v = slot_value(slot_of(desc));
+    *out  = nullptr;
+    reinterpret_cast<BoxIntFn>(g_base + RVA_BOX_INT)(out, &v);
+    return out;
+}
+void __cdecl slot_set(void* desc, void* obj, uint8_t* value) {
+    const int n = slot_of(desc), j = g_custom_shown.load();
+    if (n < 0 || j < 0 || !value || !readable(value + 0x28, 4)) return;
+    if (obj) g_custom_obj = obj;
+    const int v = *reinterpret_cast<int*>(value + 0x28);
+    FH2Mod* mod = nullptr;
+    FH2PageSlotFn fn = nullptr;
+    void* user = nullptr;
+    std::string key;
+    {
+        std::scoped_lock lk{g_mu};
+        if (static_cast<std::size_t>(j) >= g_pages.size()) return;
+        ModPage& pg = g_pages[j];
+        if (pg.slots[n].exchange(v) == v) return;
+        mod  = pg.mod;
+        fn   = pg.on_slot;
+        user = pg.user;
+        key  = pg.key;
+    }
+    notify_slot(n, false);
+    if (!fn) return;
+    // inside the binding's set: no focusing from here, and the slot being set isn't notified again
+    InCallback in{nullptr, n};
+    if (!call_on_slot(fn, user, key.c_str(), n, v)) log_line(mod->name, "crashed in its on_slot for page " + key);
+}
+void** __cdecl slot_is_get(void** out, void* desc, void* obj) {
+    if (obj) g_custom_obj = obj;
+    int n = -1, want = 0;
+    {
+        std::scoped_lock lk{g_desc_mu};
+        for (const SlotIs& s : g_slot_is)
+            if (s.desc == desc) {
+                n    = s.slot;
+                want = s.value;
+            }
+    }
+    bool v = n >= 0 && slot_value(n) == want;
+    *out   = nullptr;
+    reinterpret_cast<BoxBoolFn>(g_base + RVA_BOX_BOOL)(out, &v);
+    return out;
+}
+
+// "FH2Mod_Slot_<n>" or "FH2Mod_Slot_<n>_Is_<v>"
+uint8_t* slot_descriptor(const wchar_t* n) {
+    const wchar_t* d = n + 12;   // after "FH2Mod_Slot_"
+    int slot = 0, digits = 0;
+    for (; *d >= L'0' && *d <= L'9' && digits < 3; ++d, ++digits) slot = slot * 10 + (*d - L'0');
+    if (!digits || slot >= FH2_PAGE_SLOTS) return nullptr;
+    if (!*d) {
+        std::scoped_lock lk{g_desc_mu};
+        if (!g_slot_desc[slot]) {
+            static std::deque<std::string> names;   // the descriptor keeps the pointer
+            names.push_back("FH2Mod_Slot_" + std::to_string(slot));
+            g_slot_desc[slot] = new_descriptor(names.back().c_str(), reinterpret_cast<void*>(&slot_get), reinterpret_cast<void*>(&slot_set), nullptr);
+        }
+        return g_slot_desc[slot];
+    }
+    if (std::wcsncmp(d, L"_Is_", 4) != 0) return nullptr;
+    d += 4;
+    int value = 0;
+    digits    = 0;
+    for (; *d >= L'0' && *d <= L'9' && digits < 4; ++d, ++digits) value = value * 10 + (*d - L'0');
+    if (!digits || *d) return nullptr;
+    std::scoped_lock lk{g_desc_mu};
+    for (const SlotIs& s : g_slot_is)
+        if (s.slot == slot && s.value == value) return s.desc;
+    static std::deque<std::string> names;
+    names.push_back("FH2Mod_Slot_" + std::to_string(slot) + "_Is_" + std::to_string(value));
+    void* bool_type = reinterpret_cast<TypeFn>(g_base + RVA_BOOL_TYPE)(0);
+    uint8_t* desc   = new_descriptor(names.back().c_str(), reinterpret_cast<void*>(&slot_is_get), reinterpret_cast<void*>(&view_set), bool_type);
+    if (desc) g_slot_is.push_back({slot, value, desc});
+    return desc;
+}
+
 using FindPropertyFn = uint8_t* (*)(uint8_t* type, uint8_t* name);
 FindPropertyFn o_find_property = nullptr;
 
@@ -487,17 +792,16 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     if (std::wcscmp(n, L"FH2Mod_ViewSelected") == 0) return view_selected_descriptor();
     if (std::wcscmp(n, L"FH2Mod_UpdateBadge") == 0) return badge_descriptor(false);
     if (std::wcscmp(n, L"FH2Mod_ErrorBadge") == 0) return badge_descriptor(true);
-    if (std::wcscmp(n, L"FH2Mod_ViewBack") == 0) return back_descriptor();
     if (std::wcscmp(n, L"FH2Mod_ModNotice") == 0) return mod_notice_descriptor();
-    if (std::wcsncmp(n, L"FH2Mod_View_", 12) == 0) {
-        int k = 0;
-        for (const wchar_t* d = n + 12; *d; ++d) {
-            if (*d < L'0' || *d > L'9') return nullptr;
-            k = k * 10 + (*d - L'0');
-            if (k >= kMaxViews) return nullptr;
-        }
-        return view_descriptor(k);
-    }
+    if (const int k = name_number(n, L"FH2Mod_View_", kMaxViews); k >= 0) return flag_descriptor(g_view_desc[k], "FH2Mod_View_" + std::to_string(k));
+    if (const int k = name_number(n, L"FH2Mod_ViewIn_", kMaxViews); k >= 0)
+        return flag_descriptor(g_view_in_desc[k], "FH2Mod_ViewIn_" + std::to_string(k));
+    if (const int k = name_number(n, L"FH2Mod_ViewBack_", kMaxViews); k >= 0)
+        return flag_descriptor(g_view_back_desc[k], "FH2Mod_ViewBack_" + std::to_string(k));
+    if (const int b = name_number(n, L"FH2Mod_Bar_", kViewKinds); b >= 0) return flag_descriptor(g_bar_desc[b], "FH2Mod_Bar_" + std::to_string(b));
+    for (int prop = 0; prop < kTileProps; ++prop)
+        if (const int t = name_number(n, kTilePropNames[prop], static_cast<int>(kTileCount)); t >= 0) return tile_descriptor(prop, t);
+    if (std::wcsncmp(n, L"FH2Mod_Slot_", 12) == 0) return slot_descriptor(n);
     Row* r = row_by_prop(n);
     return r ? descriptor_for(r) : nullptr;
 }
@@ -605,13 +909,27 @@ struct PageItem {
     std::string note, version, version_alert, link;
     bool note_alert = false;         // the note is an error (shown in red)
     std::string open;                // what A opens on this row (a link row's URL), or ""
+    int style = FH2_ROW_NORMAL;      // a line of information: FH2_ROW_DIM, FH2_ROW_HEADING (API 8)
+    std::string name;                // its x:Name, when something focuses it ("" for none)
+    int open_view = 0;               // on Installed mods: the view (a mod's page) A shows, or 0
+    std::string select;              // a page's row: the key A passes to on_select, or ""
 };
 
 // A line of information is a Button laid out like a row: label left, value right. The first
 // row is always x:Name="FirstItem" (the page focuses it); so is a button there.
 std::string button_name(const PageItem& it, bool first) {
     if (first) return "FirstItem";
+    if (!it.name.empty()) return it.name;
     return it.button >= 0 ? "PART_Button_FH2Mod_" + std::to_string(it.button) : "";
+}
+
+// a line of information's look (FH2_ROW_...): its template (see write_list_page)
+const char* info_template(int style) {
+    switch (style) {
+        case FH2_ROW_DIM: return "FH2Mod_InfoRow_Dim";
+        case FH2_ROW_HEADING: return "FH2Mod_InfoRow_Heading";
+        default: return "FH2Mod_InfoRow";
+    }
 }
 
 FH2Mod g_hub_owner;                  // the MODS tab's own rows (a switch per mod)
@@ -657,7 +975,7 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
                 const std::string name = n == 0 ? first_name : button_name(it, false);
                 rows += "                                        <Button Tag=\"{StaticResource " + key +
                         "}\" local:BindingProxy.A=\"" + xml_escape(it.label) + "\" local:BindingProxy.C=\"" + xml_escape(it.value) + "\" local:BindingProxy.B=\"" + xml_escape(it.value_alert) +
-                        "\"" + content + " Template=\"{StaticResource FH2Mod_InfoRow}\"" + (name.empty() ? "" : " x:Name=\"" + name + "\"") +
+                        "\"" + content + " Template=\"{StaticResource " + info_template(it.style) + "}\"" + (name.empty() ? "" : " x:Name=\"" + name + "\"") +
                         " />\r\n";
                 continue;
             }
@@ -694,34 +1012,77 @@ void swap_attr(std::string& el, const std::string& name, const std::string& valu
     el.replace(v, e - v, value);
 }
 
+// A view of Installed mods: a mod's settings ("SETTINGS / <MOD>") or a mod's page (its title alone).
+struct ViewTitle {
+    std::string title;
+    bool settings = true;
+};
+
+// A line of information is a Button with one of these templates: label left, value right (or
+// the same in red). FH2Mod_Text_Dim is the rows' text in grey, FH2Mod_Text_Heading in the
+// game's orange; both turn the selected row's colour when it has the focus, as the rows' own
+// text (A_Style_SliderControlText, Shared_OptionsScreens.xaml) does.
+std::string info_row_resources() {
+    auto text_style = [](const char* key, const char* color) {
+        return std::string("            <Style x:Key=\"") + key +
+               "\" TargetType=\"local:FZTextBlock\" BasedOn=\"{StaticResource A_Style_SliderControlText}\">\r\n"
+               "                <Setter Property=\"Color\" Value=\"" + color + "\" />\r\n"
+               "                <Style.Triggers>\r\n"
+               "                    <DataTrigger Binding=\"{Binding RelativeSource={RelativeSource Mode=FindAncestor, AncestorType=ListBoxItem}, "
+               "Path=IsKeyboardFocusWithin}\" Value=\"True\">\r\n"
+               "                        <Setter Property=\"Color\" Value=\"{StaticResource A_Color_TileSelected_Text}\" />\r\n"
+               "                    </DataTrigger>\r\n"
+               "                </Style.Triggers>\r\n"
+               "            </Style>\r\n";
+    };
+    auto row = [](const char* key, const char* label_style, const char* value_style) {
+        return std::string("            <ControlTemplate x:Key=\"") + key + "\" TargetType=\"{x:Type Button}\">\r\n"
+               "                <Grid VerticalAlignment=\"Center\">\r\n"
+               "                    <Grid.ColumnDefinitions>\r\n"
+               "                        <ColumnDefinition />\r\n"
+               "                        <ColumnDefinition />\r\n"
+               "                    </Grid.ColumnDefinitions>\r\n"
+               "                    <Grid Grid.Column=\"0\">\r\n"
+               "                        <local:FZTextBlock Text=\"{Binding (local:BindingProxy.A), RelativeSource={RelativeSource TemplatedParent}}\" "
+               "Style=\"{StaticResource " + label_style + "}\" HorizontalAlignment=\"Left\" />\r\n"
+               "                    </Grid>\r\n"
+               "                    <Grid Grid.Column=\"1\">\r\n"
+               "                        <local:FZTextBlock Text=\"{Binding (local:BindingProxy.C), RelativeSource={RelativeSource TemplatedParent}}\" "
+               "Style=\"{StaticResource " + value_style + "}\" HorizontalAlignment=\"Center\" />\r\n"
+               "                        <local:FZTextBlock Text=\"{Binding (local:BindingProxy.B), RelativeSource={RelativeSource TemplatedParent}}\" "
+               "Color=\"{StaticResource FH2Mod_Color_Red}\" "
+               "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Center\" />\r\n"
+               "                    </Grid>\r\n"
+               "                </Grid>\r\n"
+               "            </ControlTemplate>\r\n";
+    };
+    return text_style("FH2Mod_Text_Dim", "#FF8C8C8C") + text_style("FH2Mod_Text_Heading", "{StaticResource A_Color_TileSelected_Background}") +
+           row("FH2Mod_InfoRow", "A_Style_SliderControlText", "A_Style_SliderControlText") +
+           row("FH2Mod_InfoRow_Dim", "FH2Mod_Text_Dim", "FH2Mod_Text_Dim") +
+           row("FH2Mod_InfoRow_Heading", "FH2Mod_Text_Heading", "A_Style_SliderControlText");
+}
+
+// removes an attribute from one element's XAML
+void erase_attr(std::string& el, const std::string& name) {
+    const std::size_t a = el.find(" " + name + "=\"");
+    if (a == std::string::npos) return;
+    const std::size_t e = el.find('"', a + name.size() + 3);
+    if (e != std::string::npos) el.erase(a, e + 1 - a);
+}
+
+// `a_help`: what the help bar says A does on a page that tracks the selection (Select), or
+// null for nothing.
 bool write_list_page(const char* file, const std::string& title, const std::vector<PageItem>& items, bool track_selection = false,
-                     const std::vector<std::vector<PageItem>>* views = nullptr, const std::vector<std::string>* view_titles = nullptr) {
+                     const std::vector<std::vector<PageItem>>* views = nullptr, const std::vector<ViewTitle>* view_titles = nullptr,
+                     const char* a_help = "{local:Loc HelpButtons.IDS_Select}") {
     std::string page = read_ui("Scenes/Anthem/A_HUDOptions.xaml");
     if (page.empty()) return false;
     std::string res = "\r\n            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowNotice\" UseHidden=\"true\" InvertResult=\"false\" />\r\n"
                       "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowView\" UseHidden=\"false\" InvertResult=\"false\" />\r\n"
                       "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowList\" UseHidden=\"true\" InvertResult=\"false\" />\r\n"
                       "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_HideView\" UseHidden=\"false\" InvertResult=\"true\" />\r\n"
-                      "            <Color x:Key=\"FH2Mod_Color_Red\">#FFE0141E</Color>\r\n"   // the MODS tab's badge red
-                      "            <ControlTemplate x:Key=\"FH2Mod_InfoRow\" TargetType=\"{x:Type Button}\">\r\n"
-                      "                <Grid VerticalAlignment=\"Center\">\r\n"
-                      "                    <Grid.ColumnDefinitions>\r\n"
-                      "                        <ColumnDefinition />\r\n"
-                      "                        <ColumnDefinition />\r\n"
-                      "                    </Grid.ColumnDefinitions>\r\n"
-                      "                    <Grid Grid.Column=\"0\">\r\n"
-                      "                        <local:FZTextBlock Text=\"{Binding (local:BindingProxy.A), RelativeSource={RelativeSource TemplatedParent}}\" "
-                      "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Left\" />\r\n"
-                      "                    </Grid>\r\n"
-                      "                    <Grid Grid.Column=\"1\">\r\n"
-                      "                        <local:FZTextBlock Text=\"{Binding (local:BindingProxy.C), RelativeSource={RelativeSource TemplatedParent}}\" "
-                      "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Center\" />\r\n"
-                      "                        <local:FZTextBlock Text=\"{Binding (local:BindingProxy.B), RelativeSource={RelativeSource TemplatedParent}}\" "
-                      "Color=\"{StaticResource FH2Mod_Color_Red}\" "
-                      "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Center\" />\r\n"
-                      "                    </Grid>\r\n"
-                      "                </Grid>\r\n"
-                      "            </ControlTemplate>\r\n";
+                      "            <Color x:Key=\"FH2Mod_Color_Red\">#FFE0141E</Color>\r\n" +   // the MODS tab's badge red
+                      info_row_resources();
 
     std::string rows = list_rows(items, "FH2Mod_Item_", "FirstItem", res);
     std::string views_style;   // the view switch's animation (see below), on pages with views
@@ -849,14 +1210,18 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                    board(frames("Opacity", lin("0", "1") + lin("0:0:0.2", "0") + lin("0:0:0.5", "1")) + frames(sx, scale) + frames(sy, scale)) +
                    "                            </DataTrigger.EnterActions>\r\n";
         };
+        // forwards into view k (FH2Mod_ViewIn_<k>), or back to it (FH2Mod_ViewBack_<k>: the list,
+        // or a mod's settings from one of its pages)
         std::string style = "\r\n            <Style x:Key=\"FH2Mod_Style_Views\" TargetType=\"{x:Type FrameworkElement}\">\r\n"
                             "                <Style.Triggers>\r\n";
         for (std::size_t k = 1; k <= view_rows.size(); ++k)
-            style += "                    <DataTrigger Binding=\"{Binding FH2Mod_View_" + std::to_string(k) + "}\" Value=\"True\">\r\n" +
+            style += "                    <DataTrigger Binding=\"{Binding FH2Mod_ViewIn_" + std::to_string(k) + "}\" Value=\"True\">\r\n" +
                      content("1.1", "0.9") + "                    </DataTrigger>\r\n";
-        style += "                    <DataTrigger Binding=\"{Binding FH2Mod_ViewBack}\" Value=\"True\">\r\n" + content("0.9", "1.1") +
-                 "                    </DataTrigger>\r\n"
-                 "                </Style.Triggers>\r\n"
+        for (std::size_t k = 0; k <= view_rows.size(); ++k)
+            if (k == 0 || !view_titles || k > view_titles->size() || (*view_titles)[k - 1].settings)
+                style += "                    <DataTrigger Binding=\"{Binding FH2Mod_ViewBack_" + std::to_string(k) + "}\" Value=\"True\">\r\n" +
+                         content("0.9", "1.1") + "                    </DataTrigger>\r\n";
+        style += "                </Style.Triggers>\r\n"
                  "            </Style>\r\n";
         // each list and panel: shown when its view comes (unseen until the old one has gone, the
         // panel 0.15 s later still), kept 0.2 s when it goes
@@ -931,12 +1296,13 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         at = page.find(desc_panel, e0 + grid.size());
     }
     if (track_selection && (!views || views->empty())) {
-        // a list A acts on (Updates): Select / Back
+        // a list A acts on (Updates): Select / Back; or only Back (a mod's page without on_select)
         const std::string help = "<ContentControl x:Name=\"DefaultHelpPanel\"";
         const std::size_t h0 = page.find(help), h1 = h0 == std::string::npos ? h0 : page.find("/>", h0);
         if (h1 != std::string::npos) {
             std::string bar = page.substr(h0, h1 + 2 - h0);
-            swap_attr(bar, "local:ControllerButtonPanel.ADescription", "{local:Loc HelpButtons.IDS_Select}");
+            if (a_help) swap_attr(bar, "local:ControllerButtonPanel.ADescription", a_help);
+            else erase_attr(bar, "local:ControllerButtonPanel.ADescription");
             swap_attr(bar, "local:ControllerButtonPanel.BDescription", "{local:Loc HelpButtons.IDS_Back}");
             page.replace(h0, h1 + 2 - h0, bar);
         }
@@ -960,15 +1326,21 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             const std::size_t v = a + name.size() + 2, e = el.find('"', v);
             el.replace(v, e - v, value);
         };
-        std::string list_bar = bar, view_bar = bar;
-        set_attr(list_bar, "local:ControllerButtonPanel.ADescription", "{local:Loc HelpButtons.IDS_Select}");
-        set_attr(list_bar, "local:ControllerButtonPanel.BDescription", "{local:Loc HelpButtons.IDS_Back}");
-        set_attr(list_bar, "Visibility", "{Binding FH2Mod_View_0, Converter={StaticResource FH2Mod_ShowView}}");
-        set_attr(view_bar, "x:Name", "FH2Mod_ViewHelpPanel");
-        set_attr(view_bar, "local:ControllerButtonPanel.ADescription", "{local:Loc HelpButtons.IDS_Accept}");
-        set_attr(view_bar, "local:ControllerButtonPanel.BDescription", "{local:Loc HelpButtons.IDS_Back}");
-        set_attr(view_bar, "Visibility", "{Binding FH2Mod_View_0, Converter={StaticResource FH2Mod_HideView}}");
-        page.replace(h0, h1 + 2 - h0, "<Grid>\r\n" + list_bar + "\r\n" + view_bar + "\r\n</Grid>");
+        // one per kind of view (FH2Mod_Bar_<kind>): the list (Select), a mod's settings (Accept),
+        // a mod's page (only Back, or Select when its rows do something)
+        const char* const a_desc[kViewKinds] = {"{local:Loc HelpButtons.IDS_Select}", "{local:Loc HelpButtons.IDS_Accept}", nullptr,
+                                                "{local:Loc HelpButtons.IDS_Select}"};
+        std::string bars = "<Grid>";
+        for (int b = 0; b < kViewKinds; ++b) {
+            std::string one = bar;
+            if (b) set_attr(one, "x:Name", "FH2Mod_ViewHelpPanel_" + std::to_string(b));
+            if (a_desc[b]) set_attr(one, "local:ControllerButtonPanel.ADescription", a_desc[b]);
+            else erase_attr(one, "local:ControllerButtonPanel.ADescription");
+            set_attr(one, "local:ControllerButtonPanel.BDescription", "{local:Loc HelpButtons.IDS_Back}");
+            set_attr(one, "Visibility", "{Binding FH2Mod_Bar_" + std::to_string(b) + ", Converter={StaticResource FH2Mod_ShowView}}");
+            bars += "\r\n" + one;
+        }
+        page.replace(h0, h1 + 2 - h0, bars + "\r\n</Grid>");
     }
     // The title: ours alone, without the game's grey "SETTINGS /" before it (a title block with
     // no Tag shows just its Content). A view (a mod's settings) has its own: "SETTINGS / <MOD>",
@@ -992,10 +1364,10 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             blocks = "<Grid>\r\n                        " + held(0, block);
             for (std::size_t k = 1; k <= views->size() && k <= view_titles->size(); ++k) {
                 std::string vt = block;
-                std::string name = (*view_titles)[k - 1];
+                std::string name = (*view_titles)[k - 1].title;
                 for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
                 swap_attr(vt, "Content", xml_escape(name));
-                swap_attr(vt, "Tag", "{local:Loc ScreenTitles.IDS_MyProfile}");   // the game's grey "SETTINGS"
+                if ((*view_titles)[k - 1].settings) swap_attr(vt, "Tag", "{local:Loc ScreenTitles.IDS_MyProfile}");   // the game's grey "SETTINGS"
                 blocks += "\r\n                        " + held(k, vt);
             }
             blocks += "\r\n                        </Grid>";
@@ -1052,6 +1424,47 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
     return set_file(&g_owner_mod, (std::string("UI/Scenes/Anthem/") + file).c_str(), page.data(), page.size()) != 0;
 }
 
+// A page of a mod's own design: A_HUDOptions.xaml's frame (background, player bar, help bar,
+// the screen's padding and tilt) around the mod's XAML. Its content takes the place of the
+// BasicOptions panel (title, list and description); its resources go into the page's, after
+// the platform's converters; its help, if any, takes the place of DefaultHelpPanel.
+bool write_custom_page(const char* file, const std::string& resources, const std::string& content, const std::string& help) {
+    std::string page = read_ui("Scenes/Anthem/A_HUDOptions.xaml");
+    if (page.empty()) return false;
+    const std::string res = "\r\n            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowIf\" UseHidden=\"false\" InvertResult=\"false\" />\r\n"
+                            "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowIfHidden\" UseHidden=\"true\" InvertResult=\"false\" />\r\n"
+                            "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_HideIf\" UseHidden=\"false\" InvertResult=\"true\" />\r\n" +
+                            resources + "\r\n        ";
+    const std::size_t basic    = page.find("<StackPanel Name=\"BasicOptions\"");
+    const std::size_t tilt_end = basic == std::string::npos ? basic : page.find("</ContentControl>", basic);
+    const std::size_t end      = tilt_end == std::string::npos ? tilt_end : page.rfind("</StackPanel>", tilt_end);
+    const std::string help_el  = "<ContentControl x:Name=\"DefaultHelpPanel\"";
+    const std::size_t h0 = page.find(help_el), h1 = h0 == std::string::npos ? h0 : page.find("/>", h0);
+    if (end == std::string::npos || end < basic || h1 == std::string::npos || h1 > basic ||
+        !replace_between(page, "<ResourceDictionary>", "</ResourceDictionary>", res, false)) {
+        slog("A_HUDOptions.xaml doesn't look as expected; no page for " + std::string(file));
+        return false;
+    }
+    // (positions again: the resources moved them)
+    const std::size_t b0 = page.find("<StackPanel Name=\"BasicOptions\"");
+    const std::size_t b1 = page.rfind("</StackPanel>", page.find("</ContentControl>", b0)) + std::string("</StackPanel>").size();
+    page.replace(b0, b1 - b0, content);
+    const std::size_t p0 = page.find(help_el), p1 = page.find("/>", p0) + 2;
+    if (help.empty()) {
+        std::string bar = page.substr(p0, p1 - p0);
+        erase_attr(bar, "local:ControllerButtonPanel.ADescription");
+        erase_attr(bar, "local:ControllerButtonPanel.YDescription");
+        swap_attr(bar, "local:ControllerButtonPanel.BDescription", "{local:Loc HelpButtons.IDS_Back}");
+        page.replace(p0, p1 - p0, bar);
+    } else {
+        page.replace(p0, p1 - p0, "<Grid>\r\n" + help + "\r\n</Grid>");
+    }
+    // Extra Options leaves pages alone that aren't declared exactly x:Class="ForzaUI.A_HudOptions"
+    const std::string cls = "x:Class=\"ForzaUI.A_HudOptions\"";
+    if (const std::size_t c = page.find(cls); c != std::string::npos) page.replace(c, cls.size(), "x:Class =\"ForzaUI.A_HudOptions\"");
+    return set_file(&g_owner_mod, (std::string("UI/Scenes/Anthem/") + file).c_str(), page.data(), page.size()) != 0;
+}
+
 // The Mods page (Settings > Mods, and the MODS tab's All settings): every mod's rows.
 bool write_mods_page() {
     std::vector<PageItem> items;
@@ -1104,7 +1517,7 @@ std::vector<ModEntry> g_entries;     // fh2-mods, in load order (set once, befor
 std::vector<int> g_entry_row;        // each entry's switch row in g_rows
 std::mutex g_page_mu;                // one page written at a time
 
-enum HubPage { kHubInstalled = 1, kHubUpdates, kHubGetMods, kHubAbout, kHubAllSettings = 6, kHubModPage = 10 };
+enum HubPage { kHubInstalled = 1, kHubUpdates, kHubGetMods, kHubAbout, kHubAllSettings = 6, kHubModPage = 10, kHubTilePage = 80 };
 constexpr std::size_t kMaxModPages = 64;   // A_ModPage_10 .. A_ModPage_73: mod n's page is 10 + n
 
 // "A_ModPage_01" (12 letters, like "A_HudOptions")
@@ -1168,6 +1581,77 @@ std::string extra_options_line() {
 }
 
 PageItem info(const std::string& label, const std::string& description) { return {-1, label, description}; }
+
+// ---- the mods' pages (API 8) ------------------------------------------------------------------
+std::vector<int> g_page_view;   // each page's view on Installed mods (0: none), as last written (guarded by g_mu)
+
+// A page's rows, as its list shows them (under g_mu).
+std::vector<PageItem> page_items(const ModPage& pg) {
+    std::vector<PageItem> items;
+    for (const PageRowData& r : pg.rows) {
+        PageItem it = info(r.label, r.description);
+        (r.value_alert ? it.value_alert : it.value) = r.value;
+        it.style   = r.style;
+        it.version = r.footer;   // the line at the bottom of the description panel
+        it.select  = pg.on_select ? r.key : "";
+        items.push_back(it);
+    }
+    if (items.empty()) items.push_back(info("Nothing here yet", pg.mod->name + " hasn't put anything on this page."));
+    return items;
+}
+
+bool call_on_open(FH2PageOpenFn fn, void* user, const char* key) {
+    __try {
+        fn(user, key);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool call_on_select(FH2PageSelectFn fn, void* user, const char* page, const char* row) {
+    __try {
+        fn(user, page, row);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// The mods' on_open, before their pages are written: page `only`, or every page. Called
+// without g_mu held, so they can set their rows.
+void pages_opening(int only = -1) {
+    struct Call {
+        FH2Mod* mod;
+        FH2PageOpenFn fn;
+        void* user;
+        std::string key;
+    };
+    std::vector<Call> calls;
+    {
+        std::scoped_lock lk{g_mu};
+        for (std::size_t j = 0; j < g_pages.size(); ++j)
+            if (g_pages[j].on_open && (only < 0 || static_cast<std::size_t>(only) == j))
+                calls.push_back({g_pages[j].mod, g_pages[j].on_open, g_pages[j].user, g_pages[j].key});
+    }
+    for (const Call& c : calls)
+        if (!call_on_open(c.fn, c.user, c.key.c_str())) log_line(c.mod->name, "crashed in its on_open for page " + c.key);
+}
+
+// What A does on a row of a list on the MODS tab: open a page in the browser, show a view, or
+// tell a mod (on_select); and the row's name, to focus it again.
+struct RowAct {
+    std::string url;
+    int view = 0;
+    std::string select;
+    std::string name;
+};
+std::vector<RowAct> row_acts(const std::vector<PageItem>& items, const std::string& first_name) {
+    std::vector<RowAct> acts;
+    for (std::size_t n = 0; n < items.size(); ++n)
+        acts.push_back({items[n].open, items[n].open_view, items[n].select, n == 0 ? first_name : button_name(items[n], false)});
+    return acts;
+}
 
 // what a mod is, for its description: what it does, and whether it's loaded
 std::string about_mod(const ModEntry& e) {
@@ -1282,6 +1766,23 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
                 items.push_back(it);
                 ++own;
             }
+        for (std::size_t j = 0; j < g_pages.size(); ++j)
+            if (g_pages[j].mod == e.mod) {   // A shows the page (a view of its own)
+                const ModPage& pg = g_pages[j];
+                PageItem it = info(pg.label, pg.description);
+                const bool on_tile = pg.tile >= 0 && g_tile_page[pg.tile] == static_cast<int>(j);
+                if (pg.custom && pg.rows.empty())   // only on its tile
+                    it.description += (it.description.empty() ? "" : " ") +
+                                      (on_tile ? std::string("Open it from the pause menu's ") + kTiles[pg.tile].name + " tile."
+                                               : std::string("It needs a pause-menu tile to open from, and doesn't have one."));
+                else if (on_tile)
+                    it.description += (it.description.empty() ? "" : " ") + std::string("The pause menu's ") + kTiles[pg.tile].name +
+                                      " tile opens it too.";
+                it.open_view = j < g_page_view.size() ? g_page_view[j] : 0;
+                it.name      = "PART_Button_FH2Mod_Page_" + std::to_string(j);
+                items.push_back(it);
+                ++own;
+            }
     }
     if (!own)
         items.push_back(info("No settings", !e.enabled ? "Its settings show here once it's turned on and the game has restarted."
@@ -1374,22 +1875,60 @@ std::vector<PageItem> about_items() {
 }
 
 
-std::vector<std::vector<std::string>> g_view_opens;   // Installed mods: per mod page, each row's link ("" for none)
+// Installed mods, as last written (UI thread, or before the hooks): per view (1..), what A does
+// on each row; which page a view is (-1: a mod's settings) and the view it comes back to.
+std::vector<std::vector<RowAct>> g_view_acts;
+std::vector<int> g_view_page, g_view_owner;
+// A page on a tile, as last written: what A does on its rows.
+std::vector<RowAct> g_tile_acts[kTileCount];
+std::atomic<void*> g_tile_page_obj[kTileCount] = {};   // the page object showing a mod's page on a tile (UI thread)
 
 bool write_hub_page(int p) {
     std::scoped_lock lk{g_page_mu};
     switch (p) {
         case kHubInstalled: {
-            std::vector<std::vector<PageItem>> views;
-            for (std::size_t i = 0; i < g_entries.size() && i + 1 < static_cast<std::size_t>(kMaxViews); ++i) views.push_back(mod_page_items(i));
-            std::vector<std::vector<std::string>> opens;   // what A opens on each mod page's rows
-            for (const auto& v : views) {
-                opens.emplace_back();
-                for (const PageItem& it : v) opens.back().push_back(it.open);
+            // views 1..nmods: each mod's settings; then the mods' pages, each from its mod's
+            const std::size_t nmods = std::min(g_entries.size(), static_cast<std::size_t>(kMaxModViews));
+            std::vector<int> pages, owners;   // the page views: which page, and its mod's view
+            {
+                std::scoped_lock lk2{g_mu};
+                g_page_view.assign(g_pages.size(), 0);
+                for (std::size_t j = 0; j < g_pages.size() && pages.size() < static_cast<std::size_t>(kMaxPageViews); ++j) {
+                    if (g_pages[j].custom && g_pages[j].rows.empty()) continue;   // only on its tile
+                    for (std::size_t i = 0; i < nmods; ++i)
+                        if (g_entries[i].mod && g_entries[i].mod == g_pages[j].mod) {
+                            g_page_view[j] = static_cast<int>(nmods + 1 + pages.size());
+                            pages.push_back(static_cast<int>(j));
+                            owners.push_back(static_cast<int>(i + 1));
+                            break;
+                        }
+                }
             }
-            g_view_opens = opens;
-            std::vector<std::string> names;
-            for (std::size_t i = 0; i < views.size(); ++i) names.push_back(g_entries[i].name);
+            std::vector<std::vector<PageItem>> views;
+            std::vector<ViewTitle> names;
+            for (std::size_t i = 0; i < nmods; ++i) {
+                views.push_back(mod_page_items(i));
+                names.push_back({g_entries[i].name, true});
+            }
+            std::vector<int> kinds(kMaxViews, kViewList);
+            for (std::size_t i = 1; i <= nmods; ++i) kinds[i] = kViewMod;
+            g_view_page.assign(1 + nmods + pages.size(), -1);
+            g_view_owner.assign(1 + nmods + pages.size(), 0);
+            {
+                std::scoped_lock lk2{g_mu};
+                for (std::size_t n = 0; n < pages.size(); ++n) {
+                    const ModPage& pg = g_pages[pages[n]];
+                    const std::size_t k = nmods + 1 + n;
+                    views.push_back(page_items(pg));
+                    names.push_back({pg.title, false});
+                    kinds[k]        = pg.on_select ? kViewPageSelect : kViewPage;
+                    g_view_page[k]  = pages[n];
+                    g_view_owner[k] = owners[n];
+                }
+            }
+            for (int k = 0; k < kMaxViews; ++k) g_view_kind[k] = kinds[k];
+            g_view_acts.clear();
+            for (std::size_t k = 1; k <= views.size(); ++k) g_view_acts.push_back(row_acts(views[k - 1], "FH2Mod_First_" + std::to_string(k)));
             return write_list_page(hub_file(p).c_str(), "INSTALLED MODS", installed_items(), true, &views, &names);
         }
         case kHubUpdates: return write_list_page(hub_file(p).c_str(), "UPDATES", updates_items(), true);
@@ -1397,7 +1936,38 @@ bool write_hub_page(int p) {
         case kHubAllSettings: return write_mods_page();
         default: break;
     }
-    if (p >= kHubModPage && static_cast<std::size_t>(p - kHubModPage) < g_entries.size()) {
+    if (p >= kHubTilePage && static_cast<std::size_t>(p - kHubTilePage) < kTileCount) {
+        // a mod's page on a game tile: a page of its own
+        const std::size_t t = static_cast<std::size_t>(p - kHubTilePage);
+        std::vector<PageItem> items;
+        std::string title, res, content, help;
+        bool select = false, custom = false;
+        {
+            std::scoped_lock lk2{g_mu};
+            const int j = g_tile_page[t];
+            if (j < 0) return false;
+            const ModPage& pg = g_pages[j];
+            custom = pg.custom;
+            if (custom) {   // of the mod's own design
+                res     = pg.xaml_resources;
+                content = pg.xaml_content;
+                help    = pg.xaml_help;
+                g_pages[j].xaml_written = content;
+            } else {
+                items  = page_items(pg);
+                title  = pg.title;
+                select = pg.on_select != nullptr;
+            }
+        }
+        if (custom) {
+            g_tile_acts[t].clear();
+            return write_custom_page(hub_file(p).c_str(), res, content, help);
+        }
+        for (char& c : title) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        g_tile_acts[t] = row_acts(items, "FirstItem");
+        return write_list_page(hub_file(p).c_str(), title, items, true, nullptr, nullptr, select ? "{local:Loc HelpButtons.IDS_Select}" : nullptr);
+    }
+    if (p >= kHubModPage && p < kHubTilePage && static_cast<std::size_t>(p - kHubModPage) < g_entries.size()) {
         const ModEntry& e = g_entries[p - kHubModPage];
         std::string title = e.name;
         for (char& c : title) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -1507,6 +2077,59 @@ std::string tile_template(const std::string& key, const char* strokes, const cha
            "            </ControlTemplate>";
 }
 
+// A tile a mod's page has taken over shows the page's set_page_tile_text and
+// set_page_tile_colors: its Button gets Tag="{Binding FH2Mod_TileText_<t>}" (from the page) and
+// a copy of the game's icon tile template (A_ControlTemplate_IconTile, Shared_TiledMenus.xaml)
+// with one more line, the Tag, in the pause menu's own style for the club tile's member count,
+// and the background, title, line and icon colours bound to the page's FH2Mod_Tile..._<t>
+// (unset, they're the game's own). Only tiles a mod's page has get it.
+std::string tile_template_key(std::size_t t) { return "FH2Mod_Template_IconTile_" + std::to_string(t); }
+std::string icon_tile_text_template(std::size_t t) {
+    const std::string n = std::to_string(t);
+    auto bind = [&](const char* prop) {
+        return std::string("{Binding FH2Mod_") + prop + "_" + n + ", RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type Page}}}";
+    };
+    return "\r\n            <ControlTemplate x:Key=\"" + tile_template_key(t) + "\" TargetType=\"{x:Type Button}\">\r\n"
+           "                <Grid Style=\"{StaticResource A_Style_FrameworkElement_DefaultTransition}\" "
+           "local:UIPageTransitionManager.TransitionIndex=\"{Binding (local:UIPageTransitionManager.TransitionIndex), RelativeSource={RelativeSource TemplatedParent}}\">\r\n"
+           "                    <Grid Style=\"{StaticResource A_Style_Grid_HiddenWhenLocked}\">\r\n"
+           "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_TileShadow}\" />\r\n"
+           "                    </Grid>\r\n"
+           "                    <Grid Style=\"{StaticResource A_Style_Grid_MotionBlur}\">\r\n"
+           "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_TileBackground}\" Color=\"" + bind("TileBack") + "\" />\r\n"
+           "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_LockableIcon}\" Color=\"" + bind("TileIcon") + "\" "
+           "ImageSource=\"{Binding DataContext.Icon, RelativeSource={RelativeSource TemplatedParent}}\" HorizontalAlignment=\"Stretch\" VerticalAlignment=\"Stretch\" />\r\n"
+           "                        <ContentControl Content=\"{Binding (local:BindingProxy.A), RelativeSource={RelativeSource TemplatedParent}}\" "
+           "Style=\"{StaticResource A_Style_ContentControl_NotificationBadge}\" HorizontalAlignment=\"Left\" VerticalAlignment=\"Bottom\" "
+           "Height=\"30\" Panel.ZIndex=\"1\" Margin=\"20,0,0,20\" />\r\n"
+           "                        <Grid Margin=\"{StaticResource A_Thickness_TilePadding}\">\r\n"
+           "                            <local:FZTextBlock x:Name=\"NameText\" Text=\"{Binding DataContext.Heading, RelativeSource={RelativeSource TemplatedParent}}\" "
+           "Style=\"{StaticResource A_Style_FZTextBlock_TileTitle}\" Color=\"" + bind("TileTitle") + "\" "
+           "MaxWidth=\"{Binding Width, RelativeSource={RelativeSource TemplatedParent}}\" />\r\n"
+           "                            <local:FZTextBlock Text=\"{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}\" "
+           "Style=\"{StaticResource A_Style_FZTextBlock_TileClubMemberCount}\" Color=\"" + bind("TileLine") + "\" />\r\n"
+           "                            <local:FZMaterial Style=\"{StaticResource A_Style_Tile_LockIcon}\" />\r\n"
+           "                        </Grid>\r\n"
+           "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_TileSelectionBar}\" />\r\n"
+           "                    </Grid>\r\n"
+           "                </Grid>\r\n"
+           "            </ControlTemplate>";
+}
+bool add_tile_text(std::string& page, const char* button, std::size_t t) {
+    const std::size_t named = page.find(std::string("x:Name=\"") + button + "\"");
+    if (named == std::string::npos) return false;
+    const std::size_t a = page.rfind("<Button", named), b = page.find("/>", named);
+    if (a == std::string::npos || b == std::string::npos) return false;
+    std::string el = page.substr(a, b - a);
+    const std::string from = "Template=\"{StaticResource A_ControlTemplate_IconTile}\"";
+    const std::size_t at   = el.find(from);
+    if (at == std::string::npos || el.find("Tag=") != std::string::npos) return false;
+    el.replace(at, from.size(), "Template=\"{StaticResource " + tile_template_key(t) + "}\"\r\n                                Tag=\"{Binding FH2Mod_TileText_" +
+                                    std::to_string(t) + ", RelativeSource={RelativeSource AncestorType=Page, Mode=FindAncestor}}\"");
+    page.replace(a, b - a, el);
+    return true;
+}
+
 bool write_pause_menu() {
     std::string page = read_ui("Scenes/Anthem/A_PauseMenu.xaml");
     if (page.empty()) return false;
@@ -1564,6 +2187,19 @@ bool write_pause_menu() {
     }
     buttons += "                    ";
     if (!replace_between(page, scope, "</Canvas>", buttons, false)) return false;
+    // the tiles mods' pages have: their text (the template goes in after the club tile's style)
+    if (page.find("x:Key=\"A_Style_FZTextBlock_TileClubMemberCount\"") < page.find(items_at))
+        for (std::size_t t = 0; t < kTileCount; ++t) {
+            {
+                std::scoped_lock lk{g_mu};
+                if (g_tile_page[t] < 0) continue;
+            }
+            bool any = false;
+            for (const char* b : kTiles[t].buttons)
+                if (add_tile_text(page, b, t)) any = true;
+                else slog(std::string(b) + " doesn't look as expected; it shows no text or colours");
+            if (any) res += icon_tile_text_template(t);
+        }
     page.insert(page.find(items_at) + items_at.size(), res);
     const std::size_t tab_at = page.find(tab);
     page.replace(tab_at, tab.size(), "Content=\"MODS\"");
@@ -1962,10 +2598,27 @@ WireTilesFn o_pause_menu_wire = nullptr;
 TileFn o_car_packs = nullptr, o_expansions = nullptr, o_extras = nullptr, o_vip = nullptr;
 
 void open_hub_page(void* page, int which) {
+    // the mods' pages on it get to set their rows first
+    if (which == kHubInstalled) {
+        pages_opening();
+    } else if (which >= kHubTilePage && static_cast<std::size_t>(which - kHubTilePage) < kTileCount) {
+        int j = -1;
+        {
+            std::scoped_lock lk{g_mu};
+            j = g_tile_page[which - kHubTilePage];
+            if (j >= 0 && g_pages[j].custom)
+                for (auto& slot : g_pages[j].slots) slot = 0;   // slots start at 0, before on_open
+        }
+        g_custom_obj   = nullptr;
+        g_custom_shown = j;
+        for (auto& obj : g_tile_page_obj) obj = nullptr;   // the last one is gone
+        if (j >= 0) pages_opening(j);
+    }
     write_hub_page(which);   // up to date (update checks finish after the game starts)
     g_in_hub     = true;
     g_hub_return = false;
     g_view       = 0;   // before the page's bindings first read it
+    g_view_back  = false;
     hub_ask(which);
     o_car_packs(page);
 }
@@ -2054,30 +2707,67 @@ bool focus_named(void* page, const char* name) {
 
 void notify_view(int k) {
     void* obj = g_view_obj.load();
-    if (obj && k >= 0 && k < kMaxViews && g_view_desc[k]) notify_changed(obj, g_view_desc[k]);
+    if (!obj || k < 0 || k >= kMaxViews) return;
+    for (uint8_t* d : {g_view_desc[k], g_view_in_desc[k], g_view_back_desc[k]})
+        if (d) notify_changed(obj, d);
 }
 
 std::string g_focus_again;   // focus this once more when the button comes up (UI thread only)
 
-void switch_view(void* page, int k) {
+// Shows view k of Installed mods, forwards (A) or back (B), with the focus on its row `row`.
+void switch_view(void* page, int k, bool back, int row) {
     const int old = g_view.exchange(k);
     if (old == k) return;
-    g_view_selected = 0;   // the new list's first row gets the focus
-    play_sound(k ? kSoundOpen : kSoundClose);
-    g_view_back = k == 0;
+    play_sound(back ? kSoundClose : kSoundOpen);
+    g_view_back = back;
+    std::string name;
+    if (k == 0) {
+        // back on the mod's own row in the list
+        g_view_selected = 0;
+        name = old <= 1 ? "FirstItem" : "PART_Button_FH2Mod_" + std::to_string(old - 1);
+    } else {
+        const std::size_t v = static_cast<std::size_t>(k - 1);
+        if (v >= g_view_acts.size() || row < 0 || static_cast<std::size_t>(row) >= g_view_acts[v].size()) row = 0;
+        g_view_selected = row;   // what A acts on: focusing a row that's already selected doesn't say so
+        name = v < g_view_acts.size() && !g_view_acts[v].empty() && !g_view_acts[v][row].name.empty() ? g_view_acts[v][row].name
+                                                                                                    : "FH2Mod_First_" + std::to_string(k);
+    }
     notify_view(old);
     notify_view(k);
-    if (void* obj = g_view_obj.load(); obj && g_back_desc) notify_changed(obj, g_back_desc);
-    std::string name;
-    if (k > 0) {
-        name = "FH2Mod_First_" + std::to_string(k);
-    } else {
-        // back on the mod's own row
-        name = old <= 1 ? "FirstItem" : "PART_Button_FH2Mod_" + std::to_string(old - 1);
-    }
+    if (void* obj = g_view_obj.load())
+        for (uint8_t* d : g_bar_desc)
+            if (d) notify_changed(obj, d);
     if (!focus_named(page, name.c_str())) slog("couldn't focus " + name);
     g_focus_again = name;   // the list has only just been shown; by the button's release it's laid out
-    slog(k ? "showing " + g_entries[k - 1].name + "'s settings" : std::string("back to the list"));
+    if (k == 0) {
+        slog("back to the list");
+    } else if (static_cast<std::size_t>(k) < g_view_page.size() && g_view_page[k] >= 0) {
+        std::scoped_lock lk{g_mu};
+        const ModPage& pg = g_pages[g_view_page[k]];
+        slog("showing " + pg.mod->name + "'s page " + pg.key);
+    } else if (static_cast<std::size_t>(k) <= g_entries.size()) {
+        slog("showing " + g_entries[k - 1].name + "'s settings");
+    }
+}
+
+// A on a row of a mod's page that has a key: the mod's on_select.
+void select_on_page(int j, const std::string& row) {
+    FH2Mod* mod = nullptr;
+    FH2PageSelectFn fn = nullptr;
+    void* user = nullptr;
+    std::string key;
+    {
+        std::scoped_lock lk{g_mu};
+        if (j < 0 || static_cast<std::size_t>(j) >= g_pages.size()) return;
+        mod  = g_pages[j].mod;
+        fn   = g_pages[j].on_select;
+        user = g_pages[j].user;
+        key  = g_pages[j].key;
+    }
+    if (!fn) return;
+    play_sound(kSoundSelect);
+    log_line(mod->name, "A on " + row + " on page " + key);
+    if (!call_on_select(fn, user, key.c_str(), row.c_str())) log_line(mod->name, "crashed in its on_select for page " + key);
 }
 
 // Which HUD page objects are Installed mods and Updates (set when one loads; only compared).
@@ -2101,7 +2791,8 @@ void open_url(const std::string& url) {
 
 
 void d_hud_page_loaded(void* page) {
-    o_hud_page_loaded(page);
+    // Which page this is, before the page's own "loaded" (which focuses FirstItem, and so may set
+    // a slot through a binding) runs: from then on, callbacks and focusing go to this page.
     const int was_shown = g_hub_shown.exchange(0);
     if (was_shown == kHubUpdates) {
         g_updates_page = page;
@@ -2123,7 +2814,23 @@ void d_hud_page_loaded(void* page) {
     } else if (g_installed_page.load() == page) {
         g_installed_page = nullptr;
     }
+    bool tile_page = false;
+    for (std::size_t t = 0; t < kTileCount; ++t)
+        if (was_shown == kHubTilePage + static_cast<int>(t)) {
+            g_tile_page_obj[t] = page;
+            g_selected         = 0;
+            tile_page          = true;
+        } else if (g_tile_page_obj[t].load() == page) {
+            g_tile_page_obj[t] = nullptr;
+        }
+    if (!tile_page) {   // another page: a page of a mod's own design isn't up
+        g_custom_obj   = nullptr;
+        g_custom_shown = -1;
+    }
+    o_hud_page_loaded(page);
 }
+
+
 
 // A page's buttons: vtable +0x578, (page, button, pressed) -> handled. The page gets A as 18
 // and B as 45 (seen in the log); on the options pages both leave the page.
@@ -2133,6 +2840,77 @@ constexpr int kButtonA                       = 18;
 constexpr int kButtonB                       = 45;
 using PageButtonFn = bool (*)(void* page, int button, bool pressed);
 PageButtonFn o_hud_page_button = nullptr;
+
+bool call_on_button(FH2PageButtonFn fn, void* user, const char* key, int button, int* result) {
+    __try {
+        *result = fn(user, key, button);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// A page of a mod's own design on tile t: A, B, X, Y, LB and RB go to its on_button first. Other
+// buttons are logged once each, and go on as usual.
+//
+// The menus get the pad as keys (a table at 0x142254390 turns the game's controls into AVUI's
+// keys, WPF's numbering): A is Space (18), B is B (45), X is X (67), Y is Y (68), the d-pad the
+// arrows (23-26) and the number pad's 8/2/4/6 together, LB PageUp (19) and RB PageDown (20) (seen
+// on a pad in game). The table's other pairs, the shifts (116, 117) and the controls (118, 119),
+// aren't the bumpers.
+bool g_custom_handled[7] = {};   // per FH2_BUTTON_: the press was handled, so its release is too
+std::set<int> g_buttons_seen;
+
+int pad_button(int key) {
+    switch (key) {
+        case 18: return FH2_BUTTON_A;
+        case 45: return FH2_BUTTON_B;
+        case 67: return FH2_BUTTON_X;
+        case 68: return FH2_BUTTON_Y;
+        case 19: return FH2_BUTTON_LB;
+        case 20: return FH2_BUTTON_RB;
+        default: return 0;
+    }
+}
+
+bool custom_page_button(void* page, int j, int button, bool pressed) {
+    const int code = pad_button(button);
+    if (!code) {
+        const bool dpad = (button >= 23 && button <= 26) || button == 76 || button == 78 || button == 80 || button == 82;
+        if (pressed && !dpad && g_buttons_seen.insert(button).second) slog("button " + std::to_string(button) + " on a mod's page");
+        return o_hud_page_button(page, button, pressed);
+    }
+    if (pressed) {
+        FH2Mod* mod = nullptr;
+        FH2PageButtonFn fn = nullptr;
+        void* user = nullptr;
+        std::string key;
+        {
+            std::scoped_lock lk{g_mu};
+            mod  = g_pages[j].mod;
+            fn   = g_pages[j].on_button;
+            user = g_pages[j].user;
+            key  = g_pages[j].key;
+        }
+        int r = FH2_PAGE_IGNORED;
+        g_focus_again.clear();   // a press of its own: nothing left over to focus on its release
+        if (fn) {
+            InCallback in{page, -1};
+            if (!call_on_button(fn, user, key.c_str(), code, &r)) {
+                log_line(mod->name, "crashed in its on_button for page " + key);
+                r = FH2_PAGE_HANDLED;
+            }
+        }
+        g_custom_handled[code] = r != FH2_PAGE_IGNORED;
+        if (r == FH2_PAGE_HANDLED_SELECT) play_sound(kSoundSelect);
+        else if (r == FH2_PAGE_HANDLED_BACK) play_sound(kSoundBack, RVA_BACK_SOUNDS);
+    } else if (!g_focus_again.empty()) {
+        focus_named(page, g_focus_again.c_str());   // the element may only just have been shown
+        g_focus_again.clear();
+    }
+    if (g_custom_handled[code] || code == FH2_BUTTON_A) return true;   // A never leaves the page
+    return o_hud_page_button(page, button, pressed);
+}
 
 bool d_hud_page_button(void* page, int button, bool pressed) {
     if (page && (page == g_updates_page.load() || page == g_about_page.load()) && button == kButtonA) {
@@ -2144,6 +2922,31 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
         }
         return true;   // not Accept (it would leave the page)
     }
+    for (std::size_t t = 0; t < kTileCount; ++t)
+        if (page && page == g_tile_page_obj[t].load()) {
+            int j      = -1;
+            bool custom = false;
+            {
+                std::scoped_lock lk{g_mu};
+                j      = g_tile_page[t];
+                custom = j >= 0 && g_pages[j].custom;
+            }
+            if (custom) return custom_page_button(page, j, button, pressed);
+        }
+    for (std::size_t t = 0; t < kTileCount; ++t)
+        if (page && page == g_tile_page_obj[t].load() && button == kButtonA) {
+            // a mod's page on a tile: A tells the mod about a row with a key, and stays
+            const int n = g_selected.load();
+            if (pressed && n >= 0 && static_cast<std::size_t>(n) < g_tile_acts[t].size() && !g_tile_acts[t][n].select.empty()) {
+                int j = -1;
+                {
+                    std::scoped_lock lk{g_mu};
+                    j = g_tile_page[t];
+                }
+                select_on_page(j, g_tile_acts[t][n].select);
+            }
+            return true;
+        }
     if (page && page == g_installed_page.load() && (button == kButtonA || button == kButtonB)) {
         if (!pressed && !g_focus_again.empty()) {
             focus_named(page, g_focus_again.c_str());
@@ -2151,25 +2954,55 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
         }
         const int view = g_view.load();
         if (view == 0 && button == kButtonB) return o_hud_page_button(page, button, pressed);   // leave the page
-        if (view != 0 && button == kButtonA) {   // A on a link row opens it, and stays
+        const int kind = view_kind(view);
+        const bool on_page = kind == kViewPage || kind == kViewPageSelect;
+        const RowAct* act = nullptr;
+        if (view != 0) {
             const int n = g_view_selected.load();
             const std::size_t v = static_cast<std::size_t>(view - 1);
-            if (v < g_view_opens.size() && n >= 0 && static_cast<std::size_t>(n) < g_view_opens[v].size() && !g_view_opens[v][n].empty()) {
+            if (v < g_view_acts.size() && n >= 0 && static_cast<std::size_t>(n) < g_view_acts[v].size()) act = &g_view_acts[v][n];
+        }
+        if (button == kButtonA && act) {
+            if (!act->url.empty()) {   // a link row: opens it, and stays
                 if (pressed) {
                     play_sound(kSoundSelect);
-                    open_url(g_view_opens[v][n]);
+                    open_url(act->url);
                 }
                 return true;
             }
+            if (act->view > 0) {   // a page's row: shows the page
+                if (pressed) {
+                    play_sound(kSoundSelect);
+                    switch_view(page, act->view, false, 0);
+                }
+                return true;
+            }
+            if (on_page && !act->select.empty()) {   // tells the page's mod
+                if (pressed && static_cast<std::size_t>(view) < g_view_page.size()) select_on_page(g_view_page[view], act->select);
+                return true;
+            }
+        }
+        if (on_page) {
+            // B: back to the mod's settings, on the page's row; A does nothing else here
+            if (button == kButtonB && pressed) {
+                play_sound(kSoundBack, RVA_BACK_SOUNDS);
+                const int owner = static_cast<std::size_t>(view) < g_view_owner.size() ? g_view_owner[view] : 0;
+                int row         = 0;
+                if (owner > 0 && static_cast<std::size_t>(owner - 1) < g_view_acts.size())
+                    for (std::size_t r = 0; r < g_view_acts[owner - 1].size(); ++r)
+                        if (g_view_acts[owner - 1][r].view == view) row = static_cast<int>(r);
+                switch_view(page, owner, true, row);
+            }
+            return true;
         }
         if (pressed) {
             if (button == kButtonA) play_sound(kSoundSelect);   // A selects, as on the tiles
             else if (view != 0) play_sound(kSoundBack, RVA_BACK_SOUNDS);   // B: the game's back, with the swoosh
             if (view == 0) {
                 const int n = g_selected.load();
-                if (n >= 0 && static_cast<std::size_t>(n) < g_entries.size() && n + 1 < kMaxViews) switch_view(page, n + 1);
+                if (n >= 0 && static_cast<std::size_t>(n) < g_entries.size() && n < kMaxModViews) switch_view(page, n + 1, false, 0);
             } else {
-                switch_view(page, 0);   // B (Back) or A (Accept): done with this mod
+                switch_view(page, 0, true, 0);   // B (Back) or A (Accept): done with this mod
             }
         }
         return true;
@@ -2196,14 +3029,83 @@ void wire_installed_tile(void* page) {
     }
 }
 
+// ---- the game's tiles that mods' pages take over (API 8) ----------------------------------
+// See kTiles. Each CALL to 0x140CB47B0(page, ObjectPtr* out, int command) -> out goes to a
+// detour of ours (one per call site, for its `original`) that opens the page the way the MODS
+// tab's tiles do, through the Car Packs handler; the pause menu it's on is the same page.
+using UiCommandFn = void** (*)(void* page, void** out, int command);
+UiCommandFn o_tile_command[kTileCount][2] = {};
+
+template <int T, int S>
+void** d_tile_command(void* page, void** out, int command) {
+    int j = -1;
+    {
+        std::scoped_lock lk{g_mu};
+        j = g_tile_page[T];
+    }
+    if (j < 0 || !o_car_packs || command != 0xFE) return o_tile_command[T][S](page, out, command);
+    if (out) *out = nullptr;   // the caller releases what it gets back
+    slog(std::string("the ") + kTiles[T].name + " tile: opening a mod's page");
+    open_hub_page(page, kHubTilePage + T);
+    return out;
+}
+void* const kTileDetours[kTileCount][2] = {
+    {reinterpret_cast<void*>(&d_tile_command<0, 0>), reinterpret_cast<void*>(&d_tile_command<0, 1>)},
+};
+
+// Hooks the calls of the tiles that have a page. Where the code isn't as expected, the tile
+// keeps doing what it did, and the page is only under Installed mods.
+void hook_tiles(FH2Mod* m) {
+    for (std::size_t t = 0; t < kTileCount; ++t) {
+        {
+            std::scoped_lock lk{g_mu};
+            if (g_tile_page[t] < 0) continue;
+        }
+        // mov r8d, 0xFE; mov rcx, rbx; call 0x140CB47B0
+        bool ok = true;
+        for (uintptr_t call : kTiles[t].calls) {
+            const int32_t rel = static_cast<int32_t>(0x0CB47B0 - (call + 5));
+            uint8_t expect[14] = {0x41, 0xB8, 0xFE, 0x00, 0x00, 0x00, 0x48, 0x8B, 0xCB, 0xE8};
+            std::memcpy(expect + 10, &rel, 4);
+            ok = ok && code_matches(call - 9, expect, sizeof expect);
+        }
+        std::vector<FH2Hook*> made;
+        for (int c = 0; c < 2 && ok; ++c) {
+            const std::string name = std::string(kTiles[t].name) + " tile" + (c ? " (Storm Island tab)" : "");
+            FH2Hook* h = g_api->hook_call(m, name.c_str(), reinterpret_cast<void*>(g_base + kTiles[t].calls[c]), kTileDetours[t][c],
+                                          reinterpret_cast<void**>(&o_tile_command[t][c]));
+            ok = h != nullptr;
+            if (h) made.push_back(h);
+        }
+        for (FH2Hook* h : made) ok = ok && g_api->enable_hooks(m, h);
+        if (!ok) {
+            for (FH2Hook* h : made) g_api->disable_hooks(m, h);
+            slog(std::string("the ") + kTiles[t].name + " tile's code doesn't look as expected; its page is only under Installed mods");
+            std::scoped_lock lk{g_mu};
+            g_tile_page[t] = -1;
+            continue;
+        }
+        slog(std::string("the ") + kTiles[t].name + " tile opens a mod's page");
+    }
+}
+
 void hook_hud_shown(FH2Mod* m);
 bool g_hud_notice = false;   // A_Hud.xaml has the notice
 void d_pause_menu_wire(void* page) {
+    g_custom_obj   = nullptr;   // back on the pause menu: no page of a mod's own design is up
+    g_custom_shown = -1;
+    for (auto& obj : g_tile_page_obj) obj = nullptr;
+    g_focus_again.clear();
     g_hub_asked  = 0;
     g_hub_builds = 0;
     g_hub_return = false;
     o_pause_menu_wire(page);
     wire_installed_tile(page);
+    // a page's tile text may have changed since this page's bindings read it
+    for (std::size_t t = 0; t < kTileCount; ++t)
+        if (page && g_tile_obj[t].load() == page)
+            for (int prop = 0; prop < kTileProps; ++prop)
+                if (g_tile_desc[prop][t]) notify_changed(page, g_tile_desc[prop][t]);
     // back from the MODS tab with a change that needs a restart?
     const bool from_hub = g_in_hub;
     g_in_hub            = false;
@@ -2325,6 +3227,7 @@ void hook_hub() {
     }
     if (!show_marketplace_tab(m)) slog("the code that hides the Marketplace tab doesn't look as expected; MODS shows only with Extra Options' EnableMarketplace");
     g_sounds_ok = true;
+    hook_tiles(m);
     if (g_hud_notice) {
         mod_notice_descriptor();   // made now, so the HUD hook knows there's a notice
         hook_hud_shown(m);
@@ -2507,6 +3410,284 @@ int settings_add(FH2Mod* m, const FH2Setting* s) {
     return 1;
 }
 
+int pages_add(FH2Mod* m, const FH2Page* p) {
+    if (!m || !p) return 0;
+    if (p->size < offsetof(FH2Page, user) + sizeof(void*)) {
+        log_line(m->name, "add_page: the FH2Page's size is too small (set size = sizeof(FH2Page))");
+        return 0;
+    }
+    if (!valid_key(p->key)) {
+        log_line(m->name, std::string("add_page: \"") + (p->key ? p->key : "") + "\" isn't a usable key (letters, digits, _)");
+        return 0;
+    }
+    if (!p->title || !*p->title) {
+        log_line(m->name, std::string("add_page: ") + p->key + " needs a title");
+        return 0;
+    }
+    std::scoped_lock lk{g_mu};
+    for (const ModPage& pg : g_pages)
+        if (pg.mod == m && pg.key == p->key) {
+            log_line(m->name, std::string("add_page: there's already a page called ") + p->key);
+            return 0;
+        }
+    if (g_pages.size() >= kMaxPages) {
+        log_line(m->name, std::string("add_page: no room for ") + p->key + " (" + std::to_string(kMaxPages) + " pages at most)");
+        return 0;
+    }
+    int tile = -1;
+    if (p->tile && *p->tile && g_written) {
+        log_line(m->name, std::string("add_page: ") + p->key + " was added after the pages were written; its tile only works from the next launch "
+                                                               "(add pages from fh2mod_init)");
+    } else if (p->tile && *p->tile) {
+        for (std::size_t t = 0; t < kTileCount; ++t)
+            if (_stricmp(kTiles[t].name, p->tile) == 0) tile = static_cast<int>(t);
+        if (tile < 0) {
+            log_line(m->name, std::string("add_page: there's no tile called ") + p->tile + "; " + p->key + " is only under MODS > Installed mods");
+        } else if (g_tile_page[tile] >= 0) {
+            const ModPage& other = g_pages[g_tile_page[tile]];
+            log_line(m->name, std::string("add_page: the ") + kTiles[tile].name + " tile already opens " + other.mod->name + "'s page; " + p->key +
+                                  " is only under MODS > Installed mods");
+            tile = -1;
+        }
+    }
+    ModPage& pg    = g_pages.emplace_back();
+    pg.mod         = m;
+    pg.key         = p->key;
+    pg.title       = p->title;
+    pg.label       = p->label && *p->label ? p->label : p->title;
+    pg.description = p->description ? p->description : "";
+    pg.tile        = tile;
+    pg.on_open     = p->on_open;
+    pg.on_select   = p->on_select;
+    pg.user        = p->user;
+    if (p->size >= offsetof(FH2Page, on_slot) + sizeof(void*)) {
+        pg.on_button = p->on_button;
+        pg.on_slot   = p->on_slot;
+    }
+    if (tile >= 0) g_tile_page[tile] = static_cast<int>(g_pages.size() - 1);
+    log_line(m->name, "page: " + pg.title + (tile >= 0 ? std::string(", on the ") + kTiles[tile].name + " tile" : std::string()) +
+                          (g_written ? "; the pages are already written, so it shows from the next launch" : ""));
+    return 1;
+}
+
+int pages_set_rows(FH2Mod* m, const char* key, const FH2PageRow* rows, uint32_t count) {
+    if (!m || !key || (count && !rows)) return 0;
+    if (count > kMaxPageRows) {
+        log_line(m->name, std::string("set_page_rows: ") + key + " gets its first " + std::to_string(kMaxPageRows) + " rows of " +
+                              std::to_string(count));
+        count = kMaxPageRows;
+    }
+    std::vector<PageRowData> data;
+    data.reserve(count);
+    // The rows are an array of the mod's FH2PageRow, which may be bigger (newer) or smaller (older)
+    // than the platform's: step by the first row's size, and read only what it covers.
+    const uint32_t stride = count ? rows[0].size : 0;
+    if (count && (stride < offsetof(FH2PageRow, style) || stride % alignof(FH2PageRow) != 0)) {
+        log_line(m->name, std::string("set_page_rows: ") + key + "'s rows have no usable size (set size = sizeof(FH2PageRow)); the rows weren't changed");
+        return 0;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        const FH2PageRow& r = *reinterpret_cast<const FH2PageRow*>(reinterpret_cast<const uint8_t*>(rows) + std::size_t{i} * stride);
+        if (r.size != stride) {
+            log_line(m->name, std::string("set_page_rows: row ") + std::to_string(i) + " of " + key + " isn't the size of the first; the rows weren't changed");
+            return 0;
+        }
+        PageRowData& d = data.emplace_back();
+        d.key          = r.key ? r.key : "";
+        d.label        = r.label ? r.label : "";
+        d.value        = r.value ? r.value : "";
+        d.description  = r.description ? r.description : "";
+        d.footer       = r.footer ? r.footer : "";
+        if (r.size >= offsetof(FH2PageRow, style) + sizeof(int) && r.style >= FH2_ROW_NORMAL && r.style <= FH2_ROW_HEADING) d.style = r.style;
+        if (r.size >= offsetof(FH2PageRow, value_alert) + sizeof(int)) d.value_alert = r.value_alert != 0;
+    }
+    std::scoped_lock lk{g_mu};
+    for (ModPage& pg : g_pages)
+        if (pg.mod == m && pg.key == key) {
+            pg.rows = std::move(data);
+            return 1;
+        }
+    log_line(m->name, std::string("set_page_rows: there's no page called ") + key);
+    return 0;
+}
+
+namespace {
+// Whether `xaml` has a Button, Slider or SpinnerControl named `name`.
+bool focusable_in(const std::string& xaml, const std::string& name) {
+    const std::string attr = "x:Name=\"" + name + "\"";
+    for (std::size_t at = xaml.find(attr); at != std::string::npos; at = xaml.find(attr, at + 1)) {
+        const std::size_t lt = xaml.rfind('<', at);
+        if (lt == std::string::npos || xaml.find('>', lt) < at) continue;   // not in a tag
+        std::size_t e = lt + 1;
+        while (e < xaml.size() && !std::isspace(static_cast<unsigned char>(xaml[e])) && xaml[e] != '>' && xaml[e] != '/') ++e;
+        const std::string tag = xaml.substr(lt + 1, e - lt - 1);
+        if (tag == "Button" || tag == "Slider" || tag == "local:SpinnerControl") return true;
+    }
+    return false;
+}
+
+// Whether a XAML fragment's tags are balanced (quotes, comments and <?...?> allowed for): what the
+// game's reader would choke on worst, caught before it gets there.
+bool balanced_xml(const std::string& x, std::string& why) {
+    std::vector<std::string> open;
+    for (std::size_t i = 0; i < x.size();) {
+        if (x[i] != '<') {
+            ++i;
+            continue;
+        }
+        if (x.compare(i, 4, "<!--") == 0) {
+            const std::size_t e = x.find("-->", i + 4);
+            if (e == std::string::npos) return why = "a comment isn't closed", false;
+            i = e + 3;
+            continue;
+        }
+        if (x.compare(i, 2, "<?") == 0 || x.compare(i, 2, "<!") == 0) {
+            const std::size_t e = x.find('>', i);
+            if (e == std::string::npos) return why = "a declaration isn't closed", false;
+            i = e + 1;
+            continue;
+        }
+        // the tag's end, past quoted attribute values
+        std::size_t e = i + 1;
+        char quote    = 0;
+        for (; e < x.size(); ++e) {
+            if (quote) {
+                if (x[e] == quote) quote = 0;
+            } else if (x[e] == '"' || x[e] == '\'') {
+                quote = x[e];
+            } else if (x[e] == '>') {
+                break;
+            } else if (x[e] == '<') {
+                return why = "a '<' inside a tag", false;
+            }
+        }
+        if (e >= x.size()) return why = "a tag isn't closed", false;
+        const bool closing = x[i + 1] == '/', self = x[e - 1] == '/';
+        std::size_t n0 = i + (closing ? 2 : 1), n1 = n0;
+        while (n1 < e && !std::isspace(static_cast<unsigned char>(x[n1])) && x[n1] != '/' && x[n1] != '>') ++n1;
+        const std::string name = x.substr(n0, n1 - n0);
+        if (name.empty()) return why = "a tag without a name", false;
+        if (closing) {
+            if (open.empty() || open.back() != name) return why = "</" + name + "> doesn't match " + (open.empty() ? "anything" : "<" + open.back() + ">"), false;
+            open.pop_back();
+        } else if (!self) {
+            open.push_back(name);
+        }
+        i = e + 1;
+    }
+    if (!open.empty()) return why = "<" + open.back() + "> isn't closed", false;
+    return true;
+}
+
+int page_index(FH2Mod* m, const char* key) {   // under g_mu
+    if (!m || !key) return -1;
+    for (std::size_t j = 0; j < g_pages.size(); ++j)
+        if (g_pages[j].mod == m && g_pages[j].key == key) return static_cast<int>(j);
+    return -1;
+}
+} // namespace
+
+int pages_set_xaml(FH2Mod* m, const char* key, const char* resources, const char* content, const char* help) {
+    if (!m || !key) return 0;
+    if (!content || !std::strstr(content, "x:Name=\"FirstItem\"")) {
+        log_line(m->name, std::string("set_page_xaml: ") + key + "'s content has no element named FirstItem; the page wasn't changed");
+        return 0;
+    }
+    for (const auto& [what, text] : {std::pair{"resources", resources}, {"content", content}, {"help", help}}) {
+        std::string why;
+        if (text && !balanced_xml(text, why)) {
+            log_line(m->name, std::string("set_page_xaml: ") + key + "'s " + what + " isn't well-formed (" + why + "); the page wasn't changed");
+            return 0;
+        }
+    }
+    std::scoped_lock lk{g_mu};
+    const int j = page_index(m, key);
+    if (j < 0) {
+        log_line(m->name, std::string("set_page_xaml: there's no page called ") + key);
+        return 0;
+    }
+    ModPage& pg = g_pages[j];
+    if (!pg.custom && pg.tile < 0) log_line(m->name, std::string("set_page_xaml: ") + key + " has no tile, so nothing opens it");
+    pg.custom         = true;
+    pg.xaml_resources = resources ? resources : "";
+    pg.xaml_content   = content;
+    pg.xaml_help      = help ? help : "";
+    return 1;
+}
+
+int pages_get_slot(FH2Mod* m, const char* key, int slot) {
+    if (slot < 0 || slot >= FH2_PAGE_SLOTS) return 0;
+    std::scoped_lock lk{g_mu};
+    const int j = page_index(m, key);
+    return j < 0 ? 0 : g_pages[j].slots[slot].load();
+}
+
+int pages_set_slot(FH2Mod* m, const char* key, int slot, int value) {
+    if (slot < 0 || slot >= FH2_PAGE_SLOTS) return 0;
+    int j = -1, old = 0;
+    {
+        std::scoped_lock lk{g_mu};
+        j = page_index(m, key);
+        if (j < 0) return 0;
+        old = g_pages[j].slots[slot].exchange(value);
+    }
+    // on the UI thread, in a callback for the page that's up: its bindings see it now (not the
+    // slot a binding is setting right now, from on_slot: that binding is in the middle of it)
+    if (old != value && g_in_callback && g_custom_shown.load() == j) notify_slot(slot, slot != g_setting_slot);
+    return 1;
+}
+
+int pages_set_tile_colors(FH2Mod* m, const char* key, uint32_t background, uint32_t text) {
+    std::scoped_lock lk{g_mu};
+    const int j = page_index(m, key);
+    if (j < 0) return 0;
+    ModPage& pg = g_pages[j];
+    if (pg.tile < 0 || g_tile_page[pg.tile] != j) {
+        log_line(m->name, std::string("set_page_tile_colors: ") + key + " isn't on a tile");
+        return 0;
+    }
+    pg.tile_back = background;
+    pg.tile_fore = text;
+    return 1;
+}
+
+int pages_set_tile_text(FH2Mod* m, const char* key, const char* text) {
+    std::string clean;
+    for (const char* c = text ? text : ""; *c && clean.size() < 40; ++c)
+        clean += (*c >= 0x20 && *c < 0x7F) ? *c : '?';
+    std::scoped_lock lk{g_mu};
+    const int j = page_index(m, key);
+    if (j < 0) return 0;
+    ModPage& pg = g_pages[j];
+    if (pg.tile < 0 || g_tile_page[pg.tile] != j) {
+        log_line(m->name, std::string("set_page_tile_text: ") + key + " isn't on a tile");
+        return 0;
+    }
+    pg.tile_text = clean;
+    return 1;
+}
+
+int pages_focus(FH2Mod* m, const char* key, const char* name) {
+    if (!name || !*name || !g_in_callback || !g_callback_page) return 0;
+    {
+        std::scoped_lock lk{g_mu};
+        const int j = page_index(m, key);
+        if (j < 0 || j != g_custom_shown.load()) return 0;
+        // only a control the page's XAML (as written for this opening) names: focusing goes
+        // through the element's input interface, which other things named there don't have
+        if (!focusable_in(g_pages[j].xaml_written, name)) {
+            log_line(m->name, std::string("focus_page_element: ") + name + " isn't a Button, Slider or SpinnerControl on page " + key);
+            return 0;
+        }
+    }
+    if (!focus_named(g_callback_page, name)) {
+        log_line(m->name, std::string("focus_page_element: no element called ") + name + " on page " + key);
+        return 0;
+    }
+    g_focus_again = name;   // again when the button comes up: a list that has only just shown may not have taken it
+    return 1;
+}
+
 int settings_get(FH2Mod* m, const char* key) {
     if (!m || !key) return -1;
     std::scoped_lock lk{g_mu};
@@ -2643,6 +3824,20 @@ void settings_start(const FH2ModApi* api) {
     remove_leftover_file("stateflow/ui_screens.xml");
     for (int p = kHubInstalled; p <= kHubAbout && g_hub_files; ++p)
         if (p != kHubGetMods) g_hub_files = write_hub_page(p);
+    // the mods' pages on tiles (written now as well as when they open, as the others are)
+    for (std::size_t t = 0; t < kTileCount; ++t) {
+        const int p = kHubTilePage + static_cast<int>(t);
+        bool has = false;
+        {
+            std::scoped_lock lk{g_mu};
+            has = g_tile_page[t] >= 0;
+        }
+        if (!(g_hub_files && has && write_hub_page(p))) {
+            remove_leftover_file(("UI/Scenes/Anthem/" + hub_file(p)).c_str());
+            std::scoped_lock lk{g_mu};
+            g_tile_page[t] = -1;
+        }
+    }
     remove_leftover_file("UI/Scenes/Anthem/A_ModPage_03.xaml");   // Get mods, before it opened the mod site
     remove_leftover_file("UI/Scenes/Anthem/A_ModPage_05.xaml");   // Making mods, before 2.5.0's release
     if (!g_hub_files) {

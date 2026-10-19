@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define FH2MOD_API_VERSION 7
+#define FH2MOD_API_VERSION 8
 
 #ifdef __cplusplus
 #define FH2MOD_EXPORT extern "C" __declspec(dllexport)
@@ -47,6 +47,9 @@ typedef struct FH2Mod FH2Mod;
 typedef struct FH2Hook FH2Hook;
 /* One row on the Mods page (API 4), defined below FH2ModApi. */
 typedef struct FH2Setting FH2Setting;
+/* A page of your own, and one of its rows (API 8), defined below FH2ModApi. */
+typedef struct FH2Page FH2Page;
+typedef struct FH2PageRow FH2PageRow;
 
 /* The CPU's registers at an instruction hook (API 7): see hook_instruction.
    rsp is what it was at the hooked instruction; changing it has no effect. */
@@ -300,6 +303,77 @@ typedef struct FH2ModApi {
        often every frame: keep it short. If it crashes, that hook is
        switched off and the crash goes in the log. */
     FH2Hook* (*hook_instruction)(FH2Mod* mod, const char* name, void* at, FH2InstructionFn fn, void* user);
+
+    /* ==== API version 8 (platform 2.7.0): check api_version >= 8 ======== */
+
+    /* ---- Pages -------------------------------------------------------------
+       A page of your own in the game's menus, laid out like the Mods page: a
+       list of rows, each with a label on the left and a value on the right,
+       and the selected row's description beside the list. Your mod's page
+       under MODS > Installed mods gets a row that opens it. A page can also
+       take over a pause-menu tile that does nothing on PC: FH2Page.tile.
+
+       Add pages from fh2mod_init (one added later only shows from the next
+       launch). Their rows can change at any time: the page is written each
+       time it's opened, from the rows you last set. Returns 1 if the page was
+       added, 0 if not (the log says why). */
+    int (*add_page)(FH2Mod* mod, const FH2Page* page);
+    /* Your page `page_key` now has these `count` rows (copied), in this
+       order; the next time it opens, it shows them. Call it whenever they
+       change, or from the page's on_open. Returns 1, or 0 if you have no page
+       called `page_key` (or a row is unusable; the log says which). */
+    int (*set_page_rows)(FH2Mod* mod, const char* page_key, const FH2PageRow* rows, uint32_t count);
+
+    /* ---- Pages of your own design --------------------------------------
+       Instead of rows, a page on a tile can be XAML you write: the game's
+       own controls, styles and textures, laid out however you like, inside
+       the frame of the game's options pages (background, player bar, help
+       bar). `content` replaces what's between the title and the help bar
+       (the HUD options page's BasicOptions panel), and must name the
+       element to focus first x:Name="FirstItem". `resources` (may be NULL)
+       goes into the page's ResourceDictionary. `help` (may be NULL) replaces
+       the help bar's DefaultHelpPanel; NULL leaves only Back. All three are
+       UTF-8 XAML fragments, using the page's xmlns (local: is ForzaUI).
+       Like rows, the XAML is copied, and the page is written from the last
+       you set each time it opens. A page with XAML shows it on its tile;
+       under MODS > Installed mods it shows its rows if it has any, and
+       otherwise its row says which tile opens it. Returns 1, or 0 if you
+       have no page called `page_key`, `content` has no FirstItem, or a
+       fragment's tags don't balance (the page keeps the XAML it had).
+
+       Bindings: slot n (0..15) is an int of the page's, "FH2Mod_Slot_<n>",
+       which XAML can bind two-way (a list's SelectedIndex, say), and
+       "FH2Mod_Slot_<n>_Is_<v>" is true while it's v, 0..9999 (for
+       Visibility, with the converters FH2Mod_ShowIf, FH2Mod_ShowIfHidden
+       and FH2Mod_HideIf the platform puts in the page's resources). Slots
+       are 0 when the page opens; set the ones you want otherwise in
+       on_open. */
+    int (*set_page_xaml)(FH2Mod* mod, const char* page_key, const char* resources, const char* content, const char* help);
+    /* A slot's value (0 if there's no such page or slot). */
+    int (*get_page_slot)(FH2Mod* mod, const char* page_key, int slot);
+    /* Sets a slot. From on_button or on_slot, the page's bindings see it
+       straight away (from on_slot, except the slot being set). From
+       on_open, it's what the page opens with. Anywhere else, it's only
+       stored: the page doesn't show it, and opening resets it. Returns 1,
+       or 0 for no such page or slot. */
+    int (*set_page_slot)(FH2Mod* mod, const char* page_key, int slot, int value);
+    /* Moves the focus to the Button, Slider or SpinnerControl named `name`
+       in the page's XAML, from on_button. Returns 1 if it did. */
+    int (*focus_page_element)(FH2Mod* mod, const char* page_key, const char* name);
+    /* A line of text on the tile your page has taken over, at its bottom
+       left in the game's own style for a tile's count (a club tile's
+       member count): a score, say. Plain ASCII, up to 40 characters; NULL
+       or "" shows nothing. Call it from any thread, whenever it changes:
+       the pause menu reads it each time it's shown. Returns 1, or 0 if you
+       have no page called `page_key` or it isn't on a tile. */
+    int (*set_page_tile_text)(FH2Mod* mod, const char* page_key, const char* text);
+    /* That tile's colours, as 0xAARRGGBB: `background`, and `text` for its
+       title and your line over it. 0 leaves the game's own (its light grey
+       tile, dark title and orange line). The icon takes the background's
+       colour, so it stays a shade of it. Like the text, the pause menu
+       reads them each time it's shown. Returns 1, or 0 if you have no page
+       called `page_key` or it isn't on a tile. */
+    int (*set_page_tile_colors)(FH2Mod* mod, const char* page_key, uint32_t background, uint32_t text);
 } FH2ModApi;
 
 /* Called on the game's UI thread when the player changes a row: keep it
@@ -341,6 +415,68 @@ struct FH2Setting {
        ignored. On an older platform it would come out as an On/Off row, so
        only add one when api_version >= 6. ---- */
     const char* url;               /* "http://..." or "https://..." */
+};
+
+/* Pages (API 8). Every page callback runs on the game's UI thread: keep them
+   short, and don't call into the game from them. */
+/* The page is about to be written to be shown: set its rows now if you
+   haven't kept them up to date. Opening MODS > Installed mods writes every
+   mod's pages, so it's called then too. */
+typedef void (*FH2PageOpenFn)(void* user, const char* page_key);
+/* The player pressed A on a row that has a key. */
+typedef void (*FH2PageSelectFn)(void* user, const char* page_key, const char* row_key);
+/* A page of your own design: a button was pressed (FH2_BUTTON_...). Return
+   FH2_PAGE_IGNORED for what it usually does (B leaves the page, A does
+   nothing, the others whatever the game does with them there), or one of
+   the FH2_PAGE_HANDLED values. */
+typedef int (*FH2PageButtonFn)(void* user, const char* page_key, int button);
+/* A page of your own design: a binding changed slot `slot` to `value`. */
+typedef void (*FH2PageSlotFn)(void* user, const char* page_key, int slot, int value);
+
+#define FH2_BUTTON_A  1
+#define FH2_BUTTON_B  2
+#define FH2_BUTTON_X  3
+#define FH2_BUTTON_Y  4
+#define FH2_BUTTON_LB 5
+#define FH2_BUTTON_RB 6
+#define FH2_PAGE_IGNORED        0
+#define FH2_PAGE_HANDLED        1   /* nothing else happens */
+#define FH2_PAGE_HANDLED_SELECT 2   /* and the menus' select sound plays */
+#define FH2_PAGE_HANDLED_BACK   3   /* and the menus' back sound plays */
+#define FH2_PAGE_SLOTS 16
+
+struct FH2Page {
+    uint32_t size;                 /* sizeof(FH2Page) */
+    const char* key;               /* unique within your mod: letters, digits and '_', like "List" */
+    const char* title;             /* the page's title, UTF-8: "Achievements" (shown in capitals) */
+    const char* label;             /* the row on your mod's page that opens it; NULL = the title */
+    const char* description;       /* that row's description; may be NULL */
+    /* A pause-menu tile that opens this page instead of what it did on Xbox:
+       "Achievements" (the tile on the pause menu and on its Storm Island
+       tab). One mod per tile. NULL for none. */
+    const char* tile;
+    FH2PageOpenFn on_open;         /* may be NULL */
+    FH2PageSelectFn on_select;     /* may be NULL: A then does nothing on the page */
+    void* user;                    /* passed to every callback */
+    /* Pages of your own design (set_page_xaml). Both may be NULL. */
+    FH2PageButtonFn on_button;
+    FH2PageSlotFn on_slot;
+};
+
+#define FH2_ROW_NORMAL  0
+#define FH2_ROW_DIM     1          /* label and value in grey: locked, not available yet */
+#define FH2_ROW_HEADING 2          /* label in the game's orange: a heading over the rows after it */
+
+/* One row of a page (API 8). */
+struct FH2PageRow {
+    uint32_t size;                 /* sizeof(FH2PageRow) */
+    const char* key;               /* passed to on_select when A is pressed on it; NULL: A does nothing */
+    const char* label;             /* left, UTF-8: "Island Explorer" */
+    const char* value;             /* right: "12 / 50"; may be NULL */
+    const char* description;       /* beside the list while the row is selected; may be NULL */
+    const char* footer;            /* a line at the bottom of the description panel; may be NULL */
+    int style;                     /* FH2_ROW_NORMAL, FH2_ROW_DIM or FH2_ROW_HEADING */
+    int value_alert;               /* nonzero: the value in red */
 };
 
 /* What a mod exports. */

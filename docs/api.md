@@ -1,6 +1,6 @@
 # API reference
 
-Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5 and 7 with 2.6. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 the Mods page, version 5 its sliders, version 6 mod descriptions and link rows for the MODS tab, and version 7 byte patches and instruction hooks; the sections for those say so.
+Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5, 7 with 2.6 and 8 with 2.7. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 the Mods page, version 5 its sliders, version 6 mod descriptions and link rows for the MODS tab, version 7 byte patches and instruction hooks, and version 8 pages of your own; the sections for those say so.
 
 ## Rules that apply everywhere
 
@@ -340,6 +340,166 @@ if (api->api_version >= 5) {
 ```
 
 The log (`[Mods page]`) says when the page is ready, and each change is logged under your mod's name. If the game's menu code doesn't look as expected, there's no tile or page and the platform's three files for it are removed again; your mod keeps running and simply isn't told of changes. [`game-notes.md`](game-notes.md#menus) explains how the page is put together.
+
+## Pages (API 8)
+
+```c
+int add_page(FH2Mod* mod, const FH2Page* page);
+int set_page_rows(FH2Mod* mod, const char* page_key, const FH2PageRow* rows, uint32_t count);
+
+typedef struct FH2Page {
+    uint32_t size;                 /* sizeof(FH2Page) */
+    const char* key;               /* unique within your mod: "List" */
+    const char* title;             /* "Achievements" (shown in capitals) */
+    const char* label;             /* the row on your mod's page that opens it; NULL = the title */
+    const char* description;       /* that row's description; may be NULL */
+    const char* tile;              /* a pause-menu tile that opens it: "Achievements", or NULL */
+    FH2PageOpenFn on_open;         /* void (*)(void* user, const char* page_key); may be NULL */
+    FH2PageSelectFn on_select;     /* void (*)(void* user, const char* page_key, const char* row_key); may be NULL */
+    void* user;
+} FH2Page;
+
+typedef struct FH2PageRow {
+    uint32_t size;                 /* sizeof(FH2PageRow) */
+    const char* key;               /* passed to on_select; NULL: A does nothing on it */
+    const char* label;             /* left: "Island Explorer" */
+    const char* value;             /* right: "12 / 50"; may be NULL */
+    const char* description;       /* beside the list while it's selected; may be NULL */
+    const char* footer;            /* a line at the bottom of the description panel; may be NULL */
+    int style;                     /* FH2_ROW_NORMAL, FH2_ROW_DIM or FH2_ROW_HEADING */
+    int value_alert;               /* nonzero: the value in red */
+} FH2PageRow;
+```
+
+A page is a list of your own in the game's menus, laid out like the Mods page: each row has a label on the left and a value on the right, and the selected row's description shows beside the list, with your footer line at the bottom of it. It's for showing things (stats, a collection, what your mod has found) and, with `on_select`, for simple menus where A on a row does something.
+
+Your mod's own page under MODS > Installed mods gets a row for each of your pages (`label`, with `description` beside it), and A on it shows the page; B goes back. A page can also take over a pause-menu tile that does nothing on PC. For now that's `"Achievements"`, the tile on the pause menu and the one on its Storm Island tab, which on Xbox opened the console's achievements app. Only one mod can have a tile; a second one is told so in the log, and its page is still under Installed mods.
+
+Add pages from `fh2mod_init`. `add_page` returns 1, or 0 with the reason in the log. Pages are written when every mod's `fh2mod_init` has returned, and a page added later only shows from the next launch.
+
+**Rows.** `set_page_rows` gives a page its rows, copied, in order, replacing the ones it had (up to 1000). You can call it at any time, from any thread. The page is written again each time it's opened, from the rows you last set, so keep them up to date as your data changes. If working them out is costly, do it in `on_open`, which runs just before the page is written: when its tile opens it, and when MODS > Installed mods opens, since that page holds every mod's pages. Until you set any rows, the page says it has nothing on it yet.
+
+- `style` `FH2_ROW_DIM` greys the label and value, for something locked or not available yet. `FH2_ROW_HEADING` puts the label in the game's orange, as a heading over the rows after it. The selected row is the game's usual orange bar with white text, whatever its style.
+- `value_alert` shows the value in red.
+- The value column is half the list's width: keep values short. Text doesn't break at `\n`; descriptions wrap on their own.
+
+**A.** When the page has an `on_select` and the selected row has a `key`, A calls `on_select(user, page_key, row_key)` on the game's UI thread, and the help bar says Select. Keep it short and don't call into the game from it; a crash in it is caught and logged. The page shows the same rows until it's opened again, so `on_select` can do something but can't change what's on screen. Without `on_select`, the help bar only has Back.
+
+```cpp
+static void list_opening(void*, const char*) {
+    std::vector<FH2PageRow> rows;
+    for (const Thing& t : g_things) {
+        FH2PageRow r{sizeof r};
+        r.label = t.name.c_str();
+        r.value = t.found ? "Found" : "Not yet";
+        r.description = t.hint.c_str();
+        r.style = t.found ? FH2_ROW_NORMAL : FH2_ROW_DIM;
+        rows.push_back(r);
+    }
+    g_api->set_page_rows(g_mod, "List", rows.data(), static_cast<uint32_t>(rows.size()));
+}
+
+// in fh2mod_init, after register_mod:
+if (api->api_version >= 8) {
+    FH2Page p{sizeof p};
+    p.key = "List"; p.title = "Things found"; p.description = "Every thing, and whether you've found it.";
+    p.on_open = list_opening;
+    api->add_page(mod, &p);
+}
+```
+
+The log (`[Mods page]`) says when a tile opens a page, and each `on_select` is logged under your mod's name. If the tile's code doesn't look as expected, the tile keeps doing what it did and the page is only under Installed mods. [`game-notes.md`](game-notes.md#menus) explains how the pages are put together.
+
+**Text on the tile.**
+
+```c
+int set_page_tile_text(FH2Mod* mod, const char* page_key, const char* text);
+```
+
+A page on a tile can put a line of text on it, at the tile's bottom left, in the pause menu's own style for a tile's count (the club tile's member count: the game's orange, small): a score, say, `"340 / 2,000 G"`. Plain ASCII, up to 40 characters (others show as `?`); `NULL` or `""` shows nothing. Call it from any thread, whenever the text changes: the pause menu reads it each time it's shown. It returns 1, or 0 if you have no page called `page_key` or it isn't on a tile (the log says which).
+
+```c
+int set_page_tile_colors(FH2Mod* mod, const char* page_key, uint32_t background, uint32_t text);
+```
+
+The same tile's colours, as `0xAARRGGBB`: `background` for the tile, `text` for its title and your line. 0 leaves the game's own (the light grey tile, the dark title, the orange line). The icon takes the background's colour, so it stays a shade of it. The pause menu reads them each time it's shown, like the text, and the return values are the same.
+
+The tile keeps the game's title, icon and badge; the platform gives it a copy of the game's icon tile template with the line added and the colours bound, and only on tiles a mod's page has taken over. Until you set them, the text is empty and the colours are the game's, so the tile looks as it did.
+
+### Pages of your own design
+
+```c
+int set_page_xaml(FH2Mod* mod, const char* page_key, const char* resources, const char* content, const char* help);
+int get_page_slot(FH2Mod* mod, const char* page_key, int slot);
+int set_page_slot(FH2Mod* mod, const char* page_key, int slot, int value);
+int focus_page_element(FH2Mod* mod, const char* page_key, const char* name);
+
+/* in FH2Page, after user: */
+FH2PageButtonFn on_button;   /* int (*)(void* user, const char* page_key, int button) */
+FH2PageSlotFn on_slot;       /* void (*)(void* user, const char* page_key, int slot, int value) */
+```
+
+Rows give you the options pages' look. For anything else, a page on a tile can be XAML you write: the game's own controls (`CommonListBox`, `Button`, `local:FZTextBlock`, `local:FZMaterial`), styles, colours and textures, laid out however you like. Everything in `media\UI.zip` is there to use: `Resources/Anthem/` has the shared styles, and `Scenes/Anthem/` every page of the game, which are the best examples. Textures are referred to as `/ForzaUI;component/Textures/Anthem/<path>.png` (`media\UI\textures\Anthem.zip` lists them, as `.swatchbin`).
+
+The page keeps the frame of the game's options pages: the blurred background, the player bar, the help bar, and the screen's padding and tilt. `content` takes the place of what the HUD options page has inside that (its title, list and description panel), so it includes your own title (`A_Style_ContentControl_ScreenTitleBlock` is the game's). It has to name one element `x:Name="FirstItem"`, which gets the focus when the page opens; name your main list `OptionsList`, as the game's options pages do. `resources` goes into the page's `ResourceDictionary`, and `help`, if you give one, replaces the help bar's `DefaultHelpPanel` (keep one element with that name); without it the help bar has only Back. The fragments use the page's XML namespaces: `local:` is the game's (ForzaUI). `set_page_xaml` returns 1, or 0 if you have no such page, `content` has no FirstItem, or a fragment's tags don't balance (then the page keeps the XAML it had, and the log says where).
+
+As with rows, the XAML is copied, and the page is written from the last you set each time it opens, so it's static: put your data straight into it, and call `set_page_xaml` again when it changes (or from `on_open`). Under MODS > Installed mods such a page shows its rows if you've set any, and otherwise its row says which tile opens it; a page of your own design needs a tile to be seen.
+
+**Slots** are what makes it move. Each page has 16 ints, slot 0 to 15, which its XAML binds by name: `{Binding FH2Mod_Slot_<n>, Mode=TwoWay}` (a list's `SelectedIndex`, say), and `{Binding FH2Mod_Slot_<n>_Is_<v>}`, true while slot n is v (v from 0 to 9999). The platform puts three converters in the page's resources for `Visibility`: `FH2Mod_ShowIf` (collapsed when false), `FH2Mod_ShowIfHidden` (hidden when false: it keeps its place, and can take the focus as soon as it shows) and `FH2Mod_HideIf`. Slots are 0 when the page opens; set any you want otherwise from `on_open`. When a binding changes one, `on_slot` tells you. `get_page_slot` reads one; `set_page_slot` changes one, and from inside `on_button` the page's bindings see it at once. From `on_slot` they do too, except for the slot a binding is setting at that moment. Set from anywhere else, a slot is only stored: the page doesn't show it, and opening resets it.
+
+A list's `SelectedIndex` follows the focus, and goes to -1 while the focus is outside the list: the game's list items are only selected while they have it. So don't show things straight from a list's selection if the focus is going to leave it. Bind the list to one slot, and in `on_slot` copy the value to another when it's 0 or more; show things from that one. Otherwise, when the focus moves to what you're showing, it hides, and the game moves the focus back to the page's main list.
+
+**Buttons.** A, B, X, Y, LB and RB go to `on_button` first (`FH2_BUTTON_A`, `FH2_BUTTON_B`, `FH2_BUTTON_X`, `FH2_BUTTON_Y`, `FH2_BUTTON_LB`, `FH2_BUTTON_RB`). Return `FH2_PAGE_IGNORED` for what they usually do (B leaves the page; A does nothing on a page of your own design; the others whatever the game does with them there), or `FH2_PAGE_HANDLED`, `FH2_PAGE_HANDLED_SELECT` or `FH2_PAGE_HANDLED_BACK`, which also play the menus' select or back sound. From `on_button`, `focus_page_element` moves the focus to a `Button`, `Slider` or `local:SpinnerControl` your XAML names (`x:Name`); other elements can't take the focus that way. A list whose `KeyboardNavigation.DirectionalNavigation` is `Contained` keeps the d-pad inside it, so moving between two lists is yours to do: A into the second, B back, say. The page puts the focus back on `OptionsList` whenever it's lost, so while the focus is on another list, switch `OptionsList` off (`IsEnabled` bound to a slot), and switch it back on before focusing it again. Other buttons aren't passed on; the log names their codes (other than the d-pad's) the first time each is pressed on a page of your own design. To show what LB and RB do, the help bar takes `local:ControllerButtonPanel.LBumperDescription` and `RBumperDescription` (`{local:Loc HelpButtons.IDS_Previous}` and `IDS_Next` are the game's "Previous" and "Next").
+
+A two-pane page, a list of sections and the last selected section's items beside it (slot 0: the list's selection, slot 1: which list has the focus, slot 2: the section shown):
+
+```xml
+<!-- content (abridged) -->
+<StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">
+    <local:CommonListBox x:Name="OptionsList" SelectedIndex="{Binding FH2Mod_Slot_0, Mode=TwoWay}"
+                         IsEnabled="{Binding FH2Mod_Slot_1_Is_0}"
+                         KeyboardNavigation.DirectionalNavigation="Contained" Width="400" Height="600"
+                         Style="{StaticResource A_Style_ListBox_List_Default}"
+                         ItemContainerStyle="{StaticResource A_Style_ListBoxItem_List_Default}">
+        <Button x:Name="FirstItem" Template="{StaticResource My_Plain}"> ... section 0 ... </Button>
+        <Button x:Name="Section_1" Template="{StaticResource My_Plain}"> ... section 1 ... </Button>
+    </local:CommonListBox>
+    <Grid>
+        <local:CommonListBox x:Name="Items_0" Visibility="{Binding FH2Mod_Slot_2_Is_0, Converter={StaticResource FH2Mod_ShowIfHidden}}" ...>
+            <Button x:Name="Item_0_0" ... />
+        </local:CommonListBox>
+        <local:CommonListBox x:Name="Items_1" Visibility="{Binding FH2Mod_Slot_2_Is_1, Converter={StaticResource FH2Mod_ShowIfHidden}}" ...>
+            <Button x:Name="Item_1_0" ... />
+        </local:CommonListBox>
+    </Grid>
+</StackPanel>
+```
+
+```cpp
+static void page_slot(void*, const char* key, int slot, int value) {
+    if (slot == 0 && value >= 0) g_api->set_page_slot(g_mod, key, 2, value);   // a section: show it
+}
+
+static int page_button(void*, const char* key, int button) {
+    const int pane = g_api->get_page_slot(g_mod, key, 1), section = g_api->get_page_slot(g_mod, key, 2);
+    if (button == FH2_BUTTON_A && pane == 0) {   // into the section's items (the sections off first)
+        g_api->set_page_slot(g_mod, key, 1, 1);
+        if (!g_api->focus_page_element(g_mod, key, ("Item_" + std::to_string(section) + "_0").c_str())) {
+            g_api->set_page_slot(g_mod, key, 1, 0);
+            return FH2_PAGE_HANDLED;
+        }
+        return FH2_PAGE_HANDLED_SELECT;
+    }
+    if (button == FH2_BUTTON_B && pane == 1) {   // back to the section (the sections on first)
+        g_api->set_page_slot(g_mod, key, 1, 0);
+        g_api->focus_page_element(g_mod, key, section == 0 ? "FirstItem" : ("Section_" + std::to_string(section)).c_str());
+        return FH2_PAGE_HANDLED_BACK;
+    }
+    return FH2_PAGE_IGNORED;   // B on the sections leaves the page
+}
+```
+
+The game's XAML reader isn't forgiving: a page it can't read can take the game down when it opens. Base your XAML on the game's own pages, change a little at a time, and check every `StaticResource` you use exists. The Achievements mod's page (`src/ui.cpp` in its repo) is a complete example.
 
 ## Crash reports
 

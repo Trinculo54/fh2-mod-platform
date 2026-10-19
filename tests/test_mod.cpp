@@ -1,5 +1,5 @@
 // A mod for the platform test: notices, conflicting edits, a late edit,
-// file overrides, database changes, an interface for AaaMod.
+// file overrides, database changes, an interface for AaaMod, pages (API 8).
 #include "fh2mod.h"
 #include <windows.h>
 
@@ -29,6 +29,43 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->set_file(g_mod, "UI/temp.xml", x, sizeof x - 1);
     api->add_sql(g_mod, "UPDATE AIPlayers SET XP = 12345 WHERE Id = 1; UPDATE AIPlayers SET XP = 777 WHERE Id = 2");
     api->publish_interface(g_mod, "TestMod.Math", 1, &g_math);
+
+    // Pages: one on the Achievements tile, with a row of each kind; a tile that doesn't exist.
+    FH2Page pg{sizeof pg};
+    pg.key = "Stats"; pg.title = "Test stats"; pg.label = "Test stats & more"; pg.description = "What TestMod counted.";
+    pg.tile = "achievements";
+    pg.on_select = [](void*, const char*, const char*) {};
+    api->add_page(g_mod, &pg);
+    FH2PageRow rows[4] = {};
+    for (FH2PageRow& r : rows) r.size = sizeof r;
+    rows[0].label = "Heading row"; rows[0].value = "2 / 3"; rows[0].style = FH2_ROW_HEADING;
+    rows[1].label = "Dim row"; rows[1].value = "Locked"; rows[1].style = FH2_ROW_DIM; rows[1].footer = "Footer <line>";
+    rows[2].label = "Picked row"; rows[2].key = "pick"; rows[2].description = "Press A";
+    rows[3].label = "Red row"; rows[3].value = "Alert"; rows[3].value_alert = 1;
+    api->set_page_rows(g_mod, "Stats", rows, 4);
+    // ... and on its tile, a page of its own design (Installed mods still shows the rows)
+    api->set_page_xaml(g_mod, "Stats", "<Color x:Key=\"Test_Color\">#FF102030</Color>", "<StackPanel>no FirstItem</StackPanel>", nullptr);
+    api->set_page_xaml(g_mod, "Stats", nullptr, "<Grid x:Name=\"FirstItem\"><Button></Grid>", nullptr);   // refused: unbalanced
+    FH2PageRow odd[2] = {rows[0], rows[1]};
+    odd[1].size = 8;
+    api->set_page_rows(g_mod, "Stats", odd, 2);                                                             // refused: sizes differ
+    api->set_page_xaml(g_mod, "Stats", "<Color x:Key=\"Test_Color\">#FF102030</Color>",
+                       "<Grid x:Name=\"TestContent\"><Button x:Name=\"FirstItem\" Visibility=\"{Binding FH2Mod_Slot_2_Is_1, "
+                       "Converter={StaticResource FH2Mod_ShowIf}}\" /></Grid>",
+                       "<ContentControl x:Name=\"DefaultHelpPanel\" Style=\"{StaticResource A_Style_ContentControl_DefaultButtonBar}\" />");
+    if (api->get_page_slot(g_mod, "Stats", 2) == 0 && api->set_page_slot(g_mod, "Stats", 2, 1) && api->get_page_slot(g_mod, "Stats", 2) == 1 &&
+        !api->set_page_slot(g_mod, "Stats", 16, 1) && !api->focus_page_element(g_mod, "Stats", "FirstItem"))
+        api->log(g_mod, "page slots ok");
+    FH2Page other{sizeof other};
+    other.key = "Other"; other.title = "Other"; other.tile = "Nope";
+    api->add_page(g_mod, &other);
+    api->add_page(g_mod, &other);                         // refused: already there
+    api->set_page_rows(g_mod, "Missing", rows, 1);        // refused: no such page
+    // text on the page's tile; not on a page without one
+    if (api->set_page_tile_text(g_mod, "Stats", "12 / 34 G") && !api->set_page_tile_text(g_mod, "Other", "x") &&
+        !api->set_page_tile_text(g_mod, "Missing", "x") && api->set_page_tile_colors(g_mod, "Stats", 0xFF3667DB, 0xFFFEFEFE) &&
+        !api->set_page_tile_colors(g_mod, "Other", 0, 0))
+        api->log(g_mod, "tile text ok");
 
     CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
         Sleep(300);

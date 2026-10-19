@@ -142,7 +142,7 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("---- platform.log\n%s----\n", log.c_str());
 
     if (phase == L"full") {
-        CHECK(has(log, "FH2 Mod Platform 2.2.1 (API 3)"));
+        CHECK(has(log, "FH2 Mod Platform 2.7.0 (API 8)"));
         CHECK(log.find("loaded HelloMod.dll") != std::string::npos);
         CHECK(log.find("Legacy.dll has no fh2mod_init") != std::string::npos);
         CHECK(fs::exists("legacy_ran.txt"));
@@ -155,7 +155,7 @@ int wmain(int argc, wchar_t** argv) {
         std::printf("title: [%ls]\n", title.c_str());
         CHECK(title == L"\n\n\n\nTO START\nTest notice line\nsecond line\nOld FH2 Mod Platform: reinstall TestMod");
         CHECK(slurp(L"fh2-mods\\platform-tables.txt").find("AIPlayers.str") != std::string::npos);
-        CHECK(log.find("the game is mapped at") != std::string::npos);
+        if (argc > 2) CHECK(log.find("the game is mapped at") != std::string::npos);
 
         // Files
         const fs::path ov = L"FH2\\Mount\\mediaoverride";
@@ -184,6 +184,43 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[AaaMod] TestMod.Math says 5"));
         CHECK(has(log, "[AaaMod] no TestMod.Math v2"));
         CHECK(has(log, "[AaaMod] TestMod version 1.0.0"));
+
+        // Pages (API 8)
+        CHECK(has(log, "[TestMod] page: Test stats, on the Achievements tile"));
+        CHECK(has(log, "[TestMod] add_page: there's no tile called Nope; Other is only under MODS > Installed mods"));
+        CHECK(has(log, "[TestMod] add_page: there's already a page called Other"));
+        CHECK(has(log, "[TestMod] set_page_rows: there's no page called Missing"));
+        CHECK(has(log, "[TestMod] set_page_xaml: Stats's content has no element named FirstItem"));
+        CHECK(has(log, "[TestMod] page slots ok"));
+        CHECK(has(log, "[TestMod] set_page_xaml: Stats's content isn't well-formed (</Grid> doesn't match <Button>)"));
+        CHECK(has(log, "[TestMod] set_page_rows: row 1 of Stats isn't the size of the first"));
+        CHECK(has(log, "[TestMod] tile text ok") && has(log, "[TestMod] set_page_tile_text: Other isn't on a tile") &&
+              has(log, "[TestMod] set_page_tile_colors: Other isn't on a tile"));
+        // The game's menus were given: the pages are written. (Not with the game mapped: this
+        // test's copy of it doesn't pass the menus' code checks, so the platform takes them out.)
+        if (fs::exists(L"FH2\\Mount\\media\\UI.zip") && argc <= 2) {
+            const auto scenes    = ov / "UI" / "Scenes" / "Anthem";
+            const auto installed = slurp(scenes / "A_ModPage_01.xaml");
+            const auto tile      = slurp(scenes / "A_ModPage_80.xaml");
+            CHECK(has(installed, "local:BindingProxy.A=\"Test stats &amp; more\"") && has(installed, "x:Name=\"PART_Button_FH2Mod_Page_0\""));
+            CHECK(has(installed, "Content=\"TEST STATS\"") && has(installed, "{Binding FH2Mod_ViewIn_") && has(installed, "{Binding FH2Mod_Bar_3"));
+            CHECK(has(installed, "The pause menu's Achievements tile opens it too."));
+            CHECK(has(installed, "FH2Mod_InfoRow_Heading") && has(installed, "FH2Mod_InfoRow_Dim"));
+            CHECK(has(installed, "Heading=\"Footer &lt;line&gt;\"") && has(installed, "local:BindingProxy.B=\"Alert\""));
+            // the tile: the page of TestMod's own design, in the options page's frame
+            CHECK(has(tile, "<Grid x:Name=\"TestContent\">") && !has(tile, "BasicOptions") && has(tile, "x:Key=\"FH2Mod_ShowIf\""));
+            CHECK(has(tile, "<Color x:Key=\"Test_Color\">") && has(tile, "<Grid>\r\n<ContentControl x:Name=\"DefaultHelpPanel\" Style="));
+            CHECK(has(tile, "x:Name=\"BottomBar\"") && has(tile, "x:Class =\"ForzaUI.A_HudOptions\""));
+            // the Achievements tiles show the page's tile text
+            const auto pause = slurp(scenes / "A_PauseMenu.xaml");
+            const std::string text_tag = "Tag=\"{Binding FH2Mod_TileText_0, RelativeSource={RelativeSource AncestorType=Page, Mode=FindAncestor}}\"";
+            const std::size_t first = pause.find(text_tag);
+            CHECK(first != std::string::npos && pause.find(text_tag, first + 1) != std::string::npos);
+            CHECK(has(pause, "<ControlTemplate x:Key=\"FH2Mod_Template_IconTile_0\"") &&
+                  has(pause, "Template=\"{StaticResource FH2Mod_Template_IconTile_0}\""));
+            CHECK(has(pause, "Color=\"{Binding FH2Mod_TileBack_0, RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type Page}}}\"") &&
+                  has(pause, "{Binding FH2Mod_TileTitle_0,") && has(pause, "{Binding FH2Mod_TileLine_0,") && has(pause, "{Binding FH2Mod_TileIcon_0,"));
+        }
     } else {
         // TestMod gone: its tables and notice are cleaned up, HelloMod's stays.
         CHECK(str("LoadingMessages.str", 0x6875) == L"Fast Traveling to Destination (hello from HelloMod!)");
