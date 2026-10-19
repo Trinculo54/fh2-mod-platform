@@ -387,7 +387,7 @@ std::string xml_escape(const std::string& s) {
             case '<': o += "&lt;"; break;
             case '>': o += "&gt;"; break;
             case '"': o += "&quot;"; break;
-            case '\n': o += "&#10;"; break;   // a line break in an attribute
+            case '\n': o += ' '; break;   // no line breaks in attributes (lines are TextBlocks of their own)
             default: o += c;
         }
     return o;
@@ -475,9 +475,9 @@ struct PageItem {
     std::string label, description;
     std::string value;               // a line of information: shown on the right
     int button = -1;                 // a line of information that opens something: its button number
-    // under the description, each on a line of its own (Installed mods): the version, the same
-    // in red when there's a newer one, and the mod's GitHub page
-    std::string version, version_alert, link;
+    // under the description, each on a line of its own (Installed mods): a note (turned off,
+    // and so on), the version, the same in red when there's a newer one, and the GitHub page
+    std::string note, version, version_alert, link;
 };
 
 // A line of information is a Button laid out like a row: label left, value right. The first
@@ -506,12 +506,16 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
                        xml_escape(it.version_alert) + "\" Description=\"" + xml_escape(it.link) + "\" />\r\n";
                 first += " local:BindingProxy.B=\"{StaticResource " + key + "_B}\"";
             }
+            if (!it.note.empty()) {
+                res += "            <local:TileMenuDataItem x:Key=\"" + key + "_C\" Heading=\"" + xml_escape(it.note) + "\" />\r\n";
+                first += " local:BindingProxy.C=\"{StaticResource " + key + "_C}\"";
+            }
             if (it.row < 0 || static_cast<std::size_t>(it.row) >= g_rows.size()) {
                 // the row's value rides in the data item's Icon, a string the template shows
                 res += "            <local:TileMenuDataItem x:Key=\"" + key + "\" Heading=\"" + xml_escape(it.label) + "\" Description=\"" +
                        xml_escape(it.description) + "\" Icon=\"" + xml_escape(it.value) + "\" />\r\n";
                 const std::string name  = n == 0 ? first_name : button_name(it, false);
-                const std::size_t b     = first.find(" local:BindingProxy.B=");
+                const std::size_t b     = first.find(" local:BindingProxy.");
                 const std::string proxy = b == std::string::npos ? "" : first.substr(b);
                 rows += "                                        <Button Tag=\"{StaticResource " + key +
                         "}\" Template=\"{StaticResource FH2Mod_InfoRow}\"" + (name.empty() ? "" : " x:Name=\"" + name + "\"") + proxy +
@@ -577,16 +581,23 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                       "                            <StackPanel>\r\n"
                       "                                <local:FZTextBlock Text=\"{TemplateBinding Content}\" "
                       "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" Margin=\"0\" TextWrapping=\"Wrap\" />\r\n"
-                      "                                <local:FZTextBlock Text=\"{Binding (local:BindingProxy.B).Heading}\" "
-                      "Visibility=\"{Binding (local:BindingProxy.B).Heading, Converter={StaticResource A_StringVisConverter_IconVisibility}}\" "
+                      "                                <StackPanel DataContext=\"{Binding (local:BindingProxy.C)}\">\r\n"
+                      "                                    <local:FZTextBlock Text=\"{Binding Heading}\" "
+                      "Visibility=\"{Binding Heading, Converter={StaticResource A_StringVisConverter_IconVisibility}}\" "
                       "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" Margin=\"0,24,0,0\" TextWrapping=\"Wrap\" />\r\n"
-                      "                                <local:FZTextBlock Text=\"{Binding (local:BindingProxy.B).Icon}\" "
-                      "Visibility=\"{Binding (local:BindingProxy.B).Icon, Converter={StaticResource A_StringVisConverter_IconVisibility}}\" "
+                      "                                </StackPanel>\r\n"
+                      "                                <StackPanel DataContext=\"{Binding (local:BindingProxy.B)}\">\r\n"
+                      "                                    <local:FZTextBlock Text=\"{Binding Heading}\" "
+                      "Visibility=\"{Binding Heading, Converter={StaticResource A_StringVisConverter_IconVisibility}}\" "
+                      "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" Margin=\"0,24,0,0\" TextWrapping=\"Wrap\" />\r\n"
+                      "                                    <local:FZTextBlock Text=\"{Binding Icon}\" "
+                      "Visibility=\"{Binding Icon, Converter={StaticResource A_StringVisConverter_IconVisibility}}\" "
                       "Color=\"{StaticResource A_Color_Stat_Negative}\" "
                       "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" Margin=\"0,24,0,0\" TextWrapping=\"Wrap\" />\r\n"
-                      "                                <local:FZTextBlock Text=\"{Binding (local:BindingProxy.B).Description}\" "
-                      "Visibility=\"{Binding (local:BindingProxy.B).Description, Converter={StaticResource A_StringVisConverter_IconVisibility}}\" "
+                      "                                    <local:FZTextBlock Text=\"{Binding Description}\" "
+                      "Visibility=\"{Binding Description, Converter={StaticResource A_StringVisConverter_IconVisibility}}\" "
                       "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" Margin=\"0,8,0,0\" TextWrapping=\"Wrap\" />\r\n"
+                      "                                </StackPanel>\r\n"
                       "                            </StackPanel>\r\n"
                       "                        </local:AutoScrollPanel>\r\n"
                       "                    </local:FZMaterial>\r\n"
@@ -872,15 +883,19 @@ PageItem info(const std::string& label, const std::string& description) { return
 
 // what a mod is, for its description: what it does, and whether it's loaded
 std::string about_mod(const ModEntry& e) {
-    std::string d = e.description.empty() ? "No description." : e.description;
-    if (!e.enabled) d += "\n\nTurned off: the game doesn't load it.";
-    else if (!e.platform_mod) d += "\n\nA mod from before the platform: it has no settings here.";
-    return d;
+    return e.description.empty() ? "No description." : e.description;
+}
+
+std::string mod_note(const ModEntry& e) {
+    if (!e.enabled) return "Turned off: the game doesn't load it.";
+    if (!e.platform_mod) return "A mod from before the platform: it has no settings here.";
+    return "";
 }
 
 // the lines under a mod's description: its version (in red with a ! when a newer one is out),
 // and its GitHub page
 void add_mod_lines(PageItem& it, const ModEntry& e) {
+    if (it.note.empty()) it.note = mod_note(e);
     const std::string v = e.version.empty() ? "Version unknown" : "Version " + e.version;
     std::string latest;
     if (e.enabled && e.mod && !e.mod->repo.empty() && e.mod->check_updates) latest = latest_known(e.mod);
@@ -916,8 +931,9 @@ std::vector<PageItem> installed_items() {
 std::vector<PageItem> mod_page_items(std::size_t i) {
     std::vector<PageItem> items;
     const ModEntry& e = g_entries[i];
-    PageItem sw{g_entry_row[i], "Load " + e.name + with_v(e.version),
-                about_mod(e) + "\n\nOff leaves it in fh2-mods, but the game doesn't load it."};
+    PageItem sw{g_entry_row[i], "Load " + e.name + with_v(e.version), about_mod(e)};
+    sw.note = mod_note(e);
+    sw.note += (sw.note.empty() ? "" : " ") + std::string("Off leaves it in fh2-mods, but the game doesn't load it.");
     add_mod_lines(sw, e);
     items.push_back(sw);
     std::size_t own = 0;
