@@ -719,29 +719,30 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                 t.erase(si, std::string(" SelectedIndex=\"{Binding FH2Mod_Selected, Mode=TwoWay}\"").size());
             lists += "\r\n" + t + view_rows[k - 1] + "</local:CommonListBox>";
         }
-        // The view switch animates as the game's menus do between pages (Global_Transitions.xaml:
-        // fade in, and ZPanel.ZOffset to 0 with a quartic ease): into a mod's settings from
-        // behind (+300), back to the list from in front (-300). The list and description panel
-        // sit in a StackPanel styled A_Style_FrameworkElement_DefaultTransition_0; it gets a
-        // style based on that one with a DataTrigger per view.
-        auto zoom = [](const char* from) {
-            return std::string("                            <DataTrigger.EnterActions>\r\n"
-                               "                                <BeginStoryboard>\r\n"
-                               "                                    <Storyboard>\r\n"
-                               "                                        <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"Opacity\">\r\n"
-                               "                                            <LinearDoubleKeyFrame KeyTime=\"0\" Value=\"0\" />\r\n"
-                               "                                            <LinearDoubleKeyFrame KeyTime=\"0:0:0.3\" Value=\"1\" />\r\n"
-                               "                                        </DoubleAnimationUsingKeyFrames>\r\n"
-                               "                                        <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"(local:ZPanel.ZOffset)\">\r\n"
-                               "                                            <LinearDoubleKeyFrame KeyTime=\"0\" Value=\"") +
-                   from +
-                   "\" />\r\n"
-                   "                                            <EasingDoubleKeyFrame KeyTime=\"0:0:0.3\" Value=\"0\">\r\n"
+        // The view switch zooms, as the game's menus do between pages (0.3 s, quartic ease out):
+        // into a mod's settings growing from 0.9, back to the list shrinking from 1.1. The list
+        // and description panel sit in a StackPanel styled
+        // A_Style_FrameworkElement_DefaultTransition_0; it gets a style based on that one with a
+        // DataTrigger per view, and a ScaleTransform to animate.
+        auto key = [](const char* prop, const char* from) {
+            return std::string("                                        <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"") + prop +
+                   "\">\r\n"
+                   "                                            <LinearDoubleKeyFrame KeyTime=\"0\" Value=\"" + from + "\" />\r\n"
+                   "                                            <EasingDoubleKeyFrame KeyTime=\"0:0:0.3\" Value=\"1\">\r\n"
                    "                                                <EasingDoubleKeyFrame.EasingFunction>\r\n"
                    "                                                    <QuarticEase EasingMode=\"EaseOut\"/>\r\n"
                    "                                                </EasingDoubleKeyFrame.EasingFunction>\r\n"
                    "                                            </EasingDoubleKeyFrame>\r\n"
-                   "                                        </DoubleAnimationUsingKeyFrames>\r\n"
+                   "                                        </DoubleAnimationUsingKeyFrames>\r\n";
+        };
+        // (Opacity and ZPanel.ZOffset, what the game's transitions animate, are theirs to drive
+        // on this element: animated here they didn't show. A scale of our own does.)
+        auto zoom = [&](const char* from) {
+            return std::string("                            <DataTrigger.EnterActions>\r\n"
+                               "                                <BeginStoryboard>\r\n"
+                               "                                    <Storyboard>\r\n") +
+                   key("(UIElement.RenderTransform).(TransformGroup.Children)[0].(ScaleTransform.ScaleX)", from) +
+                   key("(UIElement.RenderTransform).(TransformGroup.Children)[0].(ScaleTransform.ScaleY)", from) +
                    "                                    </Storyboard>\r\n"
                    "                                </BeginStoryboard>\r\n"
                    "                            </DataTrigger.EnterActions>\r\n";
@@ -751,8 +752,8 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                             "                <Style.Triggers>\r\n";
         for (std::size_t k = 1; k <= view_rows.size(); ++k)
             style += "                    <DataTrigger Binding=\"{Binding FH2Mod_View_" + std::to_string(k) + "}\" Value=\"True\">\r\n" +
-                     zoom("300") + "                    </DataTrigger>\r\n";
-        style += "                    <DataTrigger Binding=\"{Binding FH2Mod_ViewBack}\" Value=\"True\">\r\n" + zoom("-300") +
+                     zoom("0.9") + "                    </DataTrigger>\r\n";
+        style += "                    <DataTrigger Binding=\"{Binding FH2Mod_ViewBack}\" Value=\"True\">\r\n" + zoom("1.1") +
                  "                    </DataTrigger>\r\n"
                  "                </Style.Triggers>\r\n"
                  "            </Style>\r\n        ";
@@ -764,7 +765,14 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         page.insert(l0 + std::string("<local:CommonListBox").size(), list_vis(0));
         page.insert(l0, "<Grid>\r\n");
         if (animate) {   // (both before l0, so the positions above stand)
-            page.replace(c, content.size(), "<StackPanel Orientation=\"Horizontal\" Style=\"{StaticResource FH2Mod_Style_Views}\"");
+            page.replace(c, content.size(), "<StackPanel Orientation=\"Horizontal\" Style=\"{StaticResource FH2Mod_Style_Views}\" "
+                                            "RenderTransformOrigin=\"0.5,0.5\"");
+            const std::size_t open_end = page.find('>', c);
+            page.insert(open_end + 1, "\r\n                        <StackPanel.RenderTransform>\r\n"
+                                      "                            <TransformGroup>\r\n"
+                                      "                                <ScaleTransform />\r\n"
+                                      "                            </TransformGroup>\r\n"
+                                      "                        </StackPanel.RenderTransform>");
             page.insert(rd, style);
         } else {
             slog("A_HUDOptions.xaml doesn't look as expected; Installed mods won't animate");
