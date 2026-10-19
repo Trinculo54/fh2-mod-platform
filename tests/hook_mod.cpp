@@ -109,6 +109,287 @@ static void* orig_dummy;
 static void* orig_dummy2;
 static void* orig_dummy3;
 
+
+// ---- code of our own for instruction hooks and byte patches (API 7) ----------------
+// ivictim(x) = x + 1 + 10 + 100; ijump has a jump back into the bytes a hook at ijump_at needs.
+extern "C" int ivictim(int x);
+extern "C" int ijump(int x);
+extern "C" char ivictim_at[], ivictim_rip[], ivictim_jmp[], ivictim_imm[], ijump_at[], icall_at[], ijcc_at[];
+extern "C" int icall(int x);
+extern "C" int icaller(int x);
+extern "C" char icaller_ret[];
+extern "C" int ijcc(int x);
+asm(R"(
+    .text
+    .globl ivictim
+    .def ivictim; .scl 2; .type 32; .endef
+    .seh_proc ivictim
+ivictim:
+    subq $0x28, %rsp
+    .seh_stackalloc 0x28
+    .seh_endprologue
+    .globl ivictim_at
+ivictim_at:
+    movl %ecx, %eax
+    addl $1, %eax
+    .globl ivictim_rip
+ivictim_rip:
+    leaq ivictim_data(%rip), %rdx
+    addl (%rdx), %eax
+    .globl ivictim_jmp
+ivictim_jmp:
+    jmp 1f
+    nop
+    nop
+    nop
+1:
+    .globl ivictim_imm
+ivictim_imm:
+    addl $100, %eax
+    addq $0x28, %rsp
+    ret
+    .seh_endproc
+
+    .globl ijump
+    .def ijump; .scl 2; .type 32; .endef
+    .seh_proc ijump
+ijump:
+    subq $0x28, %rsp
+    .seh_stackalloc 0x28
+    .seh_endprologue
+    movl %ecx, %eax
+    .globl ijump_at
+ijump_at:
+    nop
+2:
+    addl $1, %eax
+    decl %ecx
+    jg 2b
+    addq $0x28, %rsp
+    ret
+    .seh_endproc
+
+    .globl icall
+    .def icall; .scl 2; .type 32; .endef
+    .seh_proc icall
+icall:
+    subq $0x28, %rsp
+    .seh_stackalloc 0x28
+    .seh_endprologue
+    .globl icall_at
+icall_at:
+    call ihelper
+    addq $0x28, %rsp
+    ret
+    .seh_endproc
+ihelper:
+    leal (%rcx,%rcx), %eax
+    ret
+
+    .globl ijcc
+    .def ijcc; .scl 2; .type 32; .endef
+    .seh_proc ijcc
+ijcc:
+    subq $0x28, %rsp
+    .seh_stackalloc 0x28
+    .seh_endprologue
+    .globl ijcc_at
+ijcc_at:
+    testl %ecx, %ecx
+    jz 3f
+    movl $5, %eax
+    jmp 4f
+3:
+    movl $7, %eax
+4:
+    addq $0x28, %rsp
+    ret
+    .seh_endproc
+
+    .globl icaller
+    .def icaller; .scl 2; .type 32; .endef
+    .seh_proc icaller
+icaller:
+    subq $0x28, %rsp
+    .seh_stackalloc 0x28
+    .seh_endprologue
+    call ivictim
+    .globl icaller_ret
+icaller_ret:
+    addq $0x28, %rsp
+    ret
+    .seh_endproc
+
+    .data
+ivictim_data:
+    .long 10
+    .text
+)");
+
+static std::string g_itrace;
+static void add_rcx(FH2Context* c, void*) { c->rcx += 1000; }
+static void add_rax(FH2Context* c, void* user) { c->rax += reinterpret_cast<uintptr_t>(user); }
+static void mark_a(FH2Context*, void*) { g_itrace += "a"; }
+static void mark_b(FH2Context*, void*) { g_itrace += "b"; }
+static void crashes(FH2Context*, void*) { *static_cast<volatile int*>(nullptr) = 1; }
+static void bump_xmm(FH2Context* c, void*) { c->xmm[0].f[0] += 1.0f; c->r12 = 7; }
+// A fn built for AVX: its VEX instruction zeroes ymm1's upper half, which has to come back.
+static void clobber_ymm(FH2Context*, void*) { asm volatile("vxorps %%xmm1, %%xmm1, %%xmm1" ::: "xmm1"); }
+// A stack walk from inside a hook gets through the stub to the hooked function's caller.
+static int g_walk = -1;
+static void walk(FH2Context*, void*) {
+    void* frames[32] = {};
+    const USHORT n   = RtlCaptureStackBackTrace(0, 32, frames, nullptr);
+    g_walk           = 0;
+    for (USHORT i = 0; i < n; ++i)
+        if (frames[i] == icaller_ret) g_walk = 1;
+}
+
+static void precise_tests(char* base) {
+    if (g_api->api_version < 7) {
+        check(false, "api_version >= 7");
+        return;
+    }
+    unsigned char before[48];
+    std::memcpy(before, reinterpret_cast<void*>(&ivictim), sizeof before);
+    CHECK(ivictim(1) == 112);
+
+    // An instruction hook changes a register before the instruction runs.
+    FH2Hook* h1 = g_api->hook_instruction(g_a, "ivictim mov", ivictim_at, &add_rcx, nullptr);
+    CHECK(h1 != nullptr);
+    CHECK(ivictim(1) == 112); // made, but off
+    CHECK(g_api->enable_hooks(g_a, h1) == 1);
+    CHECK(static_cast<unsigned char>(ivictim_at[0]) == 0xE9);
+    CHECK(ivictim(1) == 1112);
+    // Two mods on the same instruction: newest first, and both run.
+    FH2Hook* ha = g_api->hook_instruction(g_a, "mark a", ivictim_at, &mark_a, nullptr);
+    FH2Hook* hb = g_api->hook_instruction(g_b, "mark b", ivictim_at, &mark_b, nullptr);
+    CHECK(ha && hb);
+    CHECK(g_api->enable_hooks(g_a, ha) == 1 && g_api->enable_hooks(g_b, hb) == 1);
+    g_itrace.clear();
+    CHECK(ivictim(1) == 1112 && g_itrace == "ba");
+    CHECK(g_api->disable_hooks(g_b, hb) == 1);
+    g_itrace.clear();
+    CHECK(ivictim(1) == 1112 && g_itrace == "a");
+    CHECK(g_api->disable_hooks(g_a, nullptr) == 1);
+    CHECK(ivictim(1) == 112);
+    CHECK(std::memcmp(before, reinterpret_cast<void*>(&ivictim), sizeof before) == 0); // bytes put back
+
+    // Moved instructions: a rip-relative lea, and a short jmp.
+    FH2Hook* h2 = g_api->hook_instruction(g_a, "ivictim lea", ivictim_rip, &add_rax, reinterpret_cast<void*>(5));
+    FH2Hook* h3 = g_api->hook_instruction(g_a, "ivictim jmp", ivictim_jmp, &add_rax, reinterpret_cast<void*>(7));
+    CHECK(h2 && h3);
+    CHECK(g_api->enable_hooks(g_a, h2) == 1);
+    {
+        char b[160];
+        const unsigned char* t = nullptr;
+        std::memcpy(&t, &ivictim_rip, 0);
+        std::snprintf(b, sizeof b, "ivictim(1) with the lea hook = %d; bytes at the lea %02X %02X %02X %02X %02X %02X %02X",
+                      ivictim(1), (unsigned char)ivictim_rip[0], (unsigned char)ivictim_rip[1], (unsigned char)ivictim_rip[2],
+                      (unsigned char)ivictim_rip[3], (unsigned char)ivictim_rip[4], (unsigned char)ivictim_rip[5],
+                      (unsigned char)ivictim_rip[6]);
+        g_api->log(g_a, b);
+    }
+    CHECK(ivictim(1) == 117);
+    CHECK(g_api->enable_hooks(g_a, h3) == 1);
+    CHECK(ivictim(1) == 124);
+    // A crashing fn is skipped from then on; the code still runs.
+    FH2Hook* hc = g_api->hook_instruction(g_b, "crashes", ivictim_rip, &crashes, nullptr);
+    CHECK(hc && g_api->enable_hooks(g_b, hc) == 1);
+    CHECK(ivictim(1) == 124);
+    CHECK(ivictim(1) == 124);
+    // Floats and callee-saved registers come back changed.
+    FH2Hook* hx = g_api->hook_instruction(g_b, "xmm", ivictim_jmp, &bump_xmm, nullptr);
+    CHECK(hx && g_api->enable_hooks(g_b, hx) == 1);
+    {
+        float f = 0;
+        uint64_t r12 = 0;
+        asm volatile("movss %2, %%xmm0\n\t"
+                     "movl $1, %%ecx\n\t"
+                     "call ivictim\n\t"
+                     "movss %%xmm0, %0\n\t"
+                     "movq %%r12, %1"
+                     : "=m"(f), "=r"(r12)
+                     : "m"(*(const float*)"\x00\x00\x20\x40") // 2.5f
+                     : "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "r12", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4",
+                       "xmm5", "memory");
+        CHECK(f == 3.5f && r12 == 7);
+    }
+    CHECK(g_api->disable_hooks(g_a, nullptr) == 1 && g_api->disable_hooks(g_b, nullptr) == 1);
+    CHECK(std::memcmp(before, reinterpret_cast<void*>(&ivictim), sizeof before) == 0);
+
+    // The upper halves of the ymm registers survive a fn that uses AVX.
+    if (IsProcessorFeaturePresent(39)) {
+        FH2Hook* hy = g_api->hook_instruction(g_b, "ymm", ivictim_jmp, &clobber_ymm, nullptr);
+        CHECK(hy && g_api->enable_hooks(g_b, hy) == 1);
+        alignas(32) static float in[8] = {1, 2, 3, 4, 5, 6, 7, 8}, out[8];
+        asm volatile("vmovups %0, %%ymm1\n\t"
+                     "movl $1, %%ecx\n\t"
+                     "call ivictim\n\t"
+                     "vmovups %%ymm1, %1\n\t"
+                     "vzeroupper"
+                     : : "m"(in), "m"(out)
+                     : "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5",
+                       "memory");
+        CHECK(out[4] == 5 && out[7] == 8);
+        CHECK(g_api->disable_hooks(g_b, hy) == 1);
+    }
+
+    // Stack walks through a hook's stub.
+    FH2Hook* hw = g_api->hook_instruction(g_a, "walk", ivictim_at, &walk, nullptr);
+    CHECK(hw && g_api->enable_hooks(g_a, hw) == 1);
+    CHECK(icaller(1) == 112 && g_walk == 1);
+    CHECK(g_api->disable_hooks(g_a, hw) == 1);
+
+    // Moved CALL rel32 and Jcc.
+    FH2Hook* hcall = g_api->hook_instruction(g_a, "icall call", icall_at, &mark_a, nullptr);
+    FH2Hook* hjcc  = g_api->hook_instruction(g_a, "ijcc test+jz+mov", ijcc_at, &mark_b, nullptr);
+    CHECK(hcall && hjcc && g_api->enable_hooks(g_a, hcall) == 1 && g_api->enable_hooks(g_a, hjcc) == 1);
+    g_itrace.clear();
+    CHECK(icall(4) == 8 && ijcc(0) == 7 && ijcc(3) == 5 && g_itrace == "abb");
+    CHECK(g_api->disable_hooks(g_a, hcall) == 1 && g_api->disable_hooks(g_a, hjcc) == 1);
+
+    // Places it refuses.
+    CHECK(g_api->hook_instruction(g_a, "prolog", reinterpret_cast<void*>(&ivictim), &mark_a, nullptr) == nullptr);
+    CHECK(g_api->hook_instruction(g_a, "mid-instruction", ivictim_at + 1, &mark_a, nullptr) == nullptr);
+    CHECK(g_api->hook_instruction(g_a, "jumped into", ijump_at, &mark_a, nullptr) == nullptr);
+    CHECK(ijump(3) == 6);
+
+    // Byte patches: 100 -> 50, checked, overlapping refused, put back.
+    const unsigned char want = 100, now = 50, wrong = 7;
+    CHECK(g_api->patch_bytes(g_a, "wrong expect", ivictim_imm + 2, &wrong, &now, 1) == nullptr);
+    FH2Hook* p1 = g_api->patch_bytes(g_a, "ivictim 100 -> 50", ivictim_imm + 2, &want, &now, 1);
+    CHECK(p1 != nullptr);
+    CHECK(g_api->patch_bytes(g_b, "same byte", ivictim_imm + 2, nullptr, &now, 1) == nullptr);
+    CHECK(g_api->hook_instruction(g_b, "over a patch", ivictim_imm, &mark_b, nullptr) == nullptr);
+    CHECK(ivictim(1) == 112);
+    CHECK(g_api->enable_hooks(g_a, p1) == 1);
+    CHECK(ivictim(1) == 62);
+    CHECK(g_api->disable_hooks(g_a, p1) == 1);
+    CHECK(ivictim(1) == 112);
+
+    // The game (RadioStreamFmod::load, around the createSound call another test hooks): instruction
+    // hooks that move a lea+mov, a CALL rel32 and a test+je; a patch checked against the exe on disk.
+    char* const fn_code = base + 0x1018A06;
+    unsigned char game_before[0x40];
+    std::memcpy(game_before, fn_code, sizeof game_before);
+    const int offs[] = {0x1018A06, 0x1018A1D, 0x1018A25};
+    FH2Hook* gi[3]   = {};
+    for (int i = 0; i < 3; ++i) {
+        gi[i] = g_api->hook_instruction(g_a, "RadioStreamFmod::load", base + offs[i], &mark_a, nullptr);
+        CHECK(gi[i] != nullptr);
+    }
+    CHECK(g_api->enable_hooks(g_a, nullptr) == 1);
+    CHECK(static_cast<unsigned char>(base[0x1018A06]) == 0xE9 && static_cast<unsigned char>(base[0x1018A1D]) == 0xE9 &&
+          static_cast<unsigned char>(base[0x1018A25]) == 0xE9);
+    CHECK(g_api->disable_hooks(g_a, nullptr) == 1);
+    CHECK(std::memcmp(game_before, fn_code, sizeof game_before) == 0);
+    const unsigned char d68 = 0x68, d70 = 0x70;
+    FH2Hook* gp = g_api->patch_bytes(g_b, "game byte", base + 0x1018A2C, &d68, &d70, 1);
+    CHECK(gp && g_api->enable_hooks(g_b, gp) == 1 && static_cast<unsigned char>(base[0x1018A2C]) == 0x70);
+    CHECK(gp && g_api->disable_hooks(g_b, gp) == 1 && static_cast<unsigned char>(base[0x1018A2C]) == 0x68);
+}
+
 static DWORD WINAPI tests(LPVOID) {
     const bool crash = GetFileAttributesW(L"crash.txt") != INVALID_FILE_ATTRIBUTES;
     unsigned char before[16];
@@ -222,6 +503,8 @@ static DWORD WINAPI tests(LPVOID) {
     // FMOD::Sound::getUserData was changed by the test host, as Extra Options would.
     CHECK(g_api->hook_function(g_b, "FMOD::Sound::getUserData", base + 0x199FBE0,
                                reinterpret_cast<void*>(&dummy_detour), &orig_dummy) == nullptr);
+
+    precise_tests(base);
 
     if (crash) {
         g_api->enable_hooks(g_a, a);

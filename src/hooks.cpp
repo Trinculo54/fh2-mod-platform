@@ -30,6 +30,8 @@
 #include "hde/hde64.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdlib>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -46,8 +48,8 @@ namespace {
 
 namespace fs = std::filesystem;
 
-enum Kind { kFunction, kCall, kPointer };
-const char* const kKindName[] = {"function", "call", "pointer"};
+enum Kind { kFunction, kCall, kPointer, kPatch, kInstruction };
+const char* const kKindName[] = {"function", "call", "pointer", "patch", "instruction"};
 
 std::mutex g_mu;
 
@@ -397,6 +399,7 @@ void watch_for_code() {
 struct Record {
     char text[160]; // "WheresMyBuddy: pointer game+0x2D44F30 (ChampionshipDrivatarsState::Serialize)"
     uintptr_t tramp;
+    uintptr_t code_lo, code_hi; // an instruction hook's stub (saving registers, the moved instructions)
     volatile LONG enabled;
 };
 constexpr int kMaxRecords = 256;
@@ -405,9 +408,11 @@ volatile LONG g_nrecords = 0;
 
 // ---- sites -------------------------------------------------------------------------
 
+struct InstrList; // an instruction hook site's callbacks, newest first (see below)
+
 struct Site {
     Kind kind;
-    char* at;            // function start, call instruction, or pointer
+    char* at;            // function start, call instruction, pointer, patched bytes or hooked instruction
     void* original;      // trampoline, the call's old target, the pointer's old value
     Stub entry;
     char* lo;            // bytes this site changes or depends on
@@ -415,6 +420,10 @@ struct Site {
     std::vector<unsigned char> before; // [lo, hi) before the first patch
     bool live = false;
     std::vector<FH2Hook*> chain; // in the order they were last enabled
+    std::vector<unsigned char> patch; // kPatch: the new bytes; kInstruction: the jump to `thunk`
+    char* thunk = nullptr;            // kInstruction: saves the registers, calls the hooks, runs the moved code
+    std::size_t thunk_size = 0;
+    std::atomic<InstrList*> list{nullptr}; // kInstruction: what the thunk calls
 };
 std::vector<std::unique_ptr<Site>> g_sites;
 bool g_minhook = false;
@@ -426,10 +435,12 @@ struct FH2Hook {
     FH2Mod* mod;
     std::string name;
     fh2platform::Site* site;
-    void* detour;
+    void* detour;          // kInstruction: the mod's FH2InstructionFn
+    void* user = nullptr;  // kInstruction: its argument
     fh2platform::Stub next;
     bool enabled = false;
     int record   = -1;
+    std::atomic<bool> crashed{false}; // kInstruction: its fn crashed, so it's skipped
 };
 
 namespace fh2platform {
@@ -559,19 +570,23 @@ bool common_checks(FH2Mod* m, const char* what, void* at, void* detour, void** o
     return true;
 }
 
-FH2Hook* add_hook(FH2Mod* m, const char* name, Site* s, void* detour, void** original) {
+// Patches and instruction hooks have no `original` to call: no stub of their own.
+FH2Hook* add_hook(FH2Mod* m, const char* name, Site* s, void* detour, void** original, void* user = nullptr) {
     auto h    = std::make_unique<FH2Hook>();
     h->mod    = m;
     h->name   = name ? name : "";
     h->site   = s;
     h->detour = detour;
-    h->next   = new_stub(s->at);
-    if (!h->next.code) {
-        log_line(m->name, "can't hook " + where(s->at) + ": out of memory for hook stubs");
-        return nullptr;
+    h->user   = user;
+    if (original) {
+        h->next = new_stub(s->at);
+        if (!h->next.code) {
+            log_line(m->name, "can't hook " + where(s->at) + ": out of memory for hook stubs");
+            return nullptr;
+        }
+        set_slot(h->next.slot, s->original);
+        *original = h->next.code;
     }
-    set_slot(h->next.slot, s->original);
-    *original = h->next.code;
     FH2Hook* raw = h.get();
     s->chain.push_back(raw);
     g_hooks.push_back(std::move(h));
@@ -579,6 +594,8 @@ FH2Hook* add_hook(FH2Mod* m, const char* name, Site* s, void* detour, void** ori
         Record& r = g_records[g_nrecords];
         std::snprintf(r.text, sizeof r.text, "%s: %s", m->name.c_str(), describe(raw).c_str());
         r.tramp   = s->kind == kFunction ? reinterpret_cast<uintptr_t>(s->original) : 0;
+        r.code_lo = reinterpret_cast<uintptr_t>(s->thunk);
+        r.code_hi = r.code_lo + s->thunk_size;
         r.enabled = 0;
         raw->record = g_nrecords;
         InterlockedIncrement(&g_nrecords);
@@ -638,6 +655,51 @@ bool frozen_write(char* site, int32_t rel) {
         if (!done) Sleep(1);
     }
     for (HANDLE h : threads) CloseHandle(h);
+    return done;
+}
+
+// Writes `n` bytes of code at `at` with every other thread paused and none of them inside
+// (at, at+n): one may be about to run the instruction at `at`, but none half way through the
+// bytes being changed. Nothing may allocate or lock while they're paused.
+bool frozen_write_bytes(char* at, const unsigned char* bytes, std::size_t n) {
+    std::vector<HANDLE> threads;
+    threads.reserve(256);
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return false;
+    THREADENTRY32 te{};
+    te.dwSize = sizeof te;
+    const DWORD pid = GetCurrentProcessId(), self = GetCurrentThreadId();
+    for (BOOL more = Thread32First(snap, &te); more; more = Thread32Next(snap, &te))
+        if (te.th32OwnerProcessID == pid && te.th32ThreadID != self)
+            if (HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, te.th32ThreadID))
+                threads.push_back(h);
+    CloseHandle(snap);
+    DWORD old = 0;
+    if (!VirtualProtect(at, n, PAGE_EXECUTE_READWRITE, &old)) {
+        for (HANDLE h : threads) CloseHandle(h);
+        return false;
+    }
+    const auto lo = reinterpret_cast<DWORD64>(at), hi = lo + n;
+    bool done = false;
+    for (int attempt = 0; attempt < 100 && !done; ++attempt) {
+        for (HANDLE h : threads) SuspendThread(h);
+        bool clear = true;
+        for (HANDLE h : threads) {
+            CONTEXT ctx{};
+            ctx.ContextFlags = CONTEXT_CONTROL;
+            if (GetThreadContext(h, &ctx) && ctx.Rip > lo && ctx.Rip < hi) clear = false;
+        }
+        if (clear) {
+            std::memcpy(at, bytes, n);
+            FlushInstructionCache(GetCurrentProcess(), at, n);
+            done = true;
+        }
+        for (HANDLE h : threads) ResumeThread(h);
+        if (!done) Sleep(1);
+    }
+    for (HANDLE h : threads) CloseHandle(h);
+    DWORD ignored = 0;
+    VirtualProtect(at, n, old, &ignored);
     return done;
 }
 
@@ -702,7 +764,17 @@ enum class Change { none, patch, unpatch };
 
 // Rewires the stubs of `s` for its enabled hooks, and says whether the
 // patch has to go in or come out.
+void publish_list(Site* s, const std::vector<FH2Hook*>& on); // instruction hooks (below)
+
 Change rewire(Site* s) {
+    if (s->kind == kPatch || s->kind == kInstruction) {
+        std::vector<FH2Hook*> on;
+        for (FH2Hook* h : s->chain)
+            if (h->enabled) on.push_back(h);
+        if (s->kind == kInstruction) publish_list(s, on);
+        if (on.empty()) return s->live ? Change::unpatch : Change::none;
+        return s->live ? Change::none : Change::patch;
+    }
     std::vector<FH2Hook*> on;
     for (FH2Hook* h : s->chain)
         if (h->enabled) on.push_back(h);
@@ -721,6 +793,8 @@ Change rewire(Site* s) {
 // Puts the patch of a call or pointer site in or out. Function sites are
 // done through MinHook's queue by the caller.
 bool apply_simple(Site* s, bool in) {
+    if (s->kind == kPatch || s->kind == kInstruction)
+        return frozen_write_bytes(s->lo, in ? s->patch.data() : s->before.data(), s->before.size());
     if (s->kind == kCall) {
         void* to = in ? s->entry.code : s->original;
         return write_rel32(s->at, static_cast<int32_t>(static_cast<char*>(to) - (s->at + 5)));
@@ -935,6 +1009,538 @@ FH2Hook* api_hook_pointer(FH2Mod* m, const char* name, void** slot, void* detour
     return add_hook(m, name, s, detour, original);
 }
 
+// ---- API 7: byte patches -------------------------------------------------------------
+
+FH2Hook* api_patch_bytes(FH2Mod* m, const char* name, void* at, const void* expect, const void* bytes, uint32_t size) {
+    const std::string what = "patch " + where(at) + (name ? std::string(" (") + name + ")" : "");
+    if (!m) return nullptr;
+    if (!at || !bytes || size == 0 || size > 32) {
+        log_line(m->name, "can't make " + what + ": it needs an address, 1 to 32 bytes and the bytes themselves");
+        return nullptr;
+    }
+    if (in_game(at) && !code_ready()) {
+        log_line(m->name, "can't make " + what +
+                              " yet: call wait_for_code first, so Extra Options can patch the game before you do");
+        return nullptr;
+    }
+    std::scoped_lock lk{g_mu};
+    auto* lo = static_cast<char*>(at);
+    if (!readable(lo, size)) {
+        log_line(m->name, "can't make " + what + ": that memory isn't readable");
+        return nullptr;
+    }
+    if (expect && std::memcmp(lo, expect, size) != 0) {
+        log_line(m->name, "can't make " + what + ": the bytes there aren't the ones the mod expected");
+        return nullptr;
+    }
+    if (!check_bytes(m, what.c_str(), lo, lo + size, false)) return nullptr;
+    Site* s = new_site(kPatch, lo, nullptr, lo, lo + size);
+    s->patch.assign(static_cast<const unsigned char*>(bytes), static_cast<const unsigned char*>(bytes) + size);
+    return add_hook(m, name, s, nullptr, nullptr);
+}
+
+// ---- API 7: instruction hooks --------------------------------------------------------
+//
+// The hooked instruction (and as many after it as make 5 bytes) is replaced with a JMP to the
+// site's thunk, in memory near the game:
+//
+//   pad      256 bytes of int3 (see the unwind info below)
+//   save     pushfq; sub rsp, 0x190 (+0x100 for ymm upper halves, with AVX); the registers into
+//            an FH2Context at rsp; rbx = rsp
+//   call     rsp aligned, dispatch(ctx, site): every enabled hook's fn, newest first
+//   restore  the registers (with the hooks' changes) and flags; rsp as it was; jmp over:
+//   pad      256 bytes of int3
+//   moved    the replaced instructions, rewritten for their new address
+//   back     jmp [rip]; dq the instruction after them
+//   unwind   two RUNTIME_FUNCTIONs, registered relative to the game's base: the save/call
+//            part undoes its frame (rbx is the frame register) and chains to the game
+//            function's own unwind info, and the moved code chains to it directly. Their unwind
+//            info has no prolog, so the 256-byte pads keep the chained game info's prolog out
+//            of the way (every code of it applies, as at the hooked instruction, which has to
+//            be past the prolog). Stack walks through a hook, for crash reports and for
+//            exceptions thrown inside a hook's fn (caught by dispatch), see the game's
+//            callers as before.
+
+struct InstrEntry {
+    FH2InstructionFn fn;
+    void* user;
+    FH2Hook* hook;
+};
+struct InstrList {
+    std::size_t n;
+    InstrEntry e[1];
+};
+
+constexpr uint32_t kCtxSize = 0x190; // sizeof(FH2Context)
+static_assert(sizeof(FH2Context) == kCtxSize, "FH2Context's layout is what the thunk writes");
+static_assert(offsetof(FH2Context, rflags) == 0x80 && offsetof(FH2Context, xmm) == 0x90, "FH2Context's layout");
+
+void log_hook_crash(FH2Hook* h, DWORD code) {
+    char b[16];
+    std::snprintf(b, sizeof b, "0x%08lX", static_cast<unsigned long>(code));
+    log_line(h->mod->name, "its instruction hook " + where(h->site->at) + (h->name.empty() ? "" : " (" + h->name + ")") +
+                               " crashed (exception " + b + "); that hook is skipped from now on");
+}
+
+bool call_instr(const InstrEntry& e, FH2Context* ctx, DWORD* code) {
+    __try {
+        e.fn(ctx, e.user);
+        return true;
+    } __except (*code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// Called by every instruction hook's thunk, on the game's thread.
+void dispatch(FH2Context* ctx, Site* s) {
+    const InstrList* l = s->list.load(std::memory_order_acquire);
+    if (!l) return;
+    const uint64_t rsp = ctx->rsp;
+    for (std::size_t i = 0; i < l->n; ++i) {
+        const InstrEntry& e = l->e[i];
+        if (e.hook->crashed.load(std::memory_order_relaxed)) continue;
+        DWORD code = 0;
+        if (!call_instr(e, ctx, &code) && !e.hook->crashed.exchange(true)) log_hook_crash(e.hook, code);
+    }
+    ctx->rsp = rsp;
+}
+
+void publish_list(Site* s, const std::vector<FH2Hook*>& on) {
+    // Never freed: a thread may still be reading the old list (a few bytes per change).
+    auto* l = static_cast<InstrList*>(std::calloc(1, sizeof(InstrList) + sizeof(InstrEntry) * (on.size() + 1)));
+    if (!l) return;
+    l->n = on.size();
+    for (std::size_t i = 0; i < on.size(); ++i) {
+        FH2Hook* h = on[on.size() - 1 - i]; // the most recently enabled first
+        l->e[i]    = {reinterpret_cast<FH2InstructionFn>(h->detour), h->user, h};
+    }
+    s->list.store(l, std::memory_order_release);
+}
+
+// -- the game's function table
+
+struct UnwindHead {
+    uint8_t version_flags, prolog, count, frame;
+};
+constexpr uint8_t kUnwChain = 4;
+
+// The image (the game, or a loaded DLL) that `p` is in: its base and size, or null.
+const char* image_of(const void* p, uint32_t* size) {
+    if (in_game(p)) return *size = kGameSizeOfImage, game_base();
+    HMODULE m = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            static_cast<LPCWSTR>(p), &m))
+        return nullptr;
+    const auto* b   = reinterpret_cast<const char*>(m);
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(b);
+    *size = reinterpret_cast<const IMAGE_NT_HEADERS64*>(b + dos->e_lfanew)->OptionalHeader.SizeOfImage;
+    return b;
+}
+
+const RUNTIME_FUNCTION* image_pdata(const char* base, std::size_t* n) {
+    *n = 0;
+    if (!base || !readable(base, 0x400)) return nullptr;
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    const auto* nt  = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+    const auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+    if (!dir.VirtualAddress || !dir.Size || !readable(base + dir.VirtualAddress, dir.Size)) return nullptr;
+    *n = dir.Size / sizeof(RUNTIME_FUNCTION);
+    return reinterpret_cast<const RUNTIME_FUNCTION*>(base + dir.VirtualAddress);
+}
+
+const RUNTIME_FUNCTION* find_function(const RUNTIME_FUNCTION* t, std::size_t n, uint32_t rva) {
+    std::size_t lo = 0, hi = n;
+    while (lo < hi) {
+        const std::size_t mid = (lo + hi) / 2;
+        if (rva < t[mid].BeginAddress) hi = mid;
+        else if (rva >= t[mid].EndAddress) lo = mid + 1;
+        else return &t[mid];
+    }
+    return nullptr;
+}
+
+const UnwindHead* unwind_of(const char* base, const RUNTIME_FUNCTION* f) {
+    uint32_t u       = f->UnwindData;
+    if (u & 1) u = reinterpret_cast<const RUNTIME_FUNCTION*>(base + (u & ~1u))->UnwindData; // shared entry
+    return reinterpret_cast<const UnwindHead*>(base + u);
+}
+
+const RUNTIME_FUNCTION* chained(const UnwindHead* u) {
+    if (!((u->version_flags >> 3) & kUnwChain)) return nullptr;
+    return reinterpret_cast<const RUNTIME_FUNCTION*>(reinterpret_cast<const uint16_t*>(u + 1) + ((u->count + 1) & ~1));
+}
+
+const RUNTIME_FUNCTION* primary_of(const char* base, const RUNTIME_FUNCTION* f) {
+    for (int i = 0; i < 32; ++i) {
+        const RUNTIME_FUNCTION* c = chained(unwind_of(base, f));
+        if (!c) return f;
+        f = c;
+    }
+    return f;
+}
+
+// -- decoding
+
+struct Insn {
+    const unsigned char* at;
+    hde64s hs;
+};
+
+bool decode(const unsigned char* p, hde64s* hs) {
+    if (!readable(p, 16)) return false;
+    std::memset(hs, 0, sizeof *hs);
+    hde64_disasm(p, hs);
+    return !(hs->flags & F_ERROR) && hs->len;
+}
+
+int imm_size(const hde64s& hs) {
+    return (hs.flags & F_IMM64) ? 8 : (hs.flags & F_IMM32) ? 4 : (hs.flags & F_IMM16) ? 2 : (hs.flags & F_IMM8) ? 1 : 0;
+}
+
+bool rip_relative(const hde64s& hs) { return (hs.flags & F_MODRM) && hs.modrm_mod == 0 && hs.modrm_rm == 5; }
+
+enum class Branch { none, call, jmp, jcc, loop };
+
+// A relative CALL/JMP/Jcc/LOOP and where it goes.
+Branch branch_of(const unsigned char* ip, const hde64s& hs, const unsigned char** target) {
+    const unsigned char* next = ip + hs.len;
+    if (hs.opcode == 0xE8) return *target = next + static_cast<int32_t>(hs.imm.imm32), Branch::call;
+    if (hs.opcode == 0xE9) return *target = next + static_cast<int32_t>(hs.imm.imm32), Branch::jmp;
+    if (hs.opcode == 0xEB) return *target = next + static_cast<int8_t>(hs.imm.imm8), Branch::jmp;
+    if ((hs.opcode & 0xF0) == 0x70) return *target = next + static_cast<int8_t>(hs.imm.imm8), Branch::jcc;
+    if (hs.opcode == 0x0F && (hs.opcode2 & 0xF0) == 0x80)
+        return *target = next + static_cast<int32_t>(hs.imm.imm32), Branch::jcc;
+    if ((hs.opcode & 0xFC) == 0xE0) return *target = next + static_cast<int8_t>(hs.imm.imm8), Branch::loop;
+    return Branch::none;
+}
+
+// The instructions an instruction hook at `at` replaces (5 bytes or more), after checking it can
+// go there: `at` starts an instruction (decoding the function from its start reaches it), it's
+// past the prolog, the replaced bytes stay inside the function, and no relative jump in the
+// function lands inside them (only `at` itself). `fn_out` is the function table entry for `at`.
+bool instruction_range(const char* base, const unsigned char* at, std::vector<Insn>* out,
+                       const RUNTIME_FUNCTION** fn_out, std::string* why) {
+    std::size_t n               = 0;
+    const RUNTIME_FUNCTION* tab = image_pdata(base, &n);
+    if (!tab) return *why = "the function table of the code it's in isn't readable", false;
+    const auto rva              = static_cast<uint32_t>(reinterpret_cast<const char*>(at) - base);
+    const RUNTIME_FUNCTION* f   = find_function(tab, n, rva);
+    if (!f) return *why = "it isn't inside a function its function table knows", false;
+    *fn_out                     = f;
+    const UnwindHead* u         = unwind_of(base, f);
+    if (rva < f->BeginAddress + u->prolog) return *why = "it's in the function's prolog", false;
+    // from the start of the function (or this part of it) to `at`
+    const auto* p   = reinterpret_cast<const unsigned char*>(base + f->BeginAddress);
+    const auto* end = reinterpret_cast<const unsigned char*>(base + f->EndAddress);
+    hde64s hs{};
+    while (p < at) {
+        if (!decode(p, &hs)) return *why = "the function doesn't decode cleanly up to it", false;
+        p += hs.len;
+    }
+    if (p != at) return *why = "it isn't the start of an instruction", false;
+    // the replaced instructions
+    while (p < at + 5) {
+        if (!decode(p, &hs) || p + hs.len > end) return *why = "the 5 bytes it needs run past the end of the function", false;
+        const unsigned char* t = nullptr;
+        if (branch_of(p, hs, &t) == Branch::loop) return *why = "a LOOP/JRCXZ is among the replaced instructions", false;
+        out->push_back({p, hs});
+        p += hs.len;
+    }
+    const unsigned char* last = p;
+    // no jump into (at, last) from anywhere in the function (every part of it)
+    const RUNTIME_FUNCTION* prim = primary_of(base, f);
+    for (std::size_t i = 0; i < n; ++i) {
+        const RUNTIME_FUNCTION* g = &tab[i];
+        if (g != prim && primary_of(base, g) != prim) continue;
+        const auto* q    = reinterpret_cast<const unsigned char*>(base + g->BeginAddress);
+        const auto* qend = reinterpret_cast<const unsigned char*>(base + g->EndAddress);
+        while (q < qend) {
+            if (!decode(q, &hs)) break; // data or padding at the end: nothing more to learn here
+            const unsigned char* t = nullptr;
+            if (branch_of(q, hs, &t) != Branch::none && t > at && t < last) {
+                return *why = "the function jumps into the bytes the hook would replace (from " + where(q) + ")", false;
+            }
+            q += hs.len;
+        }
+    }
+    return true;
+}
+
+// -- the thunk
+
+// Memory for thunks, near the game (rel32 and the game's RVAs reach it), above its base.
+struct Arena {
+    char* mem;
+    std::size_t used;
+};
+std::vector<Arena> g_arenas;
+constexpr std::size_t kArenaSize = 0x10000;
+
+char* arena_alloc(std::size_t size, const void* near_to, const char* base, uint32_t image_size) {
+    size = (size + 15) & ~std::size_t{15};
+    for (Arena& a : g_arenas)
+        if (a.used + size <= kArenaSize && reaches(near_to, a.mem) && a.mem > base && a.mem + kArenaSize - base < 0x7FFF0000) {
+            char* p = a.mem + a.used;
+            a.used += size;
+            return p;
+        }
+    char* mem = alloc_near(base + image_size, kArenaSize); // just past the image: above its base
+    if (!mem || mem < base || !reaches(near_to, mem) || mem + kArenaSize - base > 0x7FFF0000) return nullptr;
+    DWORD old = 0;
+    std::memset(mem, 0xCC, kArenaSize);
+    VirtualProtect(mem, kArenaSize, PAGE_EXECUTE_READ, &old);
+    g_arenas.push_back({mem, size});
+    return mem;
+}
+
+struct Code {
+    std::vector<unsigned char> b;
+    void u8(unsigned v) { b.push_back(static_cast<unsigned char>(v)); }
+    void bytes(std::initializer_list<unsigned> v) {
+        for (unsigned x : v) u8(x);
+    }
+    void u32(uint32_t v) {
+        for (int i = 0; i < 4; ++i) u8((v >> (8 * i)) & 0xFF);
+    }
+    void u64(uint64_t v) {
+        for (int i = 0; i < 8; ++i) u8((v >> (8 * i)) & 0xFF);
+    }
+    // mov [rsp+off], reg / mov reg, [rsp+off] (reg 0-15, off < 0x80)
+    void gpr(bool store, int reg, uint8_t off) {
+        u8(0x48 | (reg >= 8 ? 4 : 0));
+        u8(store ? 0x89 : 0x8B);
+        if (off == 0) bytes({static_cast<unsigned>(0x04 | ((reg & 7) << 3)), 0x24});
+        else bytes({static_cast<unsigned>(0x44 | ((reg & 7) << 3)), 0x24, off});
+    }
+    // movdqu [rsp+off32], xmmN / movdqu xmmN, [rsp+off32]
+    void xmm(bool store, int reg, uint32_t off) {
+        u8(0xF3);
+        if (reg >= 8) u8(0x44);
+        bytes({0x0F, store ? 0x7Fu : 0x6Fu, static_cast<unsigned>(0x84 | ((reg & 7) << 3)), 0x24});
+        u32(off);
+    }
+    void jmp_abs(const void* to) { // jmp [rip+0]; dq to
+        bytes({0xFF, 0x25, 0, 0, 0, 0});
+        u64(reinterpret_cast<uint64_t>(to));
+    }
+};
+
+// GPR numbers in FH2Context order: rax rcx rdx rbx rsp rbp rsi rdi r8..r15 (the encoding's own).
+constexpr uint8_t kGprOff(int r) { return static_cast<uint8_t>(8 * r); }
+
+// The replaced instructions, rewritten to run at `at_new` (where `code` will be copied).
+bool relocate(const std::vector<Insn>& insns, char* at_new, Code* code, std::string* why) {
+    const std::size_t start = code->b.size(); // at_new is where this offset lands
+    for (const Insn& in : insns) {
+        const auto* ip   = in.at;
+        const hde64s& hs = in.hs;
+        char* here       = at_new + (code->b.size() - start);
+        const unsigned char* t = nullptr;
+        const Branch br  = branch_of(ip, hs, &t);
+        if (br == Branch::call) {
+            if (reaches(here + 5, t)) {
+                code->u8(0xE8);
+                code->u32(static_cast<uint32_t>(reinterpret_cast<const char*>(t) - (here + 5)));
+            } else { // call [rip+2]; jmp +8; dq t
+                code->bytes({0xFF, 0x15, 2, 0, 0, 0, 0xEB, 8});
+                code->u64(reinterpret_cast<uint64_t>(t));
+            }
+        } else if (br == Branch::jmp) {
+            code->jmp_abs(t);
+        } else if (br == Branch::jcc) {
+            const unsigned cc = hs.opcode == 0x0F ? (hs.opcode2 & 0x0F) : (hs.opcode & 0x0F);
+            code->bytes({0x70u | (cc ^ 1), 14}); // the opposite condition skips the jump
+            code->jmp_abs(t);
+        } else if (rip_relative(hs)) {
+            const int disp_at = hs.len - imm_size(hs) - 4;
+            int32_t disp      = 0;
+            std::memcpy(&disp, ip + disp_at, 4);
+            const char* target = reinterpret_cast<const char*>(ip) + hs.len + disp;
+            const int64_t nd   = target - (here + hs.len);
+            if (nd < INT32_MIN || nd > INT32_MAX) return *why = "a moved instruction's data is out of reach", false;
+            const std::size_t at0 = code->b.size();
+            code->b.insert(code->b.end(), ip, ip + hs.len);
+            const auto d32 = static_cast<int32_t>(nd);
+            std::memcpy(code->b.data() + at0 + disp_at, &d32, 4);
+        } else {
+            code->b.insert(code->b.end(), ip, ip + hs.len);
+        }
+    }
+    return true;
+}
+
+// Builds the thunk for an instruction hook at `at`; `s` is its site (its address is in the code).
+bool build_thunk(Site* s, const std::vector<Insn>& insns, const char* base, uint32_t image_size,
+                 const RUNTIME_FUNCTION* fn, std::string* why) {
+    constexpr std::size_t kPad = 256;
+    char* const at   = s->at;
+    const std::size_t replaced = static_cast<std::size_t>(insns.back().at + insns.back().hs.len - insns.front().at);
+    // An upper bound: pads, save/restore (~500), moved code (each instruction at most 16 bytes,
+    // or 16 for a rewritten branch), the jump back, unwind info.
+    const std::size_t size = 2 * kPad + 1024 + 24 * insns.size() + 16 + 128;
+    char* mem = arena_alloc(size, at, base, image_size);
+    if (!mem) return *why = "no memory for its stub near that code", false;
+
+    // With AVX, the upper halves of ymm0-15 are kept too (above the FH2Context): the game may
+    // hold 256-bit values across the hooked instruction, and a fn compiled for AVX may clobber
+    // them (its 128-bit VEX instructions zero them).
+#ifndef PF_AVX_INSTRUCTIONS_AVAILABLE
+#define PF_AVX_INSTRUCTIONS_AVAILABLE 39
+#endif
+    const bool avx       = IsProcessorFeaturePresent(PF_AVX_INSTRUCTIONS_AVAILABLE) != 0;
+    const uint32_t frame = kCtxSize + (avx ? 0x100 : 0);
+    // vextractf128 [rsp+off], ymmN, 1 / vinsertf128 ymmN, ymmN, [rsp+off], 1
+    auto ymm_hi = [](Code& k, bool store, int n, uint32_t off) {
+        k.u8(0xC4);
+        k.u8((n >= 8 ? 0x00 : 0x80) | 0x60 | 0x03);
+        k.u8((store ? 0x78 : ((~n & 0xF) << 3)) | 0x04 | 0x01);
+        k.u8(store ? 0x19 : 0x18);
+        k.bytes({static_cast<unsigned>(0x84 | ((n & 7) << 3)), 0x24});
+        k.u32(off);
+        k.u8(1);
+    };
+
+    Code c;
+    for (std::size_t i = 0; i < kPad; ++i) c.u8(0xCC);
+    const std::size_t save_at = c.b.size();
+    // prolog: pushfq; sub rsp, frame; mov [rsp+0x18], rbx; mov rbx, rsp
+    c.u8(0x9C);
+    c.bytes({0x48, 0x81, 0xEC});
+    c.u32(frame);
+    c.gpr(true, 3, kGprOff(3));
+    c.bytes({0x48, 0x89, 0xE3});
+    for (int r = 0; r < 16; ++r)
+        if (r != 3 && r != 4) c.gpr(true, r, kGprOff(r));
+    // ctx.rsp = rsp + frame + 8; ctx.rflags = the pushed flags
+    c.bytes({0x48, 0x8D, 0x84, 0x24});
+    c.u32(frame + 8);
+    c.gpr(true, 0, kGprOff(4));
+    c.bytes({0x48, 0x8B, 0x84, 0x24});
+    c.u32(frame);
+    c.bytes({0x48, 0x89, 0x84, 0x24});
+    c.u32(0x80);
+    for (int x = 0; x < 16; ++x) c.xmm(true, x, 0x90 + 16 * x);
+    if (avx)
+        for (int x = 0; x < 16; ++x) ymm_hi(c, true, x, kCtxSize + 16 * x);
+    // and rsp, -16; sub rsp, 0x20; rcx = ctx; rdx = site; call dispatch
+    c.bytes({0x48, 0x83, 0xE4, 0xF0, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD9, 0x48, 0xBA});
+    c.u64(reinterpret_cast<uint64_t>(s));
+    c.bytes({0x48, 0xB8});
+    c.u64(reinterpret_cast<uint64_t>(&dispatch));
+    c.bytes({0xFF, 0xD0});
+    // restore: rsp = rbx; xmm; flags back into the pushed slot; GPRs; add rsp; popfq
+    c.bytes({0x48, 0x89, 0xDC});
+    for (int x = 0; x < 16; ++x) c.xmm(false, x, 0x90 + 16 * x);
+    if (avx)
+        for (int x = 0; x < 16; ++x) ymm_hi(c, false, x, kCtxSize + 16 * x);
+    c.bytes({0x48, 0x8B, 0x84, 0x24});
+    c.u32(0x80);
+    c.bytes({0x48, 0x89, 0x84, 0x24});
+    c.u32(frame);
+    for (int r = 15; r >= 0; --r)
+        if (r != 3 && r != 4 && r != 0) c.gpr(false, r, kGprOff(r));
+    c.gpr(false, 0, kGprOff(0));
+    c.gpr(false, 3, kGprOff(3));
+    c.bytes({0x48, 0x81, 0xC4});
+    c.u32(frame);
+    c.u8(0x9D);
+    // jmp over the pad to the moved code (rel32; patched in below)
+    c.u8(0xE9);
+    const std::size_t jmp_rel = c.b.size();
+    c.u32(0);
+    const std::size_t save_end = c.b.size();
+    for (std::size_t i = 0; i < kPad; ++i) c.u8(0xCC);
+    const std::size_t moved_at = c.b.size();
+    {
+        const auto rel = static_cast<uint32_t>(moved_at - save_end);
+        std::memcpy(c.b.data() + jmp_rel, &rel, 4);
+    }
+    if (!relocate(insns, mem + moved_at, &c, why)) return false;
+    c.jmp_abs(at + replaced);
+    const std::size_t moved_end = c.b.size();
+    while (c.b.size() & 3) c.u8(0xCC);
+    // unwind info for the save/call part: no prolog; frame register rbx at offset 0; codes, in
+    // the order they're undone: SET_FPREG, SAVE_NONVOL rbx at 0x18, ALLOC_LARGE 0x190, ALLOC_SMALL 8
+    const std::size_t unw1 = c.b.size();
+    c.bytes({0x01 | (kUnwChain << 3), 0, 6, 0x03});
+    c.bytes({0, 0x03});        // UWOP_SET_FPREG
+    c.bytes({0, 0x34, 3, 0});  // UWOP_SAVE_NONVOL rbx, offset 0x18 / 8
+    c.bytes({0, 0x01, frame / 8 & 0xFF, frame / 8 >> 8}); // UWOP_ALLOC_LARGE (info 0), size / 8
+    c.bytes({0, 0x02});        // UWOP_ALLOC_SMALL (info 0): 8 bytes
+    c.u32(fn->BeginAddress);   // chained: the game function's entry
+    c.u32(fn->EndAddress);
+    c.u32(fn->UnwindData);
+    // the moved code: no codes of its own, chained the same way
+    const std::size_t unw2 = c.b.size();
+    c.bytes({0x01 | (kUnwChain << 3), 0, 0, 0});
+    c.u32(fn->BeginAddress);
+    c.u32(fn->EndAddress);
+    c.u32(fn->UnwindData);
+    const std::size_t table = c.b.size();
+    const auto rva = [&](std::size_t off) { return static_cast<uint32_t>(mem + off - base); };
+    c.u32(rva(0));
+    c.u32(rva(save_end));
+    c.u32(rva(unw1));
+    c.u32(rva(save_end));
+    c.u32(rva(moved_end));
+    c.u32(rva(unw2));
+    if (c.b.size() > size) return *why = "its stub came out too big", false;
+    DWORD old = 0;
+    VirtualProtect(mem, c.b.size(), PAGE_EXECUTE_READWRITE, &old);
+    std::memcpy(mem, c.b.data(), c.b.size());
+    VirtualProtect(mem, c.b.size(), PAGE_EXECUTE_READ, &old);
+    FlushInstructionCache(GetCurrentProcess(), mem, c.b.size());
+    if (!RtlAddFunctionTable(reinterpret_cast<PRUNTIME_FUNCTION>(mem + table), 2, reinterpret_cast<DWORD64>(base)))
+        plog("hooks: couldn't register the unwind info of the instruction hook at " + where(at) +
+             " (stack walks through it may stop there)");
+    s->thunk      = mem;
+    s->thunk_size = moved_end;
+    // the patch: jmp rel32 to the save part, then int3s over the rest of the replaced bytes
+    s->patch.assign(replaced, 0xCC);
+    s->patch[0]    = 0xE9;
+    const auto rel = static_cast<int32_t>(mem + save_at - (at + 5));
+    std::memcpy(s->patch.data() + 1, &rel, 4);
+    return true;
+}
+
+FH2Hook* api_hook_instruction(FH2Mod* m, const char* name, void* at, FH2InstructionFn fn, void* user) {
+    const std::string what = "instruction " + where(at) + (name ? std::string(" (") + name + ")" : "");
+    void* dummy = nullptr;
+    if (!common_checks(m, what.c_str(), at, reinterpret_cast<void*>(fn), &dummy)) return nullptr;
+    uint32_t image_size = 0;
+    const char* image   = image_of(at, &image_size);
+    if (!image) {
+        log_line(m->name, "can't hook " + what + ": it isn't in the game or a loaded DLL");
+        return nullptr;
+    }
+    settle(at);
+    std::scoped_lock lk{g_mu};
+    if (!executable(at)) {
+        log_line(m->name, "can't hook " + what + ": it isn't code");
+        return nullptr;
+    }
+    auto* p = static_cast<char*>(at);
+    Site* s = find_site(kInstruction, p);
+    if (!s) {
+        std::vector<Insn> insns;
+        const RUNTIME_FUNCTION* f = nullptr;
+        std::string why;
+        if (!instruction_range(image, reinterpret_cast<const unsigned char*>(p), &insns, &f, &why)) {
+            log_line(m->name, "can't hook " + what + ": " + why);
+            return nullptr;
+        }
+        char* hi = const_cast<char*>(reinterpret_cast<const char*>(insns.back().at + insns.back().hs.len));
+        if (!check_bytes(m, what.c_str(), p, hi, false)) return nullptr;
+        s = new_site(kInstruction, p, nullptr, p, hi);
+        if (!build_thunk(s, insns, image, image_size, f, &why)) {
+            log_line(m->name, "can't hook " + what + ": " + why);
+            g_sites.pop_back();
+            return nullptr;
+        }
+    }
+    return add_hook(m, name, s, reinterpret_cast<void*>(fn), nullptr, user);
+}
+
 int api_enable_hooks(FH2Mod* m, FH2Hook* h) { return switch_hooks(m, h, true); }
 int api_disable_hooks(FH2Mod* m, FH2Hook* h) { return switch_hooks(m, h, false); }
 
@@ -957,6 +1563,8 @@ void fill_hook_api(FH2ModApi& api) {
     api.enable_hooks  = api_enable_hooks;
     api.disable_hooks = api_disable_hooks;
     api.wait_for_code = api_wait_for_code;
+    api.patch_bytes      = api_patch_bytes;
+    api.hook_instruction = api_hook_instruction;
 }
 
 // For crash reports: which hook's trampoline or stub `p` is in.
@@ -966,6 +1574,11 @@ bool hook_at(const void* p, char* out, std::size_t n) {
     for (LONG i = 0; i < nr && i < kMaxRecords; ++i)
         if (g_records[i].tramp && a >= g_records[i].tramp && a < g_records[i].tramp + 64) {
             std::snprintf(out, n, "the trampoline (copied game code) of %s", g_records[i].text);
+            return true;
+        }
+    for (LONG i = 0; i < nr && i < kMaxRecords; ++i)
+        if (g_records[i].code_lo && a >= g_records[i].code_lo && a < g_records[i].code_hi) {
+            std::snprintf(out, n, "the stub of %s (saving registers, or the instructions it moved)", g_records[i].text);
             return true;
         }
     for (int i = 0; i < g_nblocks; ++i)

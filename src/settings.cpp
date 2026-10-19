@@ -2216,19 +2216,21 @@ void d_pause_menu_wire(void* page) {
     }
 }
 
-bool show_marketplace_tab() {
+// The pause menu hides the Marketplace tab (the MODS tab's place) with five "mov r8d, 1"s; each
+// becomes "mov r8d, 0", as Extra Options' EnableMarketplace does. Byte patches through the hook
+// system (API 7), so they're checked, logged and listed in crash reports like hooks; where
+// Extra Options has already done it, there's nothing to do.
+bool show_marketplace_tab(FH2Mod* m) {
     static const uint8_t hide[] = {0x41, 0xB8, 0x01, 0x00, 0x00, 0x00}, show[] = {0x41, 0xB8, 0x00, 0x00, 0x00, 0x00};
     for (uintptr_t rva : RVA_MARKETPLACE_HIDE)
         if (!code_matches(rva, hide, sizeof hide) && !code_matches(rva, show, sizeof show)) return false;
+    bool ok = true;
     for (uintptr_t rva : RVA_MARKETPLACE_HIDE) {
-        auto* at  = reinterpret_cast<uint8_t*>(g_base + rva);
-        DWORD old = 0;
-        if (!VirtualProtect(at + 2, 1, PAGE_EXECUTE_READWRITE, &old)) return false;
-        at[2] = 0;
-        VirtualProtect(at + 2, 1, old, &old);
+        if (code_matches(rva, show, sizeof show)) continue;   // Extra Options' EnableMarketplace
+        FH2Hook* p = g_api->patch_bytes(m, "Marketplace tab: show", reinterpret_cast<void*>(g_base + rva), hide, show, sizeof show);
+        ok = p && g_api->enable_hooks(m, p) && ok;
     }
-    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(g_base + RVA_MARKETPLACE_HIDE[0]), 0x2000);
-    return true;
+    return ok;
 }
 
 bool g_hub_files = false;   // the tab's files were written
@@ -2320,7 +2322,7 @@ void hook_hub() {
         undo_files();
         return;
     }
-    if (!show_marketplace_tab()) slog("the code that hides the Marketplace tab doesn't look as expected; MODS shows only with Extra Options' EnableMarketplace");
+    if (!show_marketplace_tab(m)) slog("the code that hides the Marketplace tab doesn't look as expected; MODS shows only with Extra Options' EnableMarketplace");
     g_sounds_ok = true;
     if (g_hud_notice) {
         mod_notice_descriptor();   // made now, so the HUD hook knows there's a notice

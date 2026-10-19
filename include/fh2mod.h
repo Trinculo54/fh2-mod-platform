@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define FH2MOD_API_VERSION 6
+#define FH2MOD_API_VERSION 7
 
 #ifdef __cplusplus
 #define FH2MOD_EXPORT extern "C" __declspec(dllexport)
@@ -47,6 +47,25 @@ typedef struct FH2Mod FH2Mod;
 typedef struct FH2Hook FH2Hook;
 /* One row on the Mods page (API 4), defined below FH2ModApi. */
 typedef struct FH2Setting FH2Setting;
+
+/* The CPU's registers at an instruction hook (API 7): see hook_instruction.
+   rsp is what it was at the hooked instruction; changing it has no effect. */
+typedef struct FH2Xmm {
+    union {
+        float f[4];
+        double d[2];
+        uint32_t u32[4];
+        uint64_t u64[2];
+    };
+} FH2Xmm;
+typedef struct FH2Context {
+    uint64_t rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi;
+    uint64_t r8, r9, r10, r11, r12, r13, r14, r15;
+    uint64_t rflags;
+    uint64_t reserved;
+    FH2Xmm xmm[16];
+} FH2Context;
+typedef void (*FH2InstructionFn)(FH2Context* ctx, void* user);
 
 typedef struct FH2ModInfo {
     uint32_t size;                /* sizeof(FH2ModInfo) */
@@ -248,6 +267,39 @@ typedef struct FH2ModApi {
     /* You changed a slider's value yourself: the page shows it the next time
        it opens. on_slide isn't called. */
     void (*set_slider)(FH2Mod* mod, const char* key, float value);
+
+    /* ==== API version 7 (platform 2.6.0): check api_version >= 7 ======== */
+
+    /* ---- Precise changes to game code ---------------------------------------
+       For when hooking a whole function, one call or one pointer is too
+       blunt: a constant in the middle of a function, a branch to flip, a
+       register to read at one exact instruction. Both kinds below come back
+       as an FH2Hook, made switched off, and are switched with enable_hooks
+       and disable_hooks like any other hook. The same rules hold: game code
+       has to wait for wait_for_code, the bytes are checked against the exe on
+       disk and against every other hook, and it's all in the log and in
+       crash reports. Addresses are exact: use them on the game build you
+       found them in (the one Azimuth runs). */
+
+    /* Bytes written in place: `size` bytes (at most 32) of `bytes` at `at`,
+       which has to hold `expect` (the same size) first; pass NULL to take
+       what's there as long as it matches the exe on disk. Disabling puts
+       the original bytes back. Only one patch can cover a byte, and a patch
+       can't overlap any other hook. */
+    FH2Hook* (*patch_bytes)(FH2Mod* mod, const char* name, void* at, const void* expect, const void* bytes, uint32_t size);
+
+    /* An instruction hook: when the game reaches the instruction at `at`
+       (anywhere in a function, not only its start), `fn(ctx, user)` is
+       called with the CPU's registers in `ctx`, before that instruction
+       runs. Change them in `ctx` (not rsp) and the game carries on with your
+       values. `at` has to be the start of an instruction, after the
+       function's prolog, with nothing in the function jumping into the
+       bytes the hook replaces (the platform checks; the log says why when it
+       refuses). Several mods may hook the same instruction: the most
+       recently enabled `fn` runs first. `fn` runs on the game's thread,
+       often every frame: keep it short. If it crashes, that hook is
+       switched off and the crash goes in the log. */
+    FH2Hook* (*hook_instruction)(FH2Mod* mod, const char* name, void* at, FH2InstructionFn fn, void* user);
 } FH2ModApi;
 
 /* Called on the game's UI thread when the player changes a row: keep it
