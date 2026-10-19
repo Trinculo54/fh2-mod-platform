@@ -16,6 +16,8 @@ The same spot on the title screen tells you when one of your mods has a new rele
 
 Everything the platform does is logged to `fh2-mods\platform.log`: which mods it loaded and their versions, which game text, files and data it changed and for whom, and any mod that failed to load or crashed while starting up. It's the first thing to look at when a mod doesn't seem to be doing anything. If the game itself crashes, the platform writes a report to `fh2-mods\crashes` naming the mod the crash came from, if any, which is the thing to attach when you report it to that mod's author.
 
+**Racing wheels ([fh2wheel](https://github.com/iamAzoDx/fh2wheel)).** fh2wheel ships its own `D3DCOMPILER_47.dll` too, a small loader that only loads `fh2wheel.dll`, and only one of the two files can sit next to `azimuth.exe`. From platform 2.6.1 the platform loads `fh2wheel.dll` itself when it finds it there, so to use both: install fh2wheel as its instructions say, then install (or reinstall) a platform mod, so that the platform's `d3dcompiler_47.dll` is the one in place. Keep `fh2wheel.dll` and `fh2wheel-config.exe` next to `azimuth.exe`. fh2wheel then shows up on the MODS tab, `platform.log` says it loaded it, and its settings stay in `fh2wheel-config.exe`. If fh2wheel's `D3DCOMPILER_47.dll` ends up in place instead, the wheel works but none of the platform's mods load.
+
 To remove the platform, delete `d3dcompiler_47.dll` and the `fh2-mods` folder. That removes every mod built on it.
 
 ## For mod makers

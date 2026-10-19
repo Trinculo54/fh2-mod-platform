@@ -505,6 +505,45 @@ DWORD WINAPI load_mods(LPVOID) {
     std::sort(files.begin(), files.end());
     std::vector<LoadedDll> dlls;
     const auto off = disabled_mods();
+    // fh2wheel (github.com/iamAzoDx/fh2wheel, racing wheels with force feedback) ships its own
+    // d3dcompiler_47.dll, a loader that does nothing but forward to the system compiler and load
+    // fh2wheel.dll from the Azimuth folder. Only one d3dcompiler_47.dll can sit next to azimuth.exe,
+    // so with the platform's there, the platform loads fh2wheel.dll the same way: as it is, before
+    // the mods, from the Azimuth folder. It's listed on the MODS tab and can be turned off there.
+    {
+        const std::wstring wheel = L"fh2wheel.dll";
+        const auto path          = g_azimuth / wheel;
+        if (fs::is_regular_file(path, ec)) {
+            {
+                std::scoped_lock lk{g_mu};
+                g_found.push_back({wheel, false, off.count(lower_w(wheel)) != 0, false});
+            }
+            if (off.count(lower_w(wheel))) {
+                plog("fh2wheel.dll (next to azimuth.exe) is turned off on the MODS tab; not loaded");
+            } else if (GetModuleHandleW(path.c_str())) {
+                plog("fh2wheel.dll is already loaded (by fh2wheel's own loader?)");
+                std::scoped_lock lk{g_mu};
+                g_found.back().loaded = true;
+            } else if (HMODULE h = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) {
+                {
+                    std::scoped_lock lk{g_mu};
+                    g_found.back().loaded = true;
+                }
+                const auto* base = reinterpret_cast<const char*>(h);
+                const auto* nt   = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
+                    base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
+                dlls.push_back({wheel, base, nt->OptionalHeader.SizeOfImage});
+                const auto v = version_string(h);
+                plog("loaded fh2wheel.dll" + (v.empty() ? std::string() : " " + v) +
+                     " from next to azimuth.exe (fh2wheel's own loader is replaced by the platform's d3dcompiler_47.dll)");
+            } else {
+                const DWORD err = GetLastError();
+                plog("FAILED to load fh2wheel.dll (error " + std::to_string(err) + ")");
+                std::scoped_lock lk{g_mu};
+                g_found.back().problem = "Windows couldn't load it (error " + std::to_string(err) + ").";
+            }
+        }
+    }
     for (const auto& f : files) {
         {
             std::scoped_lock lk{g_mu};
@@ -716,7 +755,12 @@ std::vector<ModEntry> mod_entries() {
                 e.platform_mod = true;
                 break;
             }
-        if (!e.mod) {
+        if (!e.mod && lower_w(f.file) == L"fh2wheel.dll") {
+            e.name        = "fh2wheel";
+            e.description = "Racing wheels with force feedback, by iamAzoDx. Loaded by the platform from next to azimuth.exe, "
+                            "in place of fh2wheel's own d3dcompiler_47.dll.";
+            e.repo        = "iamAzoDx/fh2wheel";
+        } else if (!e.mod) {
             if (auto it = known.find(lower_w(f.file)); it != known.end()) {
                 e.name    = narrow(it->second[1]);
                 e.version = narrow(it->second[2]);

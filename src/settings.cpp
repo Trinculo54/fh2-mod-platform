@@ -1176,6 +1176,7 @@ std::string about_mod(const ModEntry& e) {
 
 std::string mod_note(const ModEntry& e) {
     if (!e.enabled) return "Turned off: the game doesn't load it.";
+    if (_wcsicmp(e.dll.c_str(), L"fh2wheel.dll") == 0) return "Not a platform mod: its settings are in fh2wheel-config.exe.";
     if (!e.platform_mod) return "A mod from before the platform: it has no settings here.";
     return "";
 }
