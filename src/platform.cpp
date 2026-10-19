@@ -723,8 +723,17 @@ std::vector<ModEntry> mod_entries() {
                 if (it->second.size() > 3) e.description = narrow(it->second[3]);
                 if (it->second.size() > 4) e.repo = narrow(it->second[4]);
                 e.platform_mod = true;
-            } else {
-                e.name = narrow(f.file.substr(0, f.file.size() > 4 ? f.file.size() - 4 : f.file.size()));
+            }
+        }
+        // nothing told us its name: its file's name, without .dll, cut short if it's long
+        if (e.name.find_first_not_of(" \t") == std::string::npos) {
+            std::wstring stem = f.file;
+            if (stem.size() > 4 && lower_w(stem.substr(stem.size() - 4)) == L".dll") stem.resize(stem.size() - 4);
+            e.name = narrow(stem);
+            if (e.name.size() > 28) {
+                std::size_t cut = 25;
+                while (cut > 0 && (static_cast<unsigned char>(e.name[cut]) & 0xC0) == 0x80) --cut;  // not mid-letter
+                e.name = e.name.substr(0, cut) + "...";
             }
         }
         if (e.mod || e.platform_mod)

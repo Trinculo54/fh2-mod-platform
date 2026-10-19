@@ -854,19 +854,15 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         // Inside the panel's own width, so the footer wraps inside it.
         const std::string grid =
             "<Grid Width=\"380\" HorizontalAlignment=\"Left\"" + vis + ">\r\n                        " + panel +
-            "\r\n                        <StackPanel VerticalAlignment=\"Bottom\" Margin=\"30,0,30,24\">\r\n"
+            "\r\n                        <StackPanel VerticalAlignment=\"Bottom\" Margin=\"30,0,30,24\" DataContext=\"{Binding SelectedItem, ElementName=" + list + "}\">\r\n"
             // the row's error, in red, set apart from the description above it
-            "                            <StackPanel DataContext=\"{Binding SelectedItem.Tag, ElementName=" + list + "}\" Margin=\"0,0,0,24\">\r\n"
-            "                                <local:FZTextBlock Text=\"{Binding Icon}\" Color=\"{StaticResource FH2Mod_Color_Red}\" " + text + " />\r\n"
-            "                            </StackPanel>\r\n"
-            "                            <StackPanel DataContext=\"{Binding SelectedItem.Content, ElementName=" + list + "}\">\r\n"
+            "                            <local:FZTextBlock Text=\"{Binding Tag.Icon}\" Color=\"{StaticResource FH2Mod_Color_Red}\" Margin=\"0,0,0,24\" " + text + " />\r\n"
             "                            <Grid>\r\n"
-            "                                <local:FZTextBlock Text=\"{Binding Heading}\" " + text + " />\r\n"
-            "                                <local:FZTextBlock Text=\"{Binding Description}\" Color=\"{StaticResource FH2Mod_Color_Red}\" " +
+            "                                <local:FZTextBlock Text=\"{Binding Content.Heading}\" " + text + " />\r\n"
+            "                                <local:FZTextBlock Text=\"{Binding Content.Description}\" Color=\"{StaticResource FH2Mod_Color_Red}\" " +
             text + " />\r\n"
             "                            </Grid>\r\n"
-            "                            <local:FZTextBlock Text=\"{Binding Icon}\" Margin=\"0,8,0,0\" " + text + " />\r\n"
-            "                            </StackPanel>\r\n"
+            "                            <local:FZTextBlock Text=\"{Binding Content.Icon}\" Margin=\"0,8,0,0\" " + text + " />\r\n"
             "                        </StackPanel>\r\n                    </Grid>";
         page.replace(e0, e1 + 2 - e0, grid);
         at = page.find(desc_panel, e0 + grid.size());
@@ -1134,6 +1130,7 @@ void add_mod_lines(PageItem& it, const ModEntry& e) {
     } else {
         std::string state;
         if (!e.enabled) state = "turned off";
+        else if (!e.problem.empty()) state = "didn't load";
         else if (!e.mod || e.mod->repo.empty() || !e.mod->check_updates) state = "doesn't check for updates";
         else state = latest.empty() ? "not checked yet" : "up to date";
         it.version = v + " (" + state + ")";
