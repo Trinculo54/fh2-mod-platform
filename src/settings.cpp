@@ -693,7 +693,7 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         // (moved onto the Grid around the panel by the footer code below, where the DataContext
         // is the page's: a path through ElementName didn't follow the change)
         auto panel_vis = [](std::size_t k) {
-            return " Visibility=\"{Binding FH2Mod_View_" + std::to_string(k) + ", Converter={StaticResource FH2Mod_ShowView}}\"";
+            return " Visibility=\"{Binding FH2Mod_View_" + std::to_string(k) + ", Converter={StaticResource FH2Mod_ShowList}}\"";
         };
         std::string panel = page.substr(d0, d1 + 2 - d0);
         std::string panels;
@@ -705,8 +705,11 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             pk.insert(std::string("<ContentControl").size(), panel_vis(k));
             panels += "\r\n                        " + pk;
         }
-        page.insert(d1 + 2, panels);
+        // the panels on top of each other in a Grid (hidden, not collapsed, like the lists: an old
+        // one stays a moment while the switch animates)
+        page.insert(d1 + 2, panels + "\r\n                        </Grid>");
         page.insert(d0 + std::string("<ContentControl").size(), panel_vis(0));
+        page.insert(d0, "<Grid>\r\n                        ");
         // the lists (all before the panels, so their positions above stand)
         std::string open_tag = page.substr(l0, tag_end + 1 - l0);
         std::string lists;
@@ -714,56 +717,94 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             std::string t = open_tag;
             const std::size_t nm = t.find("x:Name=\"OptionsList\"");
             if (nm == std::string::npos) return false;
-            t.replace(nm, std::string("x:Name=\"OptionsList\"").size(),
-                      "x:Name=\"FH2Mod_List_" + std::to_string(k) + "\"" + list_vis(k));
+            t.replace(nm, std::string("x:Name=\"OptionsList\"").size(), "x:Name=\"FH2Mod_List_" + std::to_string(k) + "\"");
             if (const std::size_t si = t.find(" SelectedIndex=\"{Binding FH2Mod_Selected, Mode=TwoWay}\""); si != std::string::npos)
                 t.erase(si, std::string(" SelectedIndex=\"{Binding FH2Mod_Selected, Mode=TwoWay}\"").size());
-            lists += "\r\n" + t + view_rows[k - 1] + "</local:CommonListBox>";
+            lists += "\r\n<Grid" + list_vis(k) + " Style=\"{StaticResource FH2Mod_Style_ListView_" + std::to_string(k) + "}\">\r\n" + t +
+                     view_rows[k - 1] + "</local:CommonListBox>\r\n</Grid>";
         }
-        // The view switch fades in and zooms, as the game's menus do between pages (0.3 s,
-        // quartic ease out): into a mod's settings growing from 0.9, back to the list shrinking
-        // from 1.1. The page's content (title, list and panel: the BasicOptions StackPanel) gets
-        // a Grid around it with this style, a DataTrigger per view, and a ScaleTransform of its
-        // own. (On the StackPanels inside, Opacity and ZPanel.ZOffset are the page
-        // transitions': animated there, nothing showed.)
-        auto key = [](const char* prop, const char* from) {
-            return std::string("                                        <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"") + prop +
-                   "\">\r\n"
-                   "                                            <LinearDoubleKeyFrame KeyTime=\"0\" Value=\"" + from + "\" />\r\n"
-                   "                                            <EasingDoubleKeyFrame KeyTime=\"0:0:0.3\" Value=\"1\">\r\n"
-                   "                                                <EasingDoubleKeyFrame.EasingFunction>\r\n"
-                   "                                                    <QuarticEase EasingMode=\"EaseOut\"/>\r\n"
-                   "                                                </EasingDoubleKeyFrame.EasingFunction>\r\n"
-                   "                                            </EasingDoubleKeyFrame>\r\n"
-                   "                                        </DoubleAnimationUsingKeyFrames>\r\n";
+        // The view switch plays as the game's page transitions do (Global_Transitions.xaml): the
+        // old content goes (0.2 s: fades, and moves outwards, quadratic ease in), then the new
+        // comes (0.3 s: fades in, from behind, quartic ease out), the description panel 0.15 s
+        // after the rest. Opacity and ZPanel.ZOffset on the page's own StackPanels are its
+        // transitions' to drive (animated there, nothing showed), so a Grid of ours around the
+        // page's content (title, list and panel) fades, and zooms with a ScaleTransform in place
+        // of the depth: going into a mod, out to 1.1 then in from 0.9; coming back, out to 0.9
+        // then in from 1.1. Each list and panel sits in a Grid of its own whose Visibility the
+        // switch holds for those first 0.2 s (the old one stays, the new one waits unseen), so
+        // the new list has the focus from the start.
+        auto frames = [](const std::string& prop, const std::string& keys) {
+            return "                                        <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"" + prop + "\">\r\n" +
+                   keys + "                                        </DoubleAnimationUsingKeyFrames>\r\n";
         };
-        // (Opacity and ZPanel.ZOffset, what the game's transitions animate, are theirs to drive
-        // on this element: animated here they didn't show. A scale of our own does.)
-        auto zoom = [&](const char* from) {
-            return std::string("                            <DataTrigger.EnterActions>\r\n"
-                               "                                <BeginStoryboard>\r\n"
-                               "                                    <Storyboard>\r\n") +
-                   key("Opacity", "0") +
-                   key("(UIElement.RenderTransform).(TransformGroup.Children)[0].(ScaleTransform.ScaleX)", from) +
-                   key("(UIElement.RenderTransform).(TransformGroup.Children)[0].(ScaleTransform.ScaleY)", from) +
+        auto lin = [](const char* t, const std::string& v) {
+            return "                                            <LinearDoubleKeyFrame KeyTime=\"" + std::string(t) + "\" Value=\"" + v + "\" />\r\n";
+        };
+        auto disc = [](const char* t, const std::string& v) {
+            return "                                            <DiscreteDoubleKeyFrame KeyTime=\"" + std::string(t) + "\" Value=\"" + v + "\" />\r\n";
+        };
+        auto ease = [](const char* t, const std::string& v, const char* fn, const char* mode) {
+            return "                                            <EasingDoubleKeyFrame KeyTime=\"" + std::string(t) + "\" Value=\"" + v + "\">\r\n"
+                   "                                                <EasingDoubleKeyFrame.EasingFunction>\r\n"
+                   "                                                    <" + fn + " EasingMode=\"" + mode + "\"/>\r\n"
+                   "                                                </EasingDoubleKeyFrame.EasingFunction>\r\n"
+                   "                                            </EasingDoubleKeyFrame>\r\n";
+        };
+        auto board = [](const std::string& animations) {
+            return "                                <BeginStoryboard>\r\n"
+                   "                                    <Storyboard>\r\n" + animations +
                    "                                    </Storyboard>\r\n"
-                   "                                </BeginStoryboard>\r\n"
+                   "                                </BeginStoryboard>\r\n";
+        };
+        auto vis_frames = [](bool stays) {   // Visible now; Hidden after 0.2 s when it's the old one
+            return std::string("                                        <ObjectAnimationUsingKeyFrames Storyboard.TargetProperty=\"(UIElement.Visibility)\">\r\n"
+                               "                                            <DiscreteObjectKeyFrame KeyTime=\"0\" Value=\"{x:Static Visibility.Visible}\"/>\r\n") +
+                   (stays ? "" : "                                            <DiscreteObjectKeyFrame KeyTime=\"0:0:0.2\" Value=\"{x:Static Visibility.Hidden}\"/>\r\n") +
+                   "                                        </ObjectAnimationUsingKeyFrames>\r\n";
+        };
+        // the whole content: out, then in
+        auto content = [&](const char* out_to, const char* in_from) {
+            const std::string sx = "(UIElement.RenderTransform).(TransformGroup.Children)[0].(ScaleTransform.ScaleX)";
+            const std::string sy = "(UIElement.RenderTransform).(TransformGroup.Children)[0].(ScaleTransform.ScaleY)";
+            const std::string scale = lin("0", "1") + ease("0:0:0.2", out_to, "QuadraticEase", "EaseIn") + disc("0:0:0.2", in_from) +
+                                      ease("0:0:0.5", "1", "QuarticEase", "EaseOut");
+            return "                            <DataTrigger.EnterActions>\r\n" +
+                   board(frames("Opacity", lin("0", "1") + lin("0:0:0.2", "0") + lin("0:0:0.5", "1")) + frames(sx, scale) + frames(sy, scale)) +
                    "                            </DataTrigger.EnterActions>\r\n";
         };
         std::string style = "\r\n            <Style x:Key=\"FH2Mod_Style_Views\" TargetType=\"{x:Type FrameworkElement}\">\r\n"
                             "                <Style.Triggers>\r\n";
         for (std::size_t k = 1; k <= view_rows.size(); ++k)
             style += "                    <DataTrigger Binding=\"{Binding FH2Mod_View_" + std::to_string(k) + "}\" Value=\"True\">\r\n" +
-                     zoom("0.9") + "                    </DataTrigger>\r\n";
-        style += "                    <DataTrigger Binding=\"{Binding FH2Mod_ViewBack}\" Value=\"True\">\r\n" + zoom("1.1") +
+                     content("1.1", "0.9") + "                    </DataTrigger>\r\n";
+        style += "                    <DataTrigger Binding=\"{Binding FH2Mod_ViewBack}\" Value=\"True\">\r\n" + content("0.9", "1.1") +
                  "                    </DataTrigger>\r\n"
                  "                </Style.Triggers>\r\n"
-                 "            </Style>\r\n        ";
+                 "            </Style>\r\n";
+        // each list and panel: shown when its view comes (unseen until the old one has gone, the
+        // panel 0.15 s later still), kept 0.2 s when it goes
+        for (std::size_t k = 0; k <= view_rows.size(); ++k)
+            for (const char* kind : {"ListView_", "PanelView_"}) {
+                const bool is_panel = kind[0] == 'P';
+                const std::string in = is_panel ? lin("0", "0") + lin("0:0:0.35", "0") + lin("0:0:0.65", "1") : disc("0", "0") + disc("0:0:0.2", "1");
+                style += "            <Style x:Key=\"FH2Mod_Style_" + std::string(kind) + std::to_string(k) + "\" TargetType=\"{x:Type FrameworkElement}\">\r\n"
+                         "                <Style.Triggers>\r\n"
+                         "                    <DataTrigger Binding=\"{Binding FH2Mod_View_" + std::to_string(k) + "}\" Value=\"True\">\r\n"
+                         "                            <DataTrigger.EnterActions>\r\n" +
+                         board(vis_frames(true) + frames("Opacity", in)) +
+                         "                            </DataTrigger.EnterActions>\r\n"
+                         "                            <DataTrigger.ExitActions>\r\n" +
+                         board(vis_frames(false)) +
+                         "                            </DataTrigger.ExitActions>\r\n"
+                         "                    </DataTrigger>\r\n"
+                         "                </Style.Triggers>\r\n"
+                         "            </Style>\r\n";
+            }
+        style += "        ";
         views_style = style;
         const std::size_t close = l1 + std::string("</local:CommonListBox>").size();
-        page.insert(close, lists + "\r\n</Grid>");
-        page.insert(l0 + std::string("<local:CommonListBox").size(), list_vis(0));
-        page.insert(l0, "<Grid>\r\n");
+        page.insert(close, "\r\n</Grid>" + lists + "\r\n</Grid>");
+        page.insert(l0, "<Grid>\r\n<Grid" + list_vis(0) + " Style=\"{StaticResource FH2Mod_Style_ListView_0}\">\r\n");
 
     }
     // Under each description panel's text, at the bottom of the panel: the selected row's
@@ -787,6 +828,11 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             }
             vis = panel.substr(v, v_end + 1 - v);
             panel.erase(v, v_end + 1 - v);
+            // and its switch animation (see the views above)
+            if (const std::size_t n0 = vis.find("FH2Mod_View_"); n0 != std::string::npos) {
+                const std::size_t n1 = vis.find_first_not_of("0123456789", n0 + 12);
+                vis += " Style=\"{StaticResource FH2Mod_Style_PanelView_" + vis.substr(n0 + 12, n1 - n0 - 12) + "}\"";
+            }
         }
         const std::string text = "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" TextWrapping=\"Wrap\"";
         // Fixed places, so they're where they always are: the version (the normal and the red
@@ -859,7 +905,16 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
     }
     // the restart notice, under the list and the description; hidden (not collapsed) while
     // there's nothing to say, so the page doesn't move when it shows
-    const std::size_t row_end = page.find("</StackPanel>", page.find(desc_panel)) + std::string("</StackPanel>").size();
+    // (the last thing in BasicOptions, the StackPanel of title, list and panel: its end is the
+    // last </StackPanel> before the first </ContentControl> after it, our footers' StackPanels
+    // being inside)
+    const std::size_t basic    = page.find("<StackPanel Name=\"BasicOptions\"");
+    const std::size_t tilt_end = basic == std::string::npos ? basic : page.find("</ContentControl>", basic);
+    const std::size_t row_end  = tilt_end == std::string::npos ? tilt_end : page.rfind("</StackPanel>", tilt_end);
+    if (row_end == std::string::npos || row_end < basic) {
+        slog("A_HUDOptions.xaml doesn't look as expected; no " + title + " page");
+        return false;
+    }
     page.insert(row_end,
                 "\r\n                    <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_Panel_Background}\" Margin=\"0,6,0,0\"\r\n"
                 "                                      Visibility=\"{Binding FH2Mod_RestartNotice, Converter={StaticResource FH2Mod_ShowNotice}}\">\r\n"
