@@ -595,6 +595,7 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                       "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowView\" UseHidden=\"false\" InvertResult=\"false\" />\r\n"
                       "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowList\" UseHidden=\"true\" InvertResult=\"false\" />\r\n"
                       "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_HideView\" UseHidden=\"false\" InvertResult=\"true\" />\r\n"
+                      "            <Color x:Key=\"FH2Mod_Color_Red\">#FFE0141E</Color>\r\n"   // the MODS tab's badge red
                       "            <ControlTemplate x:Key=\"FH2Mod_InfoRow\" TargetType=\"{x:Type Button}\">\r\n"
                       "                <Grid VerticalAlignment=\"Center\">\r\n"
                       "                    <Grid.ColumnDefinitions>\r\n"
@@ -609,7 +610,7 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                       "                        <local:FZTextBlock Text=\"{Binding (local:BindingProxy.C), RelativeSource={RelativeSource TemplatedParent}}\" "
                       "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Center\" />\r\n"
                       "                        <local:FZTextBlock Text=\"{Binding (local:BindingProxy.B), RelativeSource={RelativeSource TemplatedParent}}\" "
-                      "Color=\"{StaticResource A_Color_Stat_Negative}\" "
+                      "Color=\"{StaticResource FH2Mod_Color_Red}\" "
                       "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Center\" />\r\n"
                       "                    </Grid>\r\n"
                       "                </Grid>\r\n"
@@ -724,7 +725,7 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             "}\" VerticalAlignment=\"Bottom\" Margin=\"30,0,30,24\">\r\n"
             "                            <Grid>\r\n"
             "                                <local:FZTextBlock Text=\"{Binding Heading}\" " + text + " />\r\n"
-            "                                <local:FZTextBlock Text=\"{Binding Description}\" Color=\"{StaticResource A_Color_Stat_Negative}\" " +
+            "                                <local:FZTextBlock Text=\"{Binding Description}\" Color=\"{StaticResource FH2Mod_Color_Red}\" " +
             text + " />\r\n"
             "                            </Grid>\r\n"
             "                            <local:FZTextBlock Text=\"{Binding Icon}\" Margin=\"0,8,0,0\" " + text + " />\r\n"
@@ -876,16 +877,6 @@ void add_hub_rows() {
 
 std::string with_v(const std::string& version) { return version.empty() ? "" : " " + version; }
 
-// "Up to date.", "Version 1.3.0 is out.", ...
-std::string update_status(const ModEntry& e) {
-    if (!e.enabled) return "";
-    if (!e.mod) return e.platform_mod ? "" : "It doesn't check for updates.";
-    if (e.mod->repo.empty() || !e.mod->check_updates) return "It doesn't check for updates.";
-    const std::string latest = latest_known(e.mod);
-    if (latest.empty()) return "Not checked for updates yet.";
-    if (compare_versions(latest, e.version) > 0) return "Version " + (latest[0] == 'v' ? latest.substr(1) : latest) + " is out.";
-    return "Up to date.";
-}
 
 std::string alnum_lower(const std::string& s) {
     std::string o;
@@ -1016,29 +1007,24 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
     return items;
 }
 
+// Updates: the mods with a newer version out, then how the checks work (only that, saying
+// so, when there are none).
 std::vector<PageItem> updates_items() {
     std::vector<PageItem> items;
-    items.push_back(info("FH2 Mod Platform " FH2MOD_PLATFORM_VERSION,
-                         "The platform comes with every mod: installing a mod's newest release brings the newest platform too."));
     for (const ModEntry& e : g_entries) {
-        std::string label = e.name + with_v(e.version);
-        std::string d;
-        if (!e.enabled) d = "Turned off, so not checked.";
-        else d = update_status(e);
-        if (e.mod && !e.mod->repo.empty() && e.mod->check_updates) {
-            const std::string latest = latest_known(e.mod);
-            if (!latest.empty() && compare_versions(latest, e.version) > 0)
-                label += ": " + (latest[0] == 'v' ? latest.substr(1) : latest) + " is out";
-            else if (!latest.empty()) label += ": up to date";
-            // its GitHub page is in the footer (add_mod_lines)
-        }
-        PageItem it = info(label, d.empty() ? "No update information for this mod." : d);
+        if (!e.enabled || !e.mod || e.mod->repo.empty() || !e.mod->check_updates) continue;
+        const std::string latest = latest_known(e.mod);
+        if (latest.empty() || compare_versions(latest, e.version) <= 0) continue;
+        const std::string l = latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest;
+        PageItem it = info(e.name, "Version " + l + " is out. Get it from the mod's GitHub page (below): extract its zip into your "
+                                   "Azimuth folder, then start the game again.");
+        it.value_alert = "! " + e.version + " !";
         add_mod_lines(it, e);
         items.push_back(it);
     }
-    items.push_back(info("How update checks work",
-                         "Mods that name their GitHub page check it for new releases at most every 6 hours. A mod with a new "
-                         "release also says so on the title screen, under PRESS (A) TO START."));
+    const std::string how = "Mods that name their GitHub page check it for new releases at most every 6 hours. A mod with a new "
+                            "release also says so on the title screen, under PRESS (A) TO START, and with a ! on the MODS tab.";
+    items.push_back(info("How update checks work", items.empty() ? "There aren't any updates at the moment. " + how : how));
     return items;
 }
 
