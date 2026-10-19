@@ -1,6 +1,6 @@
 # API reference
 
-Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with platform 2.1, version 3 with platform 2.2 and version 4 with platform 2.3. Version 2 added file overrides, database patches and interfaces between mods, version 3 added hooks, and version 4 the Mods page; the sections for those say so.
+Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5 and 7 with 2.6. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 the Mods page, version 5 its sliders, version 6 mod descriptions and link rows for the MODS tab, and version 7 byte patches and instruction hooks; the sections for those say so.
 
 ## Rules that apply everywhere
 
@@ -213,6 +213,60 @@ static DWORD WINAPI start(LPVOID) {
 ```
 
 Every hook is logged when it's made and switched (`[MyMod] hooked function game+0x1997740 (FMOD::System::createSound)`), and crash reports list them all, marking the ones that were on. A crash inside a MinHook trampoline (the copy of the game's first instructions) is reported as such, with the hook it belongs to.
+
+## Byte patches and instruction hooks (API 7)
+
+```c
+FH2Hook* patch_bytes(FH2Mod* mod, const char* name, void* at, const void* expect, const void* bytes, uint32_t size);
+FH2Hook* hook_instruction(FH2Mod* mod, const char* name, void* at, FH2InstructionFn fn, void* user);
+
+typedef struct FH2Context {
+    uint64_t rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi;
+    uint64_t r8, r9, r10, r11, r12, r13, r14, r15;
+    uint64_t rflags;
+    uint64_t reserved;
+    FH2Xmm xmm[16];             /* .f[4], .d[2], .u32[4], .u64[2] */
+} FH2Context;
+typedef void (*FH2InstructionFn)(FH2Context* ctx, void* user);
+```
+
+For when a hook on a whole function, one call or one pointer is too blunt: a constant in the middle of a long function, a branch to flip, the value a register holds at one exact instruction. Both come back as an `FH2Hook`, switched off, and are switched with `enable_hooks` and `disable_hooks` like the hooks above. The same rules hold: hooks in game code wait for `wait_for_code`, the bytes are checked against `forza_durango_release_final.exe` and against every other hook, and everything is logged and listed in crash reports. They need platform 2.6.0, so check `api_version >= 7`.
+
+Addresses here are exact instructions, so they belong to the game build you found them in (the one Azimuth runs). If the bytes aren't what you expect, `expect` and the check against the exe on disk refuse the change rather than writing over something else.
+
+**patch_bytes** writes `size` bytes (1 to 32) of `bytes` at `at`. Pass the bytes you expect to find there in `expect` (the same size), or null to take whatever is there as long as it matches the exe on disk. Switching the patch off puts the original bytes back. Only one patch can cover a byte, and a patch can't overlap any hook. The bytes are written with the game's other threads paused, none of them half way through them.
+
+```cpp
+// mov r8d, 1 -> mov r8d, 0: the pause menu stops hiding its Marketplace tab
+static const unsigned char hide[] = {0x41, 0xB8, 1, 0, 0, 0}, show[] = {0x41, 0xB8, 0, 0, 0, 0};
+if (FH2Hook* p = api->patch_bytes(mod, "Marketplace tab: show", base + 0xDDACAD, hide, show, sizeof show))
+    api->enable_hooks(mod, p);
+```
+
+**hook_instruction** calls `fn(ctx, user)` every time the game reaches the instruction at `at`, before that instruction runs. `ctx` holds every general-purpose register, the flags and `xmm0` to `xmm15` as they are at that point. Change any of them (except `rsp`, which is there to read) and the game carries on with your values. `at` can be any instruction in a function, not just its first, as long as:
+
+- it's the start of an instruction (the platform decodes the function from its start to make sure);
+- it's past the function's prolog, the instructions that set up its stack frame;
+- the hook's jump fits: it replaces 5 bytes, so the instructions covering them have to stay inside the function, and nothing in the function may jump into them other than to `at` itself.
+
+When it refuses, the log says which of these it was. Inside, the replaced instructions are moved to a stub of the platform's, rewritten where they refer to nearby code or data (rip-relative operands, `CALL`, `JMP` and conditional jumps), and run there after `fn`, before the game continues after them. The stub has unwind information chained to the game function's own, so a stack walk from inside `fn`, or in a crash report, carries on through to the game function's callers. On a CPU with AVX the upper halves of `ymm0` to `ymm15` are kept too, so a `fn` compiled for AVX can't disturb the game's 256-bit values.
+
+Several mods can hook the same instruction; all of their `fn`s run, the most recently enabled first, each seeing the changes of the ones before it. `fn` runs on the game's thread, often every frame, so keep it short. If it crashes, the crash is caught, logged under your mod's name, and that hook is skipped from then on; the game keeps running. Instruction hooks work in the game and in any loaded DLL with unwind information, like your own.
+
+```cpp
+// The freeroam HUD being shown (the Hud page's vtable +0x488, game+0xD38DD0): after
+// "mov rbx, rcx", rbx is the page.
+static void hud_shown(FH2Context* ctx, void*) {
+    void* page = reinterpret_cast<void*>(ctx->rbx);
+    // ... remember it ...
+}
+
+if (api->api_version >= 7)
+    if (FH2Hook* h = api->hook_instruction(mod, "Hud shown", base + 0xD38DF2, &hud_shown, nullptr))
+        api->enable_hooks(mod, h);
+```
+
+Prefer `hook_function`, `hook_call` or `hook_pointer` when one of them can do the job: they don't depend on the exact instructions inside a function. An instruction hook's register meanings come from reading the game's code at that spot, so note them next to the address, as above.
 
 ## The Mods page (API 4; sliders API 5)
 
