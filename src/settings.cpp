@@ -408,19 +408,18 @@ uint8_t* notice_descriptor() {
 }
 
 // FH2Mod_ModNotice: whether the freeroam HUD shows its "a mod didn't load" notice (see
-// write_hud_notice). True for a little while from the first time the HUD asks, then false, so
-// the notice plays once a session: the HUD asks again whenever it's built, after menus and
-// events too.
+// write_hud_notice). The game builds the HUD page early, around the start screen, so the value
+// is false until the page is first shown (its vtable +0x488, see d_hud_shown), true for a
+// little while then, and false again from the next time it's shown: once a session.
 uint8_t* g_mod_notice_desc = nullptr;
-std::atomic<ULONGLONG> g_mod_notice_at{0};
-std::string hexp(const void* p);
-void** __cdecl mod_notice_get(void** out, void*, void* obj) {
-    ULONGLONG first = 0;
-    const ULONGLONG now = GetTickCount64();
-    const bool asked_first = g_mod_notice_at.compare_exchange_strong(first, now);
-    if (asked_first) slog("showing the HUD's notice about mods that didn't load");
-    slog("debug: FH2Mod_ModNotice asked by " + hexp(obj));
-    bool v = now - g_mod_notice_at.load() < 15000;
+std::atomic<ULONGLONG> g_mod_notice_at{0};   // when the HUD was first shown (0: not yet)
+std::atomic<bool> g_mod_notice_done{false};
+bool mod_notice_on() {
+    const ULONGLONG at = g_mod_notice_at.load();
+    return at && !g_mod_notice_done.load() && GetTickCount64() - at < 15000;
+}
+void** __cdecl mod_notice_get(void** out, void*, void*) {
+    bool v = mod_notice_on();
     *out   = nullptr;
     reinterpret_cast<BoxBoolFn>(g_base + RVA_BOX_BOOL)(out, &v);
     return out;
@@ -2144,9 +2143,9 @@ void wire_installed_tile(void* page) {
     }
 }
 
-void probe_hud(FH2Mod* m);
+void hook_hud_shown(FH2Mod* m);
+bool g_hud_notice = false;   // A_Hud.xaml has the notice
 void d_pause_menu_wire(void* page) {
-    slog("debug: pause menu opened");
     g_hub_asked  = 0;
     g_hub_builds = 0;
     g_hub_return = false;
@@ -2271,34 +2270,40 @@ void hook_hub() {
     }
     if (!show_marketplace_tab()) slog("the code that hides the Marketplace tab doesn't look as expected; MODS shows only with Extra Options' EnableMarketplace");
     g_sounds_ok = true;
-    probe_hud(m);
+    if (g_hud_notice) {
+        mod_notice_descriptor();   // made now, so the HUD hook knows there's a notice
+        hook_hud_shown(m);
+    }
     slog("MODS tab ready");
 }
 
-// debug: when the freeroam HUD page (Hud, vtable 0x142DEF9C8) is loaded, shown and so on,
-// to time the notice about mods that didn't load
-constexpr uintptr_t RVA_HUD_VT = 0x2DEF9C8;
-using AnyFn = uint64_t (*)(void*, void*, void*, void*);
-AnyFn o_hud_slot[5] = {};
-constexpr int kHudSlots[5] = {0x488, 0x498, 0x4C8, 0x4F8, 0x518};
-template <int I>
-uint64_t d_hud_slot(void* a, void* b, void* c, void* d) {
-    slog("debug: Hud +" + hexp(reinterpret_cast<void*>(static_cast<uintptr_t>(kHudSlots[I]))) + " on " + hexp(a));
-    return o_hud_slot[I](a, b, c, d);
+// The freeroam HUD page (Hud, vtable 0x142DEF9C8): +0x488 runs each time it's shown (in
+// freeroam, and again after every menu), +0x4F8 when it's hidden. The first time, the notice
+// about mods that didn't load plays (FH2Mod_ModNotice); the next, it's done.
+constexpr uintptr_t RVA_HUD_SHOWN_SLOT = 0x2DEFE50;   // Hud vtable +0x488
+constexpr uintptr_t RVA_HUD_SHOWN      = 0x0D38DD0;
+using HudShownFn = uint64_t (*)(void*, void*, void*, void*);
+HudShownFn o_hud_shown = nullptr;
+uint64_t d_hud_shown(void* page, void* b, void* c, void* d) {
+    const uint64_t r = o_hud_shown(page, b, c, d);
+    if (!g_mod_notice_desc) return r;
+    ULONGLONG none = 0;
+    if (g_mod_notice_at.compare_exchange_strong(none, GetTickCount64()))
+        slog("showing the HUD's notice about mods that didn't load");   // first shown: it plays
+    else if (g_mod_notice_done.exchange(true))
+        return r;                                                       // over already
+    notify_changed(page, g_mod_notice_desc);
+    return r;
 }
-void probe_hud(FH2Mod* m) {
-    void* const detours[5] = {reinterpret_cast<void*>(&d_hud_slot<0>), reinterpret_cast<void*>(&d_hud_slot<1>),
-                              reinterpret_cast<void*>(&d_hud_slot<2>), reinterpret_cast<void*>(&d_hud_slot<3>),
-                              reinterpret_cast<void*>(&d_hud_slot<4>)};
-    for (int i = 0; i < 5; ++i) {
-        void** slot = reinterpret_cast<void**>(g_base + RVA_HUD_VT + kHudSlots[i]);
-        if (!readable(slot, 8)) continue;
-        const std::string name = "debug: Hud page +" + hexp(reinterpret_cast<void*>(static_cast<uintptr_t>(kHudSlots[i])));
-        static std::deque<std::string> names;
-        names.push_back(name);
-        if (FH2Hook* k = g_api->hook_pointer(m, names.back().c_str(), slot, detours[i], reinterpret_cast<void**>(&o_hud_slot[i])))
-            g_api->enable_hooks(m, k);
+void hook_hud_shown(FH2Mod* m) {
+    void** slot = reinterpret_cast<void**>(g_base + RVA_HUD_SHOWN_SLOT);
+    if (!readable(slot, 8) || *slot != reinterpret_cast<void*>(g_base + RVA_HUD_SHOWN)) {
+        slog("the freeroam HUD's vtable doesn't look as expected; no notice about mods that didn't load");
+        return;
     }
+    if (FH2Hook* k = g_api->hook_pointer(m, "freeroam HUD: shown", slot, reinterpret_cast<void*>(&d_hud_shown),
+                                         reinterpret_cast<void**>(&o_hud_shown)))
+        g_api->enable_hooks(m, k);
 }
 
 // ---- hooking up ----------------------------------------------------------------------------
@@ -2540,7 +2545,8 @@ bool write_hud_notice() {
         "            </StackPanel>\r\n        ";
     page.insert(g, notice);
     page.insert(r, style);
-    return set_file(&g_owner_mod, "UI/Scenes/Anthem/A_Hud.xaml", page.data(), page.size()) != 0;
+    g_hud_notice = set_file(&g_owner_mod, "UI/Scenes/Anthem/A_Hud.xaml", page.data(), page.size()) != 0;
+    return g_hud_notice;
 }
 
 // After every mod's fh2mod_init: write the pages (the MODS tab's, and Settings > Mods if any
