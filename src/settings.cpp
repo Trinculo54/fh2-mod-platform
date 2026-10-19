@@ -648,6 +648,7 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                       "            </ControlTemplate>\r\n";
 
     std::string rows = list_rows(items, "FH2Mod_Item_", "FirstItem", res);
+    std::string views_style;   // the view switch's animation (see below), on pages with views
     std::vector<std::string> view_rows;
     if (views)
         for (std::size_t k = 0; k < views->size(); ++k)
@@ -719,11 +720,12 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                 t.erase(si, std::string(" SelectedIndex=\"{Binding FH2Mod_Selected, Mode=TwoWay}\"").size());
             lists += "\r\n" + t + view_rows[k - 1] + "</local:CommonListBox>";
         }
-        // The view switch zooms, as the game's menus do between pages (0.3 s, quartic ease out):
-        // into a mod's settings growing from 0.9, back to the list shrinking from 1.1. The list
-        // and description panel sit in a StackPanel styled
-        // A_Style_FrameworkElement_DefaultTransition_0; it gets a style based on that one with a
-        // DataTrigger per view, and a ScaleTransform to animate.
+        // The view switch fades in and zooms, as the game's menus do between pages (0.3 s,
+        // quartic ease out): into a mod's settings growing from 0.9, back to the list shrinking
+        // from 1.1. The page's content (title, list and panel: the BasicOptions StackPanel) gets
+        // a Grid around it with this style, a DataTrigger per view, and a ScaleTransform of its
+        // own. (On the StackPanels inside, Opacity and ZPanel.ZOffset are the page
+        // transitions': animated there, nothing showed.)
         auto key = [](const char* prop, const char* from) {
             return std::string("                                        <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"") + prop +
                    "\">\r\n"
@@ -741,14 +743,14 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             return std::string("                            <DataTrigger.EnterActions>\r\n"
                                "                                <BeginStoryboard>\r\n"
                                "                                    <Storyboard>\r\n") +
+                   key("Opacity", "0") +
                    key("(UIElement.RenderTransform).(TransformGroup.Children)[0].(ScaleTransform.ScaleX)", from) +
                    key("(UIElement.RenderTransform).(TransformGroup.Children)[0].(ScaleTransform.ScaleY)", from) +
                    "                                    </Storyboard>\r\n"
                    "                                </BeginStoryboard>\r\n"
                    "                            </DataTrigger.EnterActions>\r\n";
         };
-        std::string style = "\r\n            <Style x:Key=\"FH2Mod_Style_Views\" TargetType=\"{x:Type FrameworkElement}\" "
-                            "BasedOn=\"{StaticResource A_Style_FrameworkElement_DefaultTransition_0}\">\r\n"
+        std::string style = "\r\n            <Style x:Key=\"FH2Mod_Style_Views\" TargetType=\"{x:Type FrameworkElement}\">\r\n"
                             "                <Style.Triggers>\r\n";
         for (std::size_t k = 1; k <= view_rows.size(); ++k)
             style += "                    <DataTrigger Binding=\"{Binding FH2Mod_View_" + std::to_string(k) + "}\" Value=\"True\">\r\n" +
@@ -757,26 +759,12 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                  "                    </DataTrigger>\r\n"
                  "                </Style.Triggers>\r\n"
                  "            </Style>\r\n        ";
-        const std::string content = "<StackPanel Orientation=\"Horizontal\" Style=\"{StaticResource A_Style_FrameworkElement_DefaultTransition_0}\"";
-        const std::size_t c = page.find(content), rd = page.find("</ResourceDictionary>");
-        const bool animate = c != std::string::npos && c < l0 && rd != std::string::npos && rd < c;
+        views_style = style;
         const std::size_t close = l1 + std::string("</local:CommonListBox>").size();
         page.insert(close, lists + "\r\n</Grid>");
         page.insert(l0 + std::string("<local:CommonListBox").size(), list_vis(0));
         page.insert(l0, "<Grid>\r\n");
-        if (animate) {   // (both before l0, so the positions above stand)
-            page.replace(c, content.size(), "<StackPanel Orientation=\"Horizontal\" Style=\"{StaticResource FH2Mod_Style_Views}\" "
-                                            "RenderTransformOrigin=\"0.5,0.5\"");
-            const std::size_t open_end = page.find('>', c);
-            page.insert(open_end + 1, "\r\n                        <StackPanel.RenderTransform>\r\n"
-                                      "                            <TransformGroup>\r\n"
-                                      "                                <ScaleTransform />\r\n"
-                                      "                            </TransformGroup>\r\n"
-                                      "                        </StackPanel.RenderTransform>");
-            page.insert(rd, style);
-        } else {
-            slog("A_HUDOptions.xaml doesn't look as expected; Installed mods won't animate");
-        }
+
     }
     // Under each description panel's text, at the bottom of the panel: the selected row's
     // version (red when there's a newer one) and GitHub page, from its data item (see
@@ -881,6 +869,23 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                 "                                               Style=\"{StaticResource A_Style_FZTextBlock_Body_Tight}\" TextWrapping=\"Wrap\" />\r\n"
                 "                        </Border>\r\n"
                 "                    </local:FZMaterial>");
+    if (!views_style.empty()) {
+        const std::size_t rd = page.find("</ResourceDictionary>"), b0 = page.find("<StackPanel Name=\"BasicOptions\"");
+        const std::size_t tilt_end = b0 == std::string::npos ? b0 : page.find("</ContentControl>", b0);
+        const std::size_t b1 = tilt_end == std::string::npos ? tilt_end : page.rfind("</StackPanel>", tilt_end);
+        if (rd == std::string::npos || b1 == std::string::npos || b1 < b0 || rd > b0) {
+            slog("A_HUDOptions.xaml doesn't look as expected; Installed mods won't animate");
+        } else {
+            page.insert(b1 + std::string("</StackPanel>").size(), "\r\n                </Grid>");
+            page.insert(b0, "<Grid Style=\"{StaticResource FH2Mod_Style_Views}\" RenderTransformOrigin=\"0.5,0.5\">\r\n"
+                            "                <Grid.RenderTransform>\r\n"
+                            "                    <TransformGroup>\r\n"
+                            "                        <ScaleTransform />\r\n"
+                            "                    </TransformGroup>\r\n"
+                            "                </Grid.RenderTransform>\r\n                ");
+            page.insert(rd, views_style);
+        }
+    }
     return set_file(&g_owner_mod, (std::string("UI/Scenes/Anthem/") + file).c_str(), page.data(), page.size()) != 0;
 }
 
