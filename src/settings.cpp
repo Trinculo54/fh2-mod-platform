@@ -366,7 +366,9 @@ alignas(16) uint8_t g_badge_on[0x80], g_badge_off[0x80];
 bool g_badge_strings = false;
 bool any_update_out();
 int updates_out();
-void** __cdecl badge_get(void** out, void*, void*) {
+bool any_problem();
+uint8_t* g_error_badge_desc = nullptr;   // FH2Mod_ErrorBadge: "!" while a mod didn't load or start
+void** __cdecl badge_get(void** out, void* desc, void*) {
     *out = nullptr;
     if (!g_badge_strings) {
         reinterpret_cast<void (*)(void*, const char*, int)>(g_base + 0x1663220)(g_badge_on, "!", -1);
@@ -375,20 +377,24 @@ void** __cdecl badge_get(void** out, void*, void*) {
         *reinterpret_cast<int32_t*>(g_badge_off + 0x10) += 1 << 20;
         g_badge_strings = true;
     }
-    uint8_t* v = any_update_out() ? g_badge_on : g_badge_off;
+    // a mod that didn't load wins: the red badge shows, the yellow one doesn't
+    const bool on = desc == g_error_badge_desc ? any_problem() : any_update_out() && !any_problem();
+    uint8_t* v    = on ? g_badge_on : g_badge_off;
     InterlockedIncrement(reinterpret_cast<volatile LONG*>(v + 0x10));   // the caller releases it
     *out = v;
     return out;
 }
 void __cdecl badge_set(void*, void*, uint8_t*) {}
-uint8_t* badge_descriptor() {
+uint8_t* badge_descriptor(bool error) {
     std::scoped_lock lk{g_desc_mu};
     static const uint8_t expect[] = {0x48, 0x8D, 0x05, 0x59, 0xB0, 0x02, 0x02, 0xC3};
-    if (!g_badge_desc && code_matches(RVA_BADGE_TYPE, expect, sizeof expect)) {
-        void* type   = reinterpret_cast<TypeFn>(g_base + RVA_BADGE_TYPE)(0);
-        g_badge_desc = new_descriptor("FH2Mod_UpdateBadge", reinterpret_cast<void*>(&badge_get), reinterpret_cast<void*>(&badge_set), type);
+    uint8_t*& d = error ? g_error_badge_desc : g_badge_desc;
+    if (!d && code_matches(RVA_BADGE_TYPE, expect, sizeof expect)) {
+        void* type = reinterpret_cast<TypeFn>(g_base + RVA_BADGE_TYPE)(0);
+        d = new_descriptor(error ? "FH2Mod_ErrorBadge" : "FH2Mod_UpdateBadge", reinterpret_cast<void*>(&badge_get),
+                           reinterpret_cast<void*>(&badge_set), type);
     }
-    return g_badge_desc;
+    return d;
 }
 
 uint8_t* notice_descriptor() {
@@ -419,7 +425,8 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     if (!n || std::wcsncmp(n, L"FH2Mod_", 7) != 0) return nullptr;
     if (std::wcscmp(n, L"FH2Mod_RestartNotice") == 0) return notice_descriptor();
     if (std::wcscmp(n, L"FH2Mod_Selected") == 0) return selected_descriptor();
-    if (std::wcscmp(n, L"FH2Mod_UpdateBadge") == 0) return badge_descriptor();
+    if (std::wcscmp(n, L"FH2Mod_UpdateBadge") == 0) return badge_descriptor(false);
+    if (std::wcscmp(n, L"FH2Mod_ErrorBadge") == 0) return badge_descriptor(true);
     if (std::wcscmp(n, L"FH2Mod_ViewBack") == 0) return back_descriptor();
     if (std::wcsncmp(n, L"FH2Mod_View_", 12) == 0) {
         int k = 0;
@@ -1134,6 +1141,21 @@ int updates_out() {
 }
 bool any_update_out() { return updates_out() > 0; }
 
+// why a mod (turned on) isn't working: it didn't load or start, or it needs a newer platform
+std::string mod_problem(const ModEntry& e) {
+    if (!e.enabled) return "";
+    if (!e.problem.empty()) return e.problem;
+    if (e.mod && !e.mod->platform_version.empty() && compare_versions(e.mod->platform_version, FH2MOD_PLATFORM_VERSION) > 0)
+        return "It needs FH2 Mod Platform " + e.mod->platform_version + " or newer; this is " FH2MOD_PLATFORM_VERSION
+               ". Reinstall it to get the platform it came with.";
+    return "";
+}
+bool any_problem() {
+    for (const ModEntry& e : g_entries)
+        if (!mod_problem(e).empty()) return true;
+    return false;
+}
+
 // Installed mods: one row per mod; A shows its settings.
 std::vector<PageItem> installed_items() {
     std::vector<PageItem> items;
@@ -1146,6 +1168,11 @@ std::vector<PageItem> installed_items() {
         if (!it.version_alert.empty()) {   // a newer version is out: the version in red, with a !
             it.value_alert = "! " + it.value + " !";
             it.value.clear();
+        }
+        if (const std::string why = mod_problem(e); !why.empty()) {   // it isn't working: says so, in red
+            it.value_alert = "! Error !";
+            it.value.clear();
+            it.note = "It isn't working: " + why + " fh2-mods\\platform.log has more.";
         }
         items.push_back(it);
     }
@@ -1160,6 +1187,7 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
     const ModEntry& e = g_entries[i];
     PageItem sw{g_entry_row[i], "Load " + e.name + with_v(e.version), about_mod(e)};
     sw.note = mod_note(e);
+    if (const std::string why = mod_problem(e); !why.empty()) sw.note = "It isn't working: " + why;
     sw.note += (sw.note.empty() ? "" : " ") + std::string("Off leaves it in fh2-mods, but the game doesn't load it.");
     add_mod_lines(sw, e);
     items.push_back(sw);
@@ -1278,14 +1306,28 @@ bool swap_all(std::string& s, const std::string& from, const std::string& to) {
 
 bool red_badge(std::string& page, std::size_t tab_at) {
     std::string tab_style = xaml_block(page, "A_Style_Button_TabTitle_Pause", "<Style", "</Style>");
-    std::string badge     = xaml_block(read_ui("Resources/Anthem/Global_Controls.xaml"), "A_Style_ContentControl_NotificationBadge", "<Style",
-                                       "</Style>");
+    const std::string badge = xaml_block(read_ui("Resources/Anthem/Global_Controls.xaml"), "A_Style_ContentControl_NotificationBadge", "<Style",
+                                         "</Style>");
+    std::string red = badge, yellow = badge;
     if (tab_style.empty() || badge.empty() ||
         !swap_all(tab_style, "x:Key=\"A_Style_Button_TabTitle_Pause\"", "x:Key=\"FH2Mod_Style_Button_TabTitle_Pause\"") ||
-        !swap_all(tab_style, "{StaticResource A_Style_ContentControl_NotificationBadge}", "{StaticResource FH2Mod_Style_NotificationBadge}") ||
-        !swap_all(badge, "x:Key=\"A_Style_ContentControl_NotificationBadge\"", "x:Key=\"FH2Mod_Style_NotificationBadge\"") ||
-        !swap_all(badge, "{StaticResource A_Color_TileSelected_Background}", "{StaticResource FH2Mod_Color_BadgeRed}"))
+        !swap_all(red, "x:Key=\"A_Style_ContentControl_NotificationBadge\"", "x:Key=\"FH2Mod_Style_NotificationBadge_Red\"") ||
+        !swap_all(red, "{StaticResource A_Color_TileSelected_Background}", "{StaticResource FH2Mod_Color_BadgeRed}") ||
+        !swap_all(yellow, "x:Key=\"A_Style_ContentControl_NotificationBadge\"", "x:Key=\"FH2Mod_Style_NotificationBadge_Yellow\"") ||
+        !swap_all(yellow, "{StaticResource A_Color_TileSelected_Background}", "{StaticResource FH2Mod_Color_BadgeYellow}") ||
+        !swap_all(yellow, "{StaticResource A_Color_TileSelected_Text}", "{StaticResource FH2Mod_Color_BadgeDark}"))
         return false;
+    // The tab's badge (its Tag, FH2Mod_ErrorBadge) in red, and a second one beside it in
+    // yellow for updates (FH2Mod_UpdateBadge; it shows only when the red one doesn't).
+    const std::size_t c0 = tab_style.find("<ContentControl Content=\"{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}\"");
+    const std::size_t c1 = c0 == std::string::npos ? c0 : tab_style.find("/>", c0);
+    if (c1 == std::string::npos) return false;
+    std::string tag_badge = tab_style.substr(c0, c1 + 2 - c0), update_badge = tag_badge;
+    if (!swap_all(tag_badge, "{StaticResource A_Style_ContentControl_NotificationBadge}", "{StaticResource FH2Mod_Style_NotificationBadge_Red}") ||
+        !swap_all(update_badge, "{StaticResource A_Style_ContentControl_NotificationBadge}", "{StaticResource FH2Mod_Style_NotificationBadge_Yellow}") ||
+        !swap_all(update_badge, "{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}", "{Binding FH2Mod_UpdateBadge}"))
+        return false;
+    tab_style.replace(c0, c1 + 2 - c0, tag_badge + "\r\n                                    " + update_badge);
     // the MODS tab uses the copy
     const std::size_t end = page.find("/>", tab_at), st = page.find("Style=\"{StaticResource A_Style_Button_TabTitle_Pause}\"", tab_at);
     if (end == std::string::npos || st == std::string::npos || st > end) return false;
@@ -1295,7 +1337,10 @@ bool red_badge(std::string& page, std::size_t tab_at) {
     const std::size_t orig = page.find(xaml_block(page, "A_Style_Button_TabTitle_Pause", "<Style", "</Style>"));
     if (orig == std::string::npos) return false;
     const std::size_t after = page.find("</Style>", orig) + std::string("</Style>").size();
-    page.insert(after, "\r\n            <Color x:Key=\"FH2Mod_Color_BadgeRed\">#FFE0141E</Color>\r\n            " + badge + "\r\n            " + tab_style);
+    page.insert(after, "\r\n            <Color x:Key=\"FH2Mod_Color_BadgeRed\">#FFE0141E</Color>"
+                       "\r\n            <Color x:Key=\"FH2Mod_Color_BadgeYellow\">#FFFFC400</Color>"
+                       "\r\n            <Color x:Key=\"FH2Mod_Color_BadgeDark\">#FF14181E</Color>\r\n            " +
+                           red + "\r\n            " + yellow + "\r\n            " + tab_style);
     return true;
 }
 
@@ -1353,7 +1398,7 @@ bool write_pause_menu() {
     const std::size_t tab_at = page.find(tab);
     page.replace(tab_at, tab.size(), "Content=\"MODS\"");
     if (const std::size_t b = page.find(badge); b != std::string::npos)
-        page.replace(b, badge.size(), "Tag=\"{Binding FH2Mod_UpdateBadge}\"");
+        page.replace(b, badge.size(), "Tag=\"{Binding FH2Mod_ErrorBadge}\"");
     if (!red_badge(page, tab_at)) slog("couldn't make the MODS tab's badge red; it's the game's colour");
     return set_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseMenu.xaml", page.data(), page.size()) != 0;
 }

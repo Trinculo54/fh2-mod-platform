@@ -69,6 +69,7 @@ struct ModEntry {
     std::wstring dll;                 // file name in fh2-mods
     std::string name, version, description, repo;
     bool enabled = true;              // loaded this time (false: turned off on the MODS tab)
+    std::string problem;              // why it didn't load or start ("" if it did)
     bool platform_mod = false;        // has fh2mod_init (an old-style mod doesn't register)
     FH2Mod* mod = nullptr;            // when loaded and registered
 };

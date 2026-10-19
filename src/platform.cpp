@@ -60,6 +60,7 @@ std::wstring g_current_dll;                       // the DLL whose fh2mod_init i
 struct Found {                                    // every DLL in fh2-mods, in load order
     std::wstring file;
     bool loaded = false, disabled = false, has_init = false;
+    std::string problem;                          // why it didn't load or start, for the MODS tab
 };
 std::vector<Found> g_found;
 
@@ -529,7 +530,10 @@ DWORD WINAPI load_mods(LPVOID) {
             const auto v = version_string(h);
             plog("loaded " + narrow(f) + (v.empty() ? "" : " " + v));
         } else {
-            plog("FAILED to load " + narrow(f) + " (error " + std::to_string(GetLastError()) + ")");
+            const DWORD err = GetLastError();
+            plog("FAILED to load " + narrow(f) + " (error " + std::to_string(err) + ")");
+            std::scoped_lock lk{g_mu};
+            g_found.back().problem = "Windows couldn't load it (error " + std::to_string(err) + ").";
         }
     }
     if (files.empty()) plog("no mods in fh2-mods");
@@ -566,16 +570,21 @@ DWORD WINAPI load_mods(LPVOID) {
         }
         DWORD code   = 0;
         const int rc = call_init(init, &g_api, &code);
-        if (code)
-            plog(narrow(l.file) + ": fh2mod_init crashed (exception 0x" + [&] {
-                char b[16];
-                std::snprintf(b, sizeof b, "%08lX", code);
-                return std::string{b};
-            }() + ")");
-        else if (rc)
+        std::string problem;
+        if (code) {
+            char b[16];
+            std::snprintf(b, sizeof b, "%08lX", code);
+            plog(narrow(l.file) + ": fh2mod_init crashed (exception 0x" + b + ")");
+            problem = std::string("It crashed while starting (exception 0x") + b + ").";
+        } else if (rc) {
             plog(narrow(l.file) + ": fh2mod_init returned " + std::to_string(rc));
+            problem = "It reported a problem while starting (it returned " + std::to_string(rc) + ").";
+        }
         std::scoped_lock lk{g_mu};
         g_current_dll.clear();
+        if (!problem.empty())
+            for (auto& f : g_found)
+                if (lower_w(f.file) == lower_w(l.file)) f.problem = problem;
     }
 
     // First write of everything edited so far, and the title notices.
@@ -695,6 +704,7 @@ std::vector<ModEntry> mod_entries() {
         ModEntry e;
         e.dll          = f.file;
         e.enabled      = !f.disabled;
+        e.problem      = f.problem;
         e.platform_mod = f.has_init;
         for (const auto& m : g_mods)
             if (lower_w(m->dll) == lower_w(f.file)) {
