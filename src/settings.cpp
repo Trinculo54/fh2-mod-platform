@@ -501,24 +501,30 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
             const PageItem& it = items[n];
             const std::string key   = prefix + std::to_string(n);
             const std::string first = n == 0 ? " x:Name=\"" + first_name + "\"" : "";
-            // The row's data item: Description for the panel, and for the footer under it (see
-            // add_footers) Icon = the version line, UseAlternateColors = it's out of date (red),
-            // Heading = the GitHub page. A line of information keeps its label and value on the
-            // button (BindingProxy.A, .C) for FH2Mod_InfoRow.
-            const std::string version = it.version_alert.empty() ? it.version : it.version_alert;
+            // The row's data item (Tag): Description for the panel, Heading for the GitHub line
+            // under it (see the footer in write_list_page). A line of information also has a
+            // second one as its Content, for the footer's version line: Heading normally,
+            // Description (in red) when a newer version is out. Its own label and value are on
+            // the button (BindingProxy.A, .C) for FH2Mod_InfoRow.
             auto data_item = [&](const std::string& desc) {
                 std::string d = desc;
                 if (!it.note.empty()) d += (d.empty() ? "" : " ") + it.note;
                 res += "            <local:TileMenuDataItem x:Key=\"" + key + "\" Heading=\"" + xml_escape(it.link) + "\" Description=\"" +
-                       xml_escape(d) + "\" Icon=\"" + xml_escape(version) + "\" UseAlternateColors=\"" +
-                       (it.version_alert.empty() ? "False" : "True") + "\" />\r\n";
+                       xml_escape(d) + "\" />\r\n";
             };
+            std::string content;
+            if (!it.version.empty() || !it.version_alert.empty()) {
+                res += "            <local:TileMenuDataItem x:Key=\"" + key + "_V\" Heading=\"" + xml_escape(it.version) + "\" Description=\"" +
+                       xml_escape(it.version_alert) + "\" />\r\n";
+                content = " Content=\"{StaticResource " + key + "_V}\"";
+            }
             if (it.row < 0 || static_cast<std::size_t>(it.row) >= g_rows.size()) {
                 data_item(it.description);
                 const std::string name = n == 0 ? first_name : button_name(it, false);
                 rows += "                                        <Button Tag=\"{StaticResource " + key +
                         "}\" local:BindingProxy.A=\"" + xml_escape(it.label) + "\" local:BindingProxy.C=\"" + xml_escape(it.value) +
-                        "\" Template=\"{StaticResource FH2Mod_InfoRow}\"" + (name.empty() ? "" : " x:Name=\"" + name + "\"") + " />\r\n";
+                        "\"" + content + " Template=\"{StaticResource FH2Mod_InfoRow}\"" + (name.empty() ? "" : " x:Name=\"" + name + "\"") +
+                        " />\r\n";
                 continue;
             }
             const Row& r     = g_rows[it.row];
@@ -667,16 +673,20 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             panel.erase(v, v_end + 1 - v);
         }
         const std::string text = "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" TextWrapping=\"Wrap\"";
+        auto shown_if = [](const std::string& path) {
+            return " Visibility=\"{Binding " + path + ", Converter={StaticResource A_StringVisConverter_IconVisibility}}\"";
+        };
+        // the same width as the panel, so the footer wraps inside it
         const std::string grid =
-            "<Grid" + vis + ">\r\n                        " + panel +
-            "\r\n                        <StackPanel DataContext=\"{Binding SelectedItem, ElementName=" + list +
-            "}\" VerticalAlignment=\"Bottom\" Margin=\"30,0,30,24\">\r\n"
-            "                            <local:FZTextBlock Text=\"{Binding Tag.Icon}\" "
-            "Visibility=\"{Binding Tag.UseAlternateColors, Converter={StaticResource FH2Mod_HideView}}\" " + text + " />\r\n"
-            "                            <local:FZTextBlock Text=\"{Binding Tag.Icon}\" "
-            "Visibility=\"{Binding Tag.UseAlternateColors, Converter={StaticResource FH2Mod_ShowView}}\" "
-            "Color=\"{StaticResource A_Color_Stat_Negative}\" " + text + " />\r\n"
-            "                            <local:FZTextBlock Text=\"{Binding Tag.Heading}\" Margin=\"0,8,0,0\" " + text + " />\r\n"
+            "<Grid Width=\"380\" HorizontalAlignment=\"Left\"" + vis + ">\r\n                        " + panel +
+            "\r\n                        <StackPanel VerticalAlignment=\"Bottom\" Margin=\"30,0,30,24\">\r\n"
+            "                            <StackPanel DataContext=\"{Binding SelectedItem.Content, ElementName=" + list + "}\">\r\n"
+            "                                <local:FZTextBlock Text=\"{Binding Heading}\"" + shown_if("Heading") + " " + text + " />\r\n"
+            "                                <local:FZTextBlock Text=\"{Binding Description}\"" + shown_if("Description") +
+            " Color=\"{StaticResource A_Color_Stat_Negative}\" " + text + " />\r\n"
+            "                            </StackPanel>\r\n"
+            "                            <local:FZTextBlock DataContext=\"{Binding SelectedItem.Tag, ElementName=" + list +
+            "}\" Text=\"{Binding Heading}\"" + shown_if("Heading") + " Margin=\"0,8,0,0\" " + text + " />\r\n"
             "                        </StackPanel>\r\n                    </Grid>";
         page.replace(e0, e1 + 2 - e0, grid);
         at = page.find(desc_panel, e0 + grid.size());
@@ -832,7 +842,7 @@ std::string update_status(const ModEntry& e) {
     if (e.mod->repo.empty() || !e.mod->check_updates) return "It doesn't check for updates.";
     const std::string latest = latest_known(e.mod);
     if (latest.empty()) return "Not checked for updates yet.";
-    if (compare_versions(latest, e.version) > 0) return "Version " + latest + " is out.";
+    if (compare_versions(latest, e.version) > 0) return "Version " + (latest[0] == 'v' ? latest.substr(1) : latest) + " is out.";
     return "Up to date.";
 }
 
@@ -960,9 +970,10 @@ std::vector<PageItem> updates_items() {
         else d = update_status(e);
         if (e.mod && !e.mod->repo.empty() && e.mod->check_updates) {
             const std::string latest = latest_known(e.mod);
-            if (!latest.empty() && compare_versions(latest, e.version) > 0) label += ": " + latest + " is out";
+            if (!latest.empty() && compare_versions(latest, e.version) > 0)
+                label += ": " + (latest[0] == 'v' ? latest.substr(1) : latest) + " is out";
             else if (!latest.empty()) label += ": up to date";
-            d += " Release notes: github.com/" + e.mod->repo + "/releases";
+            // its GitHub page is in the footer (add_mod_lines)
         }
         PageItem it = info(label, d.empty() ? "No update information for this mod." : d);
         add_mod_lines(it, e);
