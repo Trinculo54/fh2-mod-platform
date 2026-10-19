@@ -297,7 +297,10 @@ void** __cdecl selected_get(void** out, void*, void*) {
     return out;
 }
 void __cdecl selected_set(void*, void*, uint8_t* value) {
-    if (value && readable(value + 0x28, 4)) g_selected = *reinterpret_cast<int*>(value + 0x28);
+    if (value && readable(value + 0x28, 4)) {
+        g_selected = *reinterpret_cast<int*>(value + 0x28);
+        slog("debug: row " + std::to_string(g_selected.load()) + " selected");
+    }
 }
 uint8_t* selected_descriptor() {
     std::scoped_lock lk{g_desc_mu};
@@ -1044,6 +1047,7 @@ uint8_t* d_hud_scene(uint8_t* out) {
     } else if (asked && now - asked < 1500) {
         page = L"A_ModOptions";
     }
+    if (!page.empty()) slog("debug: scene record -> " + narrow(page));
     if (!page.empty() && !point_at_page(r, page.c_str()))
         slog("the HUD page's scene record doesn't look as expected; opened the HUD page");
     return r;
@@ -1363,8 +1367,16 @@ void open_mod_page(void* page, std::size_t n) {
 // Which HUD page object is Installed mods (set when one loads; only compared, never used).
 std::atomic<void*> g_installed_page{nullptr};
 
+std::string hexp(const void* p) {
+    char b[24];
+    std::snprintf(b, sizeof b, "%p", p);
+    return b;
+}
+
 void d_hud_page_loaded(void* page) {
     o_hud_page_loaded(page);
+    const int shown = g_hub_shown.load();
+    slog("debug: HUD page " + hexp(page) + " loaded, MODS tab page " + std::to_string(shown));
     if (g_hub_shown.exchange(0) == kHubInstalled) {
         g_installed_page = page;
         g_selected       = 0;
@@ -1382,6 +1394,9 @@ using PageButtonFn = bool (*)(void* page, int button, bool pressed);
 PageButtonFn o_hud_page_button = nullptr;
 
 bool d_hud_page_button(void* page, int button, bool pressed) {
+    if (g_in_hub)
+        slog("debug: button " + std::to_string(button) + (pressed ? " down" : " up") + " on " + hexp(page) +
+             (page == g_installed_page.load() ? " (Installed mods)" : "") + ", row " + std::to_string(g_selected.load()));
     if (button == kButtonA && page && page == g_installed_page.load()) {
         if (pressed) {
             const int n = g_selected.load();
