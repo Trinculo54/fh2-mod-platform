@@ -1763,6 +1763,7 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
         const int view = g_view.load();
         if (view == 0 && button == kButtonB) return o_hud_page_button(page, button, pressed);   // leave the page
         if (pressed) {
+            if (button == kButtonA) play_sound(kSoundSelect);   // A selects, as on the tiles; B is just the swoosh
             if (view == 0) {
                 const int n = g_selected.load();
                 if (n >= 0 && static_cast<std::size_t>(n) < g_entries.size() && n + 1 < kMaxViews) switch_view(page, n + 1);
