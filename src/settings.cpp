@@ -413,11 +413,13 @@ uint8_t* notice_descriptor() {
 // events too.
 uint8_t* g_mod_notice_desc = nullptr;
 std::atomic<ULONGLONG> g_mod_notice_at{0};
-void** __cdecl mod_notice_get(void** out, void*, void*) {
+std::string hexp(const void* p);
+void** __cdecl mod_notice_get(void** out, void*, void* obj) {
     ULONGLONG first = 0;
     const ULONGLONG now = GetTickCount64();
     const bool asked_first = g_mod_notice_at.compare_exchange_strong(first, now);
     if (asked_first) slog("showing the HUD's notice about mods that didn't load");
+    slog("debug: FH2Mod_ModNotice asked by " + hexp(obj));
     bool v = now - g_mod_notice_at.load() < 15000;
     *out   = nullptr;
     reinterpret_cast<BoxBoolFn>(g_base + RVA_BOX_BOOL)(out, &v);
@@ -2142,7 +2144,9 @@ void wire_installed_tile(void* page) {
     }
 }
 
+void probe_hud(FH2Mod* m);
 void d_pause_menu_wire(void* page) {
+    slog("debug: pause menu opened");
     g_hub_asked  = 0;
     g_hub_builds = 0;
     g_hub_return = false;
@@ -2267,7 +2271,34 @@ void hook_hub() {
     }
     if (!show_marketplace_tab()) slog("the code that hides the Marketplace tab doesn't look as expected; MODS shows only with Extra Options' EnableMarketplace");
     g_sounds_ok = true;
+    probe_hud(m);
     slog("MODS tab ready");
+}
+
+// debug: when the freeroam HUD page (Hud, vtable 0x142DEF9C8) is loaded, shown and so on,
+// to time the notice about mods that didn't load
+constexpr uintptr_t RVA_HUD_VT = 0x2DEF9C8;
+using AnyFn = uint64_t (*)(void*, void*, void*, void*);
+AnyFn o_hud_slot[5] = {};
+constexpr int kHudSlots[5] = {0x488, 0x498, 0x4C8, 0x4F8, 0x518};
+template <int I>
+uint64_t d_hud_slot(void* a, void* b, void* c, void* d) {
+    slog("debug: Hud +" + hexp(reinterpret_cast<void*>(static_cast<uintptr_t>(kHudSlots[I]))) + " on " + hexp(a));
+    return o_hud_slot[I](a, b, c, d);
+}
+void probe_hud(FH2Mod* m) {
+    void* const detours[5] = {reinterpret_cast<void*>(&d_hud_slot<0>), reinterpret_cast<void*>(&d_hud_slot<1>),
+                              reinterpret_cast<void*>(&d_hud_slot<2>), reinterpret_cast<void*>(&d_hud_slot<3>),
+                              reinterpret_cast<void*>(&d_hud_slot<4>)};
+    for (int i = 0; i < 5; ++i) {
+        void** slot = reinterpret_cast<void**>(g_base + RVA_HUD_VT + kHudSlots[i]);
+        if (!readable(slot, 8)) continue;
+        const std::string name = "debug: Hud page +" + hexp(reinterpret_cast<void*>(static_cast<uintptr_t>(kHudSlots[i])));
+        static std::deque<std::string> names;
+        names.push_back(name);
+        if (FH2Hook* k = g_api->hook_pointer(m, names.back().c_str(), slot, detours[i], reinterpret_cast<void**>(&o_hud_slot[i])))
+            g_api->enable_hooks(m, k);
+    }
 }
 
 // ---- hooking up ----------------------------------------------------------------------------
