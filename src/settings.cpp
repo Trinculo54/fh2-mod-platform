@@ -895,7 +895,7 @@ bool write_pause_menu() {
 }
 
 // The Marketplace tiles' events go to a node of ours that shows the HUD page (as one of the
-// tab's pages) and comes back to the pause menu. On it, a mod's row fires fh2mod_open (see
+// tab's pages) and comes back to the pause menu. On it, a mod's row fires car_packs (see
 // open_mod_page), which goes to a second HUD page (the mod's) that comes back to the first.
 // ui_screens.xml gets a copy of show_hud_options with that extra way out.
 bool write_pause_flow() {
@@ -940,7 +940,7 @@ bool write_ui_screens_flow() {
                    "    <exit id=\"open\" />\r\n\r\n"
                    "    <behavior id=\"UIPageHudOptions\">\r\n"
                    "      <transition id=\"back\" target=\".back\" />\r\n"
-                   "      <transition id=\"fh2mod_open\" target=\".open\" />\r\n"
+                   "      <transition id=\"car_packs\" target=\".open\" />\r\n"
                    "    </behavior>\r\n\r\n"
                    "    <behavior id=\"OnParentTransition\">\r\n"
                    "      <transition id=\"ParentTransition\" target=\".back\" />\r\n"
@@ -1327,7 +1327,7 @@ void open_hub_page(void* page, int which) {
 }
 // On Installed mods, mod n's row is a button (FirstItem, or PART_Button_FH2Mod_<n>), wired
 // once the page is loaded (the HUD page class's vtable +0x488, shared with one other page). A
-// press fires fh2mod_open the way the Marketplace tiles fire theirs: 0x141422F10(page,
+// press fires car_packs (an event name the game already has; a new one isn't taken) the way the Marketplace tiles fire theirs: 0x141422F10(page,
 // &std::string name), which needs the page's state-machine link at +0x310.
 constexpr uintptr_t RVA_HUD_PAGE_LOADED = 0x0C7AD40;
 constexpr uintptr_t RVA_HUD_PAGE_VT_SLOT = 0x2DF06C0;   // HudOptions page vtable +0x488
@@ -1341,7 +1341,7 @@ struct MsvcString {
 };
 
 bool fire_open(void* page) {
-    static const MsvcString name{"fh2mod_open", 11, 15};
+    static const MsvcString name{"car_packs", 9, 15};
     __try {
         if (!*reinterpret_cast<void**>(static_cast<uint8_t*>(page) + 0x310)) return false;
         reinterpret_cast<FireEventFn>(g_base + RVA_PAGE_FIRE_EVENT)(page, &name);
