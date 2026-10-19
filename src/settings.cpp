@@ -982,7 +982,7 @@ bool write_mods_page() {
         for (std::size_t i = 0; i < g_rows.size(); ++i)
             if (g_rows[i].mod != &g_hub_owner) items.push_back({static_cast<int>(i), "", ""});
     }
-    return write_list_page("A_ModOptions.xaml", "MODS", items);
+    return write_list_page("A_ModOptions.xaml", "ALL SETTINGS", items);
 }
 
 // Pause > Settings: a sixth column with a tall MODS tile.
