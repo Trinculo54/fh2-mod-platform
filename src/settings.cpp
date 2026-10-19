@@ -572,27 +572,23 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
             // write_list_page): Heading the version, Description the same in red when a newer
             // one is out (only one of the two is filled), Icon the GitHub page. Its own label and
             // value are on the button (BindingProxy.A, .C) for FH2Mod_InfoRow.
-            // (A row of settings keeps its note in the description; a line of information shows
-            // it in the footer, see below. FZTextBlock doesn't break lines at &#10;.)
-            const bool info_row = it.row < 0 || static_cast<std::size_t>(it.row) >= g_rows.size();
+            // A note goes after the description, except an error on a line of information: that
+            // shows in red at the top of the footer (from the data item's Icon, which a line of
+            // information doesn't otherwise use; FZTextBlock doesn't break lines, not even at
+            // &#10;, so it can't sit a line below in the same text).
+            const bool info_row  = it.row < 0 || static_cast<std::size_t>(it.row) >= g_rows.size();
+            const bool red_note  = info_row && it.note_alert;
             auto data_item = [&](const std::string& label, const std::string& desc) {
                 std::string d = desc;
-                if (!it.note.empty() && !info_row) d += (d.empty() ? "" : " ") + it.note;
+                if (!it.note.empty() && !red_note) d += (d.empty() ? "" : " ") + it.note;
                 res += "            <local:TileMenuDataItem x:Key=\"" + key + "\" Heading=\"" + xml_escape(label) + "\" Description=\"" +
-                       xml_escape(d) + "\" />\r\n";
+                       xml_escape(d) + "\" Icon=\"" + (red_note ? xml_escape(it.note) : "") + "\" />\r\n";
             };
             std::string content;
             if (!it.version.empty() || !it.version_alert.empty() || !it.link.empty()) {
                 res += "            <local:TileMenuDataItem x:Key=\"" + key + "_V\" Heading=\"" + xml_escape(it.version) + "\" Description=\"" +
                        xml_escape(it.version_alert) + "\" Icon=\"" + xml_escape(it.link) + "\" />\r\n";
                 content = " Content=\"{StaticResource " + key + "_V}\"";
-            }
-            // A line of information's note: a third data item, its DataContext (unused by
-            // FH2Mod_InfoRow): Heading normally, Description (in red) for an error.
-            if (info_row && !it.note.empty()) {
-                res += "            <local:TileMenuDataItem x:Key=\"" + key + "_N\" Heading=\"" + (it.note_alert ? "" : xml_escape(it.note)) +
-                       "\" Description=\"" + (it.note_alert ? xml_escape(it.note) : "") + "\" />\r\n";
-                content += " DataContext=\"{StaticResource " + key + "_N}\"";
             }
             if (info_row) {
                 data_item(it.label, it.description);
@@ -859,12 +855,10 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         const std::string grid =
             "<Grid Width=\"380\" HorizontalAlignment=\"Left\"" + vis + ">\r\n                        " + panel +
             "\r\n                        <StackPanel VerticalAlignment=\"Bottom\" Margin=\"30,0,30,24\">\r\n"
-            // the row's note (an error in red), set apart from the description above it
-            "                            <Grid DataContext=\"{Binding SelectedItem.DataContext, ElementName=" + list + "}\" Margin=\"0,0,0,24\">\r\n"
-            "                                <local:FZTextBlock Text=\"{Binding Heading}\" " + text + " />\r\n"
-            "                                <local:FZTextBlock Text=\"{Binding Description}\" Color=\"{StaticResource FH2Mod_Color_Red}\" " +
-            text + " />\r\n"
-            "                            </Grid>\r\n"
+            // the row's error, in red, set apart from the description above it
+            "                            <StackPanel DataContext=\"{Binding SelectedItem.Tag, ElementName=" + list + "}\" Margin=\"0,0,0,24\">\r\n"
+            "                                <local:FZTextBlock Text=\"{Binding Icon}\" Color=\"{StaticResource FH2Mod_Color_Red}\" " + text + " />\r\n"
+            "                            </StackPanel>\r\n"
             "                            <StackPanel DataContext=\"{Binding SelectedItem.Content, ElementName=" + list + "}\">\r\n"
             "                            <Grid>\r\n"
             "                                <local:FZTextBlock Text=\"{Binding Heading}\" " + text + " />\r\n"
