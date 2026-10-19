@@ -346,6 +346,7 @@ uint8_t* g_badge_desc = nullptr;
 alignas(16) uint8_t g_badge_on[0x80], g_badge_off[0x80];
 bool g_badge_strings = false;
 bool any_update_out();
+int updates_out();
 void** __cdecl badge_get(void** out, void*, void*) {
     *out = nullptr;
     if (!g_badge_strings) {
@@ -958,15 +959,17 @@ void add_mod_lines(PageItem& it, const ModEntry& e) {
     if (!e.repo.empty()) it.link = "github.com/" + e.repo;
 }
 
-// a mod (turned on) has a newer version out
-bool any_update_out() {
+// how many mods (turned on) have a newer version out
+int updates_out() {
+    int n = 0;
     for (const ModEntry& e : g_entries)
         if (e.enabled && e.mod && !e.mod->repo.empty() && e.mod->check_updates) {
             const std::string latest = latest_known(e.mod);
-            if (!latest.empty() && compare_versions(latest, e.version) > 0) return true;
+            if (!latest.empty() && compare_versions(latest, e.version) > 0) ++n;
         }
-    return false;
+    return n;
 }
+bool any_update_out() { return updates_out() > 0; }
 
 // Installed mods: one row per mod; A shows its settings.
 std::vector<PageItem> installed_items() {
@@ -1157,7 +1160,7 @@ bool red_badge(std::string& page, std::size_t tab_at) {
         !swap_all(tab_style, "x:Key=\"A_Style_Button_TabTitle_Pause\"", "x:Key=\"FH2Mod_Style_Button_TabTitle_Pause\"") ||
         !swap_all(tab_style, "{StaticResource A_Style_ContentControl_NotificationBadge}", "{StaticResource FH2Mod_Style_NotificationBadge}") ||
         !swap_all(badge, "x:Key=\"A_Style_ContentControl_NotificationBadge\"", "x:Key=\"FH2Mod_Style_NotificationBadge\"") ||
-        !swap_all(badge, "{StaticResource A_Color_TileSelected_Background}", "{StaticResource A_Color_Stat_Negative}"))
+        !swap_all(badge, "{StaticResource A_Color_TileSelected_Background}", "{StaticResource FH2Mod_Color_BadgeRed}"))
         return false;
     // the MODS tab uses the copy
     const std::size_t end = page.find("/>", tab_at), st = page.find("Style=\"{StaticResource A_Style_Button_TabTitle_Pause}\"", tab_at);
@@ -1168,9 +1171,11 @@ bool red_badge(std::string& page, std::size_t tab_at) {
     const std::size_t orig = page.find(xaml_block(page, "A_Style_Button_TabTitle_Pause", "<Style", "</Style>"));
     if (orig == std::string::npos) return false;
     const std::size_t after = page.find("</Style>", orig) + std::string("</Style>").size();
-    page.insert(after, "\r\n            " + badge + "\r\n            " + tab_style);
+    page.insert(after, "\r\n            <Color x:Key=\"FH2Mod_Color_BadgeRed\">#FFE0141E</Color>\r\n            " + badge + "\r\n            " + tab_style);
     return true;
 }
+
+int g_pause_menu_updates = 0;   // the count in the UPDATES tile as last written
 
 bool write_pause_menu() {
     std::string page = read_ui("Scenes/Anthem/A_PauseMenu.xaml");
@@ -1198,8 +1203,12 @@ bool write_pause_menu() {
     };
     std::string res, buttons = "\r\n";
     int index = 1;
+    const int out = updates_out();
+    g_pause_menu_updates = out;
     for (const Tile& t : tiles) {
-        res += std::string("\r\n            <local:TileMenuDataItem x:Key=\"") + t.item + "\" Heading=\"" + t.heading +
+        std::string heading = t.heading;
+        if (std::string(t.item) == "FH2Mod_Tile_Updates" && out > 0) heading += " (" + std::to_string(out) + ")";
+        res += std::string("\r\n            <local:TileMenuDataItem x:Key=\"") + t.item + "\" Heading=\"" + heading +
                "\" Icon=\"/ForzaUI;component/Textures/Anthem/" + t.icon + "\" />";
         buttons += std::string("                        <Button Canvas.Left=\"{StaticResource A_Double_TileCoord_X_") + std::to_string(t.x) +
                    "}\"\r\n                                Canvas.Top=\"{StaticResource A_Double_TileCoord_Y_" + std::to_string(t.y) +
@@ -2086,6 +2095,18 @@ void settings_start(const FH2ModApi* api) {
     slog(std::to_string(n) + " row(s) on the Mods page, " + std::to_string(g_entries.size()) + " mod(s) on the MODS tab" +
          (g_hub_files ? "" : " (not shown)"));
     if (g_hub_files || g_settings_tile) std::thread(hook_game).detach();
+    if (g_hub_files)
+        // Update checks finish after this (from the cache, usually within a second or two): the
+        // UPDATES tile's count is rewritten while the game is likely still to read the page.
+        std::thread([] {
+            for (int i = 0; i < 60; ++i) {
+                Sleep(1000);
+                if (updates_out() != g_pause_menu_updates) {
+                    std::scoped_lock lk{g_page_mu};
+                    write_pause_menu();
+                }
+            }
+        }).detach();
 }
 
 FH2Mod* settings_owner() { return &g_owner_mod; }
