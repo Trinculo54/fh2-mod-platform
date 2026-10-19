@@ -893,8 +893,8 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         page.replace(h0, h1 + 2 - h0, "<Grid>\r\n" + list_bar + "\r\n" + view_bar + "\r\n</Grid>");
     }
     // The title: ours alone, without the game's grey "SETTINGS /" before it (a title block with
-    // no Tag shows just its Content). A view (a mod's settings) has its own: "INSTALLED MODS /
-    // <MOD>", shown with it.
+    // no Tag shows just its Content). A view (a mod's settings) has its own: "SETTINGS / <MOD>",
+    // shown with it.
     const std::size_t t = page.find(title_attr);
     page.replace(t, title_attr.size(), "Content=\"" + xml_escape(title) + "\"");
     {
@@ -911,7 +911,7 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
                 std::string name = (*view_titles)[k - 1];
                 for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
                 swap_attr(vt, "Content", xml_escape(name));
-                swap_attr(vt, "Tag", xml_escape(title));
+                swap_attr(vt, "Tag", "{local:Loc ScreenTitles.IDS_MyProfile}");   // the game's grey "SETTINGS"
                 swap_attr(vt, "Visibility", "{Binding FH2Mod_View_" + std::to_string(k) + ", Converter={StaticResource FH2Mod_ShowView}}");
                 blocks += "\r\n                        " + vt;
             }
