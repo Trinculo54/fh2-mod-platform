@@ -407,6 +407,32 @@ uint8_t* notice_descriptor() {
     return g_notice_desc;
 }
 
+// FH2Mod_ModNotice: whether the freeroam HUD shows its "a mod didn't load" notice (see
+// write_hud_notice). True for a little while from the first time the HUD asks, then false, so
+// the notice plays once a session: the HUD asks again whenever it's built, after menus and
+// events too.
+uint8_t* g_mod_notice_desc = nullptr;
+std::atomic<ULONGLONG> g_mod_notice_at{0};
+void** __cdecl mod_notice_get(void** out, void*, void*) {
+    ULONGLONG first = 0;
+    const ULONGLONG now = GetTickCount64();
+    const bool asked_first = g_mod_notice_at.compare_exchange_strong(first, now);
+    if (asked_first) slog("showing the HUD's notice about mods that didn't load");
+    bool v = now - g_mod_notice_at.load() < 15000;
+    *out   = nullptr;
+    reinterpret_cast<BoxBoolFn>(g_base + RVA_BOX_BOOL)(out, &v);
+    return out;
+}
+uint8_t* mod_notice_descriptor() {
+    std::scoped_lock lk{g_desc_mu};
+    if (!g_mod_notice_desc) {
+        void* bool_type   = reinterpret_cast<TypeFn>(g_base + RVA_BOOL_TYPE)(0);
+        g_mod_notice_desc = new_descriptor("FH2Mod_ModNotice", reinterpret_cast<void*>(&mod_notice_get),
+                                           reinterpret_cast<void*>(&notice_set), bool_type);
+    }
+    return g_mod_notice_desc;
+}
+
 using FindPropertyFn = uint8_t* (*)(uint8_t* type, uint8_t* name);
 FindPropertyFn o_find_property = nullptr;
 
@@ -428,6 +454,7 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     if (std::wcscmp(n, L"FH2Mod_UpdateBadge") == 0) return badge_descriptor(false);
     if (std::wcscmp(n, L"FH2Mod_ErrorBadge") == 0) return badge_descriptor(true);
     if (std::wcscmp(n, L"FH2Mod_ViewBack") == 0) return back_descriptor();
+    if (std::wcscmp(n, L"FH2Mod_ModNotice") == 0) return mod_notice_descriptor();
     if (std::wcsncmp(n, L"FH2Mod_View_", 12) == 0) {
         int k = 0;
         for (const wchar_t* d = n + 12; *d; ++d) {
@@ -2404,6 +2431,87 @@ void settings_set_slider(FH2Mod* m, const char* key, float value) {
     if (Row* r = find_row(m, key); r && r->slider) r->fvalue = snap(*r, value);
 }
 
+// The freeroam HUD (A_Hud.xaml): when a mod didn't load or start, a notice like the game's
+// own small ones (HUDMinorNotificationControl's look, in the same place) saying which, and to
+// look under MODS. It fades in a couple of seconds after the HUD first shows, stays a few
+// seconds and goes, once a session (FH2Mod_ModNotice). With nothing wrong, the game's HUD.
+bool write_hud_notice() {
+    std::vector<std::string> names;
+    for (const ModEntry& e : g_entries)
+        if (!mod_problem(e).empty()) names.push_back(e.name);
+    if (names.empty()) {
+        remove_leftover_file("UI/Scenes/Anthem/A_Hud.xaml");   // last session's notice
+        return true;
+    }
+    std::string page = read_ui("Scenes/Anthem/A_Hud.xaml");
+    const std::string res_end = "</ResourceDictionary>", root_end = "</local:ZPanel>";
+    const std::size_t r = page.find(res_end), z = page.rfind(root_end);
+    const std::size_t g = z == std::string::npos ? z : page.rfind("</Grid>", z);
+    if (page.empty() || r == std::string::npos || g == std::string::npos) {
+        slog("A_Hud.xaml doesn't look as expected; no notice about mods that didn't load");
+        return false;
+    }
+    std::string title = names.size() == 1 ? "A MOD DIDN'T LOAD" : std::to_string(names.size()) + " MODS DIDN'T LOAD";
+    std::string which;
+    for (std::size_t i = 0; i < names.size() && i < 3; ++i) which += (i ? ", " : "") + names[i];
+    if (names.size() > 3) which += " and " + std::to_string(names.size() - 3) + " more";
+    const std::string text = which + (names.size() == 1 ? " isn't" : " aren't") + " working. See MODS in the pause menu.";
+    auto key = [](double v, double t, bool ease_in) {
+        char b[256];
+        std::snprintf(b, sizeof b,
+                      "                                    <EasingDoubleKeyFrame KeyTime=\"0:0:%.2f\" Value=\"%.2f\">"
+                      "<EasingDoubleKeyFrame.EasingFunction><CircleEase EasingMode=\"%s\" /></EasingDoubleKeyFrame.EasingFunction>"
+                      "</EasingDoubleKeyFrame>\r\n",
+                      t, v, ease_in ? "EaseIn" : "EaseOut");
+        return std::string(b);
+    };
+    // in at 2s (0.5s, as the game's), held 6s, out (0.5s)
+    std::string fade = "                                <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"(UIElement.Opacity)\">\r\n" +
+                       key(0, 0, false) + key(0, 2.0, false) + key(1, 2.5, false) + key(1, 8.5, true) + key(0, 9.0, true) +
+                       "                                </DoubleAnimationUsingKeyFrames>\r\n";
+    std::string scale;
+    for (const char* axis : {"ScaleX", "ScaleY"})
+        scale += std::string("                                <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"(UIElement.RenderTransform).(TransformGroup.Children)[0].(ScaleTransform.") +
+                 axis + ")\">\r\n" + key(0.8, 0, false) + key(0.8, 2.0, false) + key(1, 2.5, false) + key(1, 8.5, true) +
+                 key(0.96, 9.0, true) + "                                </DoubleAnimationUsingKeyFrames>\r\n";
+    const std::string style =
+        "            <Style x:Key=\"FH2Mod_Style_ModNotice\" TargetType=\"StackPanel\">\r\n"
+        "                <Style.Triggers>\r\n"
+        "                    <DataTrigger Binding=\"{Binding FH2Mod_ModNotice}\" Value=\"True\">\r\n"
+        "                        <DataTrigger.EnterActions>\r\n"
+        "                            <BeginStoryboard>\r\n"
+        "                            <Storyboard>\r\n" + fade + scale +
+        "                            </Storyboard>\r\n"
+        "                            </BeginStoryboard>\r\n"
+        "                        </DataTrigger.EnterActions>\r\n"
+        "                    </DataTrigger>\r\n"
+        "                </Style.Triggers>\r\n"
+        "            </Style>\r\n        ";
+    const std::string notice =
+        "\r\n            <!-- FH2 Mod Platform: mods that didn't load -->\r\n"
+        "            <StackPanel Style=\"{StaticResource FH2Mod_Style_ModNotice}\" Opacity=\"0\" HorizontalAlignment=\"Center\" "
+        "VerticalAlignment=\"Bottom\" Margin=\"0,0,0,130\" RenderTransformOrigin=\"0.5,0.5\">\r\n"
+        "                <StackPanel.RenderTransform>\r\n"
+        "                    <TransformGroup>\r\n"
+        "                        <ScaleTransform ScaleX=\"0.8\" ScaleY=\"0.8\" />\r\n"
+        "                    </TransformGroup>\r\n"
+        "                </StackPanel.RenderTransform>\r\n"
+        "                <local:FZMaterial Preset=\"{DynamicResource A_FZMaterialPresetGlassRoundtangle_HudItem}\" Color=\"#22FFFFFF\">\r\n"
+        "                    <Border BorderThickness=\"2\" BorderBrush=\"#16FFFFFF\" CornerRadius=\"4\">\r\n"
+        "                        <StackPanel Orientation=\"Vertical\" HorizontalAlignment=\"Left\" Margin=\"16,8,16,8\">\r\n"
+        "                            <local:FZTextBlock Style=\"{StaticResource A_Style_FZTextBlock_HudMedium}\" Text=\"" + xml_escape(title) +
+        "\" Effect=\"{StaticResource A_DropShadowEffect_DefaultHud}\" Margin=\"0,0,4,-3\" />\r\n"
+        "                            <local:FZTextBlock Style=\"{StaticResource A_Style_FZTextBlock_HudMedium}\" Text=\"" + xml_escape(text) +
+        "\" Effect=\"{StaticResource A_DropShadowEffect_DefaultHud}\" Margin=\"0,0,4,0\" />\r\n"
+        "                        </StackPanel>\r\n"
+        "                    </Border>\r\n"
+        "                </local:FZMaterial>\r\n"
+        "            </StackPanel>\r\n        ";
+    page.insert(g, notice);
+    page.insert(r, style);
+    return set_file(&g_owner_mod, "UI/Scenes/Anthem/A_Hud.xaml", page.data(), page.size()) != 0;
+}
+
 // After every mod's fh2mod_init: write the pages (the MODS tab's, and Settings > Mods if any
 // mod added a row) and hook the game.
 void settings_start(const FH2ModApi* api) {
@@ -2448,6 +2556,7 @@ void settings_start(const FH2ModApi* api) {
         clear_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseOptions.xaml");
     }
     if (!mods_page) remove_leftover_file("UI/Scenes/Anthem/A_ModOptions.xaml");
+    if (!write_hud_notice()) remove_leftover_file("UI/Scenes/Anthem/A_Hud.xaml");
     slog(std::to_string(n) + " row(s) on the Mods page, " + std::to_string(g_entries.size()) + " mod(s) on the MODS tab" +
          (g_hub_files ? "" : " (not shown)"));
     if (g_hub_files || g_settings_tile) std::thread(hook_game).detach();
