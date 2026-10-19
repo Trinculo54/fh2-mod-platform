@@ -367,6 +367,13 @@ typedef struct FH2ModApi {
        the pause menu reads it each time it's shown. Returns 1, or 0 if you
        have no page called `page_key` or it isn't on a tile. */
     int (*set_page_tile_text)(FH2Mod* mod, const char* page_key, const char* text);
+    /* That tile's colours, as 0xAARRGGBB: `background`, and `text` for its
+       title and your line over it. 0 leaves the game's own (its light grey
+       tile, dark title and orange line). The icon takes the background's
+       colour, so it stays a shade of it. Like the text, the pause menu
+       reads them each time it's shown. Returns 1, or 0 if you have no page
+       called `page_key` or it isn't on a tile. */
+    int (*set_page_tile_colors)(FH2Mod* mod, const char* page_key, uint32_t background, uint32_t text);
 } FH2ModApi;
 
 /* Called on the game's UI thread when the player changes a row: keep it
