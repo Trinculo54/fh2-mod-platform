@@ -1409,7 +1409,12 @@ std::string tile_template(const std::string& key, const char* strokes, const cha
            "                    </Grid>\r\n"
            "                    <Grid Style=\"{StaticResource A_Style_Grid_MotionBlur}\">\r\n"
            "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_TileBackground}\" />\r\n"
-           "                        <Grid ClipToBounds=\"True\">\r\n" + icon +
+           "                        <Grid ClipToBounds=\"True\">\r\n"
+           "                        <Grid RenderTransformOrigin=\"1,1\">\r\n"   // drawn big, shown at 80% toward the corner
+           "                        <Grid.RenderTransform>\r\n"
+           "                            <ScaleTransform ScaleX=\"0.8\" ScaleY=\"0.8\" />\r\n"
+           "                        </Grid.RenderTransform>\r\n" + icon +
+           "                        </Grid>\r\n"
            "                        </Grid>\r\n"
            "                        <Grid Margin=\"{StaticResource A_Thickness_TilePadding}\">\r\n"
            "                            <local:FZTextBlock Text=\"{Binding DataContext.Heading, RelativeSource={RelativeSource TemplatedParent}}\" "
