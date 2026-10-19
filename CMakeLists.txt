@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 # Bump VERSION before tagging a release (the tag build checks they match).
-project(fh2_mod_platform VERSION 2.5.0 LANGUAGES C CXX RC)
+project(fh2_mod_platform VERSION 2.6.0 LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -84,6 +84,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         target_link_libraries(test_mod PRIVATE fh2mod_api)
         set_target_properties(test_mod PROPERTIES OUTPUT_NAME TestMod PREFIX "")
         target_link_options(test_mod PRIVATE -static)
+        add_library(precise_mod SHARED tests/precise_mod.cpp)
+        target_link_libraries(precise_mod PRIVATE fh2mod_api)
+        set_target_properties(precise_mod PROPERTIES OUTPUT_NAME PreciseTest PREFIX "")
+        target_link_options(precise_mod PRIVATE -static)
         add_library(aaa_mod SHARED tests/aaa_mod.cpp)
         target_link_libraries(aaa_mod PRIVATE fh2mod_api)
         set_target_properties(aaa_mod PROPERTIES OUTPUT_NAME AaaMod PREFIX "")

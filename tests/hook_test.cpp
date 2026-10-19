@@ -110,7 +110,13 @@ int wmain(int argc, wchar_t** argv) {
     Sleep(200);
     log = slurp(L"fh2-mods\\platform.log");
     std::printf("---- platform.log\n%s----\n", log.c_str());
-    CHECK(has(log, "FH2 Mod Platform 2.2.1 (API 3)"));
+    CHECK(has(log, "FH2 Mod Platform 2.6.0 (API 7)"));
+    CHECK(has(log, "(ivictim mov)") && has(log, "(mark b) (shared with HookA, HookB)"));
+    CHECK(has(log, "(prolog): it's in the function's prolog"));
+    CHECK(has(log, "(mid-instruction): it isn't the start of an instruction"));
+    CHECK(has(log, "(jumped into): the function jumps into the bytes the hook would replace"));
+    CHECK(has(log, "(wrong expect): the bytes there aren't the ones the mod expected"));
+    CHECK(has(log, "[HookB] its instruction hook HookMod.dll+0x") && has(log, "(crashes) crashed (exception 0xC0000005)"));
     CHECK(has(log, "hook tests done, 0 failed"));
     CHECK(!has(log, "check FAIL"));
     CHECK(has(log, "[HookA] hooked function HookMod.dll+0x"));
