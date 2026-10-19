@@ -97,6 +97,12 @@ struct Row {
 };
 std::mutex g_mu;                     // guards the list (rows are never removed)
 std::deque<Row> g_rows;
+// Link rows (API 6): only on their mod's page under Installed mods, where A opens the URL.
+struct LinkRow {
+    FH2Mod* mod;
+    std::string key, label, description, url;
+};
+std::deque<LinkRow> g_links;         // guarded by g_mu
 std::atomic<bool> g_written{false};  // the pages have been written
 
 bool valid_key(const char* k) {
@@ -104,6 +110,12 @@ bool valid_key(const char* k) {
     for (; *k; ++k)
         if (!(std::isalnum(static_cast<unsigned char>(*k)) || *k == '_')) return false;
     return true;
+}
+
+bool has_link(FH2Mod* m, const char* key) {
+    for (const LinkRow& l : g_links)
+        if (l.mod == m && l.key == key) return true;
+    return false;
 }
 
 Row* find_row(FH2Mod* m, const char* key) {
@@ -310,6 +322,27 @@ uint8_t* selected_descriptor() {
     return g_selected_desc;
 }
 
+// FH2Mod_ViewSelected: the same for the list of the mod's page that's showing (each mod's
+// list binds it), so A on a link row knows which row it was on.
+std::atomic<int> g_view_selected{0};
+uint8_t* g_view_selected_desc = nullptr;
+void** __cdecl view_selected_get(void** out, void*, void*) {
+    int v = g_view_selected.load();
+    *out  = nullptr;
+    reinterpret_cast<BoxIntFn>(g_base + RVA_BOX_INT)(out, &v);
+    return out;
+}
+void __cdecl view_selected_set(void*, void*, uint8_t* value) {
+    if (value && readable(value + 0x28, 4)) g_view_selected = *reinterpret_cast<int*>(value + 0x28);
+}
+uint8_t* view_selected_descriptor() {
+    std::scoped_lock lk{g_desc_mu};
+    if (!g_view_selected_desc)
+        g_view_selected_desc = new_descriptor("FH2Mod_ViewSelected", reinterpret_cast<void*>(&view_selected_get),
+                                              reinterpret_cast<void*>(&view_selected_set), nullptr);
+    return g_view_selected_desc;
+}
+
 // FH2Mod_View_<k>: whether view k of Installed mods is showing (0: the list, k: mod k-1's
 // settings). Showing another view hides the rest; see switch_view.
 constexpr int kMaxViews = 65;
@@ -451,6 +484,7 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     if (!n || std::wcsncmp(n, L"FH2Mod_", 7) != 0) return nullptr;
     if (std::wcscmp(n, L"FH2Mod_RestartNotice") == 0) return notice_descriptor();
     if (std::wcscmp(n, L"FH2Mod_Selected") == 0) return selected_descriptor();
+    if (std::wcscmp(n, L"FH2Mod_ViewSelected") == 0) return view_selected_descriptor();
     if (std::wcscmp(n, L"FH2Mod_UpdateBadge") == 0) return badge_descriptor(false);
     if (std::wcscmp(n, L"FH2Mod_ErrorBadge") == 0) return badge_descriptor(true);
     if (std::wcscmp(n, L"FH2Mod_ViewBack") == 0) return back_descriptor();
@@ -570,6 +604,7 @@ struct PageItem {
     // and so on), the version, the same in red when there's a newer one, and the GitHub page
     std::string note, version, version_alert, link;
     bool note_alert = false;         // the note is an error (shown in red)
+    std::string open;                // what A opens on this row (a link row's URL), or ""
 };
 
 // A line of information is a Button laid out like a row: label left, value right. The first
@@ -761,6 +796,7 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             t.replace(nm, std::string("x:Name=\"OptionsList\"").size(), "x:Name=\"FH2Mod_List_" + std::to_string(k) + "\"");
             if (const std::size_t si = t.find(" SelectedIndex=\"{Binding FH2Mod_Selected, Mode=TwoWay}\""); si != std::string::npos)
                 t.erase(si, std::string(" SelectedIndex=\"{Binding FH2Mod_Selected, Mode=TwoWay}\"").size());
+            t.insert(t.find("x:Name=\"FH2Mod_List_"), "SelectedIndex=\"{Binding FH2Mod_ViewSelected, Mode=TwoWay}\" ");
             lists += "\r\n<Grid" + list_vis(k) + " Style=\"{StaticResource FH2Mod_Style_ListView_" + std::to_string(k) + "}\">\r\n" + t +
                      view_rows[k - 1] + "</local:CommonListBox>\r\n</Grid>";
         }
@@ -1236,6 +1272,15 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
                 items.push_back({static_cast<int>(r), "", ""});
                 ++own;
             }
+        for (const LinkRow& l : g_links)
+            if (l.mod == e.mod) {   // A opens it; its address shows under the description
+                PageItem it = info(l.label, l.description);
+                it.open     = l.url;
+                it.link     = l.url.substr(l.url.find("://") + 3);
+                if (!it.link.empty() && it.link.back() == '/') it.link.pop_back();
+                items.push_back(it);
+                ++own;
+            }
     }
     if (!own)
         items.push_back(info("No settings", !e.enabled ? "Its settings show here once it's turned on and the game has restarted."
@@ -1328,12 +1373,20 @@ std::vector<PageItem> about_items() {
 }
 
 
+std::vector<std::vector<std::string>> g_view_opens;   // Installed mods: per mod page, each row's link ("" for none)
+
 bool write_hub_page(int p) {
     std::scoped_lock lk{g_page_mu};
     switch (p) {
         case kHubInstalled: {
             std::vector<std::vector<PageItem>> views;
             for (std::size_t i = 0; i < g_entries.size() && i + 1 < static_cast<std::size_t>(kMaxViews); ++i) views.push_back(mod_page_items(i));
+            std::vector<std::vector<std::string>> opens;   // what A opens on each mod page's rows
+            for (const auto& v : views) {
+                opens.emplace_back();
+                for (const PageItem& it : v) opens.back().push_back(it.open);
+            }
+            g_view_opens = opens;
             std::vector<std::string> names;
             for (std::size_t i = 0; i < views.size(); ++i) names.push_back(g_entries[i].name);
             return write_list_page(hub_file(p).c_str(), "INSTALLED MODS", installed_items(), true, &views, &names);
@@ -2008,6 +2061,7 @@ std::string g_focus_again;   // focus this once more when the button comes up (U
 void switch_view(void* page, int k) {
     const int old = g_view.exchange(k);
     if (old == k) return;
+    g_view_selected = 0;   // the new list's first row gets the focus
     play_sound(k ? kSoundOpen : kSoundClose);
     g_view_back = k == 0;
     notify_view(old);
@@ -2096,6 +2150,17 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
         }
         const int view = g_view.load();
         if (view == 0 && button == kButtonB) return o_hud_page_button(page, button, pressed);   // leave the page
+        if (view != 0 && button == kButtonA) {   // A on a link row opens it, and stays
+            const int n = g_view_selected.load();
+            const std::size_t v = static_cast<std::size_t>(view - 1);
+            if (v < g_view_opens.size() && n >= 0 && static_cast<std::size_t>(n) < g_view_opens[v].size() && !g_view_opens[v][n].empty()) {
+                if (pressed) {
+                    play_sound(kSoundSelect);
+                    open_url(g_view_opens[v][n]);
+                }
+                return true;
+            }
+        }
         if (pressed) {
             if (button == kButtonA) play_sound(kSoundSelect);   // A selects, as on the tiles
             else if (view != 0) play_sound(kSoundBack, RVA_BACK_SOUNDS);   // B: the game's back, with the swoosh
@@ -2390,9 +2455,20 @@ int settings_add(FH2Mod* m, const FH2Setting* s) {
         return 0;
     }
     std::scoped_lock lk{g_mu};
-    if (find_row(m, s->key)) {
+    if (find_row(m, s->key) || has_link(m, s->key)) {
         log_line(m->name, std::string("add_setting: there's already a row called ") + s->key);
         return 0;
+    }
+    if (s->size >= offsetof(FH2Setting, url) + sizeof(const char*) && s->kind == FH2_SETTING_LINK) {
+        const std::string url = s->url ? s->url : "";
+        if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0) {
+            log_line(m->name, std::string("add_setting: ") + s->key + " is a link but its url isn't an http:// or https:// address");
+            return 0;
+        }
+        g_links.push_back({m, s->key, s->label && *s->label ? s->label : s->key, s->description ? s->description : "", url});
+        log_line(m->name, "MODS tab link: " + g_links.back().label + " (" + url + ")" +
+                              (g_written ? "; the page is already written, so it shows from the next launch" : ""));
+        return 1;
     }
     Row& r       = g_rows.emplace_back();
     r.mod        = m;
