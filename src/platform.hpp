@@ -12,7 +12,7 @@
 #include <vector>
 
 struct FH2Mod {
-    std::string name, version, repo, platform_version;
+    std::string name, version, repo, platform_version, description;
     std::wstring wname, dll;
     bool check_updates = true;
     // table (lower case) -> edits
@@ -22,6 +22,7 @@ struct FH2Mod {
     std::vector<std::string> status; // the platform's own: update available, platform too old
     std::set<std::wstring> files;    // mediaoverride paths this mod owns (lower case)
     std::vector<std::string> sql;    // database statements, in the order given
+    std::string latest;              // latest release on GitHub, once checked
 };
 
 namespace fh2platform {
@@ -62,6 +63,22 @@ float settings_get_slider(FH2Mod* mod, const char* key);
 void settings_set_slider(FH2Mod* mod, const char* key, float value);
 // After every fh2mod_init: writes the pages and hooks the game if any mod added a row.
 void settings_start(const FH2ModApi* api);
+
+// The MODS tab (platform 2.5.0): every mod in fh2-mods, loaded or turned off there.
+struct ModEntry {
+    std::wstring dll;                 // file name in fh2-mods
+    std::string name, version, description, repo;
+    bool enabled = true;              // loaded this time (false: turned off on the MODS tab)
+    std::string problem;              // why it didn't load or start ("" if it did)
+    bool platform_mod = false;        // has fh2mod_init (an old-style mod doesn't register)
+    FH2Mod* mod = nullptr;            // when loaded and registered
+};
+std::vector<ModEntry> mod_entries();  // in load order, turned-off ones included
+// fh2-mods\platform-disabled.txt: the DLLs the MODS tab turned off (lower case).
+std::set<std::wstring> disabled_mods();
+void set_mod_enabled(const std::wstring& dll, bool on);
+// The latest release of a mod on GitHub, once checked ("" before that, or if unknown).
+std::string latest_known(const FH2Mod* m);
 
 // crash.cpp
 struct LoadedDll {

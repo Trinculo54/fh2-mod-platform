@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define FH2MOD_API_VERSION 5
+#define FH2MOD_API_VERSION 6
 
 #ifdef __cplusplus
 #define FH2MOD_EXPORT extern "C" __declspec(dllexport)
@@ -55,6 +55,9 @@ typedef struct FH2ModInfo {
     const char* github_repo;      /* "Owner/Repo" to check for new releases, or NULL */
     const char* platform_version; /* the platform version this mod ships with, e.g. FH2MOD_PLATFORM_VERSION */
     int check_updates;            /* 0 = never go online for this mod */
+    /* API 6 (platform 2.5.0): what your mod adds, in a sentence or two, for the MODS tab's
+       Installed mods page. May be NULL. Leave it out (an older FH2ModInfo) on older platforms. */
+    const char* description;
 } FH2ModInfo;
 
 typedef struct FH2ModApi {
