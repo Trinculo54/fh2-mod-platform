@@ -501,25 +501,26 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
             const PageItem& it = items[n];
             const std::string key   = prefix + std::to_string(n);
             const std::string first = n == 0 ? " x:Name=\"" + first_name + "\"" : "";
-            // The row's data item (Tag): Description for the panel, Heading for the GitHub line
-            // under it (see the footer in write_list_page). A line of information also has a
-            // second one as its Content, for the footer's version line: Heading normally,
-            // Description (in red) when a newer version is out. Its own label and value are on
-            // the button (BindingProxy.A, .C) for FH2Mod_InfoRow.
-            auto data_item = [&](const std::string& desc) {
+            // The row's data item (Tag): Heading is its label (a slider's style shows it),
+            // Description goes in the panel. A line of information about a mod also has a
+            // second one as its Content, for the footer under the description (see
+            // write_list_page): Heading the version, Description the same in red when a newer
+            // one is out (only one of the two is filled), Icon the GitHub page. Its own label and
+            // value are on the button (BindingProxy.A, .C) for FH2Mod_InfoRow.
+            auto data_item = [&](const std::string& label, const std::string& desc) {
                 std::string d = desc;
                 if (!it.note.empty()) d += (d.empty() ? "" : " ") + it.note;
-                res += "            <local:TileMenuDataItem x:Key=\"" + key + "\" Heading=\"" + xml_escape(it.link) + "\" Description=\"" +
+                res += "            <local:TileMenuDataItem x:Key=\"" + key + "\" Heading=\"" + xml_escape(label) + "\" Description=\"" +
                        xml_escape(d) + "\" />\r\n";
             };
             std::string content;
-            if (!it.version.empty() || !it.version_alert.empty()) {
+            if (!it.version.empty() || !it.version_alert.empty() || !it.link.empty()) {
                 res += "            <local:TileMenuDataItem x:Key=\"" + key + "_V\" Heading=\"" + xml_escape(it.version) + "\" Description=\"" +
-                       xml_escape(it.version_alert) + "\" />\r\n";
+                       xml_escape(it.version_alert) + "\" Icon=\"" + xml_escape(it.link) + "\" />\r\n";
                 content = " Content=\"{StaticResource " + key + "_V}\"";
             }
             if (it.row < 0 || static_cast<std::size_t>(it.row) >= g_rows.size()) {
-                data_item(it.description);
+                data_item(it.label, it.description);
                 const std::string name = n == 0 ? first_name : button_name(it, false);
                 rows += "                                        <Button Tag=\"{StaticResource " + key +
                         "}\" local:BindingProxy.A=\"" + xml_escape(it.label) + "\" local:BindingProxy.C=\"" + xml_escape(it.value) +
@@ -532,7 +533,7 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
             std::string desc = it.description.empty() ? r.description : it.description;
             if (r.restart) desc += (desc.empty() ? "" : " ") + std::string("Takes effect the next time you start the game.");
             if (r.mod != &g_hub_owner) desc += (desc.empty() ? "" : " ") + std::string("(") + r.mod->name + ")";
-            data_item(desc);
+            data_item(label, desc);
             if (r.slider) {
                 res += slider_resources(r, it.row);
                 rows += "                                        <Slider Value=\"{Binding " + r.prop + "}\" Tag=\"{StaticResource " + key +
@@ -616,9 +617,10 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
         auto list_vis = [](std::size_t k) {
             return " Visibility=\"{Binding FH2Mod_View_" + std::to_string(k) + ", Converter={StaticResource FH2Mod_ShowList}}\"";
         };
+        // (moved onto the Grid around the panel by the footer code below, where the DataContext
+        // is the page's: a path through ElementName didn't follow the change)
         auto panel_vis = [](std::size_t k) {
-            return " Visibility=\"{Binding DataContext.FH2Mod_View_" + std::to_string(k) + ", ElementName=" +
-                   (k ? "FH2Mod_List_" + std::to_string(k) : std::string("OptionsList")) + ", Converter={StaticResource FH2Mod_ShowView}}\"";
+            return " Visibility=\"{Binding FH2Mod_View_" + std::to_string(k) + ", Converter={StaticResource FH2Mod_ShowView}}\"";
         };
         std::string panel = page.substr(d0, d1 + 2 - d0);
         std::string panels;
@@ -673,20 +675,19 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             panel.erase(v, v_end + 1 - v);
         }
         const std::string text = "Style=\"{StaticResource A_Style_FZTextBlock_DescriptionBlockBody}\" TextWrapping=\"Wrap\"";
-        auto shown_if = [](const std::string& path) {
-            return " Visibility=\"{Binding " + path + ", Converter={StaticResource A_StringVisConverter_IconVisibility}}\"";
-        };
-        // the same width as the panel, so the footer wraps inside it
+        // Fixed places, so they're where they always are: the version (the normal and the red
+        // copy on top of each other; one is empty), then the GitHub page, at the bottom.
+        // Inside the panel's own width, so the footer wraps inside it.
         const std::string grid =
             "<Grid Width=\"380\" HorizontalAlignment=\"Left\"" + vis + ">\r\n                        " + panel +
-            "\r\n                        <StackPanel VerticalAlignment=\"Bottom\" Margin=\"30,0,30,24\">\r\n"
-            "                            <StackPanel DataContext=\"{Binding SelectedItem.Content, ElementName=" + list + "}\">\r\n"
-            "                                <local:FZTextBlock Text=\"{Binding Heading}\"" + shown_if("Heading") + " " + text + " />\r\n"
-            "                                <local:FZTextBlock Text=\"{Binding Description}\"" + shown_if("Description") +
-            " Color=\"{StaticResource A_Color_Stat_Negative}\" " + text + " />\r\n"
-            "                            </StackPanel>\r\n"
-            "                            <local:FZTextBlock DataContext=\"{Binding SelectedItem.Tag, ElementName=" + list +
-            "}\" Text=\"{Binding Heading}\"" + shown_if("Heading") + " Margin=\"0,8,0,0\" " + text + " />\r\n"
+            "\r\n                        <StackPanel DataContext=\"{Binding SelectedItem.Content, ElementName=" + list +
+            "}\" VerticalAlignment=\"Bottom\" Margin=\"30,0,30,24\">\r\n"
+            "                            <Grid>\r\n"
+            "                                <local:FZTextBlock Text=\"{Binding Heading}\" " + text + " />\r\n"
+            "                                <local:FZTextBlock Text=\"{Binding Description}\" Color=\"{StaticResource A_Color_Stat_Negative}\" " +
+            text + " />\r\n"
+            "                            </Grid>\r\n"
+            "                            <local:FZTextBlock Text=\"{Binding Icon}\" Margin=\"0,8,0,0\" " + text + " />\r\n"
             "                        </StackPanel>\r\n                    </Grid>";
         page.replace(e0, e1 + 2 - e0, grid);
         at = page.find(desc_panel, e0 + grid.size());
