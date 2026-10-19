@@ -2535,11 +2535,11 @@ bool write_hud_notice() {
         "                </StackPanel.RenderTransform>\r\n"
         "                <local:FZMaterial Preset=\"{DynamicResource A_FZMaterialPresetGlassRoundtangle_HudItem}\" Color=\"#22FFFFFF\">\r\n"
         "                    <Border BorderThickness=\"2\" BorderBrush=\"#16FFFFFF\" CornerRadius=\"4\">\r\n"
-        "                        <StackPanel Orientation=\"Vertical\" HorizontalAlignment=\"Left\" Margin=\"16,8,16,8\">\r\n"
+        "                        <StackPanel Orientation=\"Vertical\" HorizontalAlignment=\"Center\" Margin=\"16,8,16,8\">\r\n"
         "                            <local:FZTextBlock Style=\"{StaticResource A_Style_FZTextBlock_HudLarge}\" Text=\"" + xml_escape(title) +
-        "\" Effect=\"{StaticResource A_DropShadowEffect_DefaultHud}\" Margin=\"0,0,4,-3\" />\r\n"
+        "\" Effect=\"{StaticResource A_DropShadowEffect_DefaultHud}\" HorizontalAlignment=\"Center\" TextAlignment=\"Center\" Margin=\"0,0,0,-3\" />\r\n"
         "                            <local:FZTextBlock Style=\"{StaticResource A_Style_FZTextBlock_HudMedium}\" Text=\"" + xml_escape(text) +
-        "\" Effect=\"{StaticResource A_DropShadowEffect_DefaultHud}\" Margin=\"0,0,4,0\" />\r\n"
+        "\" Effect=\"{StaticResource A_DropShadowEffect_DefaultHud}\" HorizontalAlignment=\"Center\" TextAlignment=\"Center\" />\r\n"
         "                        </StackPanel>\r\n"
         "                    </Border>\r\n"
         "                </local:FZMaterial>\r\n"
