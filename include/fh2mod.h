@@ -323,6 +323,41 @@ typedef struct FH2ModApi {
        change, or from the page's on_open. Returns 1, or 0 if you have no page
        called `page_key` (or a row is unusable; the log says which). */
     int (*set_page_rows)(FH2Mod* mod, const char* page_key, const FH2PageRow* rows, uint32_t count);
+
+    /* ---- Pages of your own design --------------------------------------
+       Instead of rows, a page on a tile can be XAML you write: the game's
+       own controls, styles and textures, laid out however you like, inside
+       the frame of the game's options pages (background, player bar, help
+       bar). `content` replaces what's between the title and the help bar
+       (the HUD options page's BasicOptions panel), and must name the
+       element to focus first x:Name="FirstItem". `resources` (may be NULL)
+       goes into the page's ResourceDictionary. `help` (may be NULL) replaces
+       the help bar's DefaultHelpPanel; NULL leaves only Back. All three are
+       UTF-8 XAML fragments, using the page's xmlns (local: is ForzaUI).
+       Like rows, the XAML is copied, and the page is written from the last
+       you set each time it opens. A page with XAML shows it on its tile;
+       under MODS > Installed mods it shows its rows if it has any, and
+       otherwise its row says which tile opens it. Returns 1, or 0 if you
+       have no page called `page_key` or `content` has no FirstItem.
+
+       Bindings: slot n (0..15) is an int of the page's, "FH2Mod_Slot_<n>",
+       which XAML can bind two-way (a list's SelectedIndex, say), and
+       "FH2Mod_Slot_<n>_Is_<v>" is true while it's v (for Visibility, with
+       the converters FH2Mod_ShowIf, FH2Mod_ShowIfHidden and FH2Mod_HideIf
+       the platform puts in the page's resources). Slots are 0 when the page
+       opens, before on_open. */
+    int (*set_page_xaml)(FH2Mod* mod, const char* page_key, const char* resources, const char* content, const char* help);
+    /* A slot's value (0 if there's no such page or slot). */
+    int (*get_page_slot)(FH2Mod* mod, const char* page_key, int slot);
+    /* Sets a slot. From on_open, on_button or on_slot (the game's UI thread)
+       while the page is showing, the page's bindings see it straight away;
+       otherwise it's kept for when the page next reads it. Returns 1, or 0
+       for no such page or slot. */
+    int (*set_page_slot)(FH2Mod* mod, const char* page_key, int slot, int value);
+    /* Moves the focus to the element named `name` on the page, from
+       on_button or on_slot while the page is showing. Returns 1 if it's
+       there. */
+    int (*focus_page_element)(FH2Mod* mod, const char* page_key, const char* name);
 } FH2ModApi;
 
 /* Called on the game's UI thread when the player changes a row: keep it
@@ -374,6 +409,20 @@ struct FH2Setting {
 typedef void (*FH2PageOpenFn)(void* user, const char* page_key);
 /* The player pressed A on a row that has a key. */
 typedef void (*FH2PageSelectFn)(void* user, const char* page_key, const char* row_key);
+/* A page of your own design: a button was pressed (FH2_BUTTON_...). Return
+   FH2_PAGE_IGNORED for what it usually does (B leaves the page, A does
+   nothing), or one of the FH2_PAGE_HANDLED values. */
+typedef int (*FH2PageButtonFn)(void* user, const char* page_key, int button);
+/* A page of your own design: a binding changed slot `slot` to `value`. */
+typedef void (*FH2PageSlotFn)(void* user, const char* page_key, int slot, int value);
+
+#define FH2_BUTTON_A 1
+#define FH2_BUTTON_B 2
+#define FH2_PAGE_IGNORED        0
+#define FH2_PAGE_HANDLED        1   /* nothing else happens */
+#define FH2_PAGE_HANDLED_SELECT 2   /* and the menus' select sound plays */
+#define FH2_PAGE_HANDLED_BACK   3   /* and the menus' back sound plays */
+#define FH2_PAGE_SLOTS 16
 
 struct FH2Page {
     uint32_t size;                 /* sizeof(FH2Page) */
@@ -387,7 +436,10 @@ struct FH2Page {
     const char* tile;
     FH2PageOpenFn on_open;         /* may be NULL */
     FH2PageSelectFn on_select;     /* may be NULL: A then does nothing on the page */
-    void* user;                    /* passed to on_open and on_select */
+    void* user;                    /* passed to every callback */
+    /* Pages of your own design (set_page_xaml). Both may be NULL. */
+    FH2PageButtonFn on_button;
+    FH2PageSlotFn on_slot;
 };
 
 #define FH2_ROW_NORMAL  0

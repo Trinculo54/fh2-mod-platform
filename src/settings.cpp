@@ -50,6 +50,7 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -121,6 +122,12 @@ struct ModPage {
     FH2PageSelectFn on_select = nullptr;
     void* user                = nullptr;
     std::vector<PageRowData> rows;
+    // a page of the mod's own design (set_page_xaml)
+    FH2PageButtonFn on_button = nullptr;
+    FH2PageSlotFn on_slot     = nullptr;
+    bool custom               = false;
+    std::string xaml_resources, xaml_content, xaml_help;
+    std::array<std::atomic<int>, FH2_PAGE_SLOTS> slots{};
 };
 std::deque<ModPage> g_pages;         // guarded by g_mu (pages are never removed)
 constexpr std::size_t kMaxPages    = 64;
@@ -522,6 +529,142 @@ uint8_t* mod_notice_descriptor() {
     return g_mod_notice_desc;
 }
 
+// ---- pages of a mod's own design: their slots (API 8) ------------------------------------------
+// FH2Mod_Slot_<n>: an int of the page's, for two-way bindings; FH2Mod_Slot_<n>_Is_<v>: whether
+// it's v. They read the page being opened or shown (g_custom_shown). A mod changes them from its
+// callbacks, which run with g_in_callback set (on the UI thread, while the page is up).
+std::atomic<int> g_custom_shown{-1};       // the page in g_pages whose slots the bindings read
+std::atomic<void*> g_custom_obj{nullptr};  // what its bindings read from (for PropertyChanged); null when it's gone
+thread_local bool g_in_callback = false;   // in a mod's on_button or on_slot for the page showing
+thread_local void* g_callback_page = nullptr;   // ... and that page (for focusing)
+uint8_t* g_slot_desc[FH2_PAGE_SLOTS] = {};
+struct SlotIs {
+    int slot, value;
+    uint8_t* desc;
+};
+std::vector<SlotIs> g_slot_is;             // guarded by g_desc_mu
+
+int slot_value(int n) {
+    const int j = g_custom_shown.load();
+    std::scoped_lock lk{g_mu};
+    if (j < 0 || static_cast<std::size_t>(j) >= g_pages.size() || n < 0 || n >= FH2_PAGE_SLOTS) return 0;
+    return g_pages[j].slots[n].load();
+}
+
+int slot_of(void* desc) {
+    for (int n = 0; n < FH2_PAGE_SLOTS; ++n)
+        if (g_slot_desc[n] == desc) return n;
+    return -1;
+}
+
+// Tells the page's bindings slot n changed: its _Is_ properties, and the slot itself if asked.
+void notify_slot(int n, bool self) {
+    void* obj = g_custom_obj.load();
+    if (!obj) return;
+    std::vector<uint8_t*> descs;
+    {
+        std::scoped_lock lk{g_desc_mu};
+        for (const SlotIs& s : g_slot_is)
+            if (s.slot == n) descs.push_back(s.desc);
+        if (self && g_slot_desc[n]) descs.push_back(g_slot_desc[n]);
+    }
+    for (uint8_t* d : descs) notify_changed(obj, d);
+}
+
+bool call_on_slot(FH2PageSlotFn fn, void* user, const char* key, int slot, int value) {
+    __try {
+        fn(user, key, slot, value);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void* tile_page_object(int j);   // the page showing page j on its tile, or null
+
+void** __cdecl slot_get(void** out, void* desc, void* obj) {
+    if (obj) g_custom_obj = obj;
+    int v = slot_value(slot_of(desc));
+    *out  = nullptr;
+    reinterpret_cast<BoxIntFn>(g_base + RVA_BOX_INT)(out, &v);
+    return out;
+}
+void __cdecl slot_set(void* desc, void* obj, uint8_t* value) {
+    const int n = slot_of(desc), j = g_custom_shown.load();
+    if (n < 0 || j < 0 || !value || !readable(value + 0x28, 4)) return;
+    if (obj) g_custom_obj = obj;
+    const int v = *reinterpret_cast<int*>(value + 0x28);
+    FH2Mod* mod = nullptr;
+    FH2PageSlotFn fn = nullptr;
+    void* user = nullptr;
+    std::string key;
+    {
+        std::scoped_lock lk{g_mu};
+        if (static_cast<std::size_t>(j) >= g_pages.size()) return;
+        ModPage& pg = g_pages[j];
+        if (pg.slots[n].exchange(v) == v) return;
+        mod  = pg.mod;
+        fn   = pg.on_slot;
+        user = pg.user;
+        key  = pg.key;
+    }
+    notify_slot(n, false);
+    if (!fn) return;
+    g_in_callback   = true;
+    g_callback_page = tile_page_object(j);
+    if (!call_on_slot(fn, user, key.c_str(), n, v)) log_line(mod->name, "crashed in its on_slot for page " + key);
+    g_in_callback   = false;
+    g_callback_page = nullptr;
+}
+void** __cdecl slot_is_get(void** out, void* desc, void* obj) {
+    if (obj) g_custom_obj = obj;
+    int n = -1, want = 0;
+    {
+        std::scoped_lock lk{g_desc_mu};
+        for (const SlotIs& s : g_slot_is)
+            if (s.desc == desc) {
+                n    = s.slot;
+                want = s.value;
+            }
+    }
+    bool v = n >= 0 && slot_value(n) == want;
+    *out   = nullptr;
+    reinterpret_cast<BoxBoolFn>(g_base + RVA_BOX_BOOL)(out, &v);
+    return out;
+}
+
+// "FH2Mod_Slot_<n>" or "FH2Mod_Slot_<n>_Is_<v>"
+uint8_t* slot_descriptor(const wchar_t* n) {
+    const wchar_t* d = n + 12;   // after "FH2Mod_Slot_"
+    int slot = 0, digits = 0;
+    for (; *d >= L'0' && *d <= L'9' && digits < 3; ++d, ++digits) slot = slot * 10 + (*d - L'0');
+    if (!digits || slot >= FH2_PAGE_SLOTS) return nullptr;
+    if (!*d) {
+        std::scoped_lock lk{g_desc_mu};
+        if (!g_slot_desc[slot]) {
+            static std::deque<std::string> names;   // the descriptor keeps the pointer
+            names.push_back("FH2Mod_Slot_" + std::to_string(slot));
+            g_slot_desc[slot] = new_descriptor(names.back().c_str(), reinterpret_cast<void*>(&slot_get), reinterpret_cast<void*>(&slot_set), nullptr);
+        }
+        return g_slot_desc[slot];
+    }
+    if (std::wcsncmp(d, L"_Is_", 4) != 0) return nullptr;
+    d += 4;
+    int value = 0;
+    digits    = 0;
+    for (; *d >= L'0' && *d <= L'9' && digits < 4; ++d, ++digits) value = value * 10 + (*d - L'0');
+    if (!digits || *d) return nullptr;
+    std::scoped_lock lk{g_desc_mu};
+    for (const SlotIs& s : g_slot_is)
+        if (s.slot == slot && s.value == value) return s.desc;
+    static std::deque<std::string> names;
+    names.push_back("FH2Mod_Slot_" + std::to_string(slot) + "_Is_" + std::to_string(value));
+    void* bool_type = reinterpret_cast<TypeFn>(g_base + RVA_BOOL_TYPE)(0);
+    uint8_t* desc   = new_descriptor(names.back().c_str(), reinterpret_cast<void*>(&slot_is_get), reinterpret_cast<void*>(&view_set), bool_type);
+    if (desc) g_slot_is.push_back({slot, value, desc});
+    return desc;
+}
+
 using FindPropertyFn = uint8_t* (*)(uint8_t* type, uint8_t* name);
 FindPropertyFn o_find_property = nullptr;
 
@@ -550,6 +693,7 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     if (const int k = name_number(n, L"FH2Mod_ViewBack_", kMaxViews); k >= 0)
         return flag_descriptor(g_view_back_desc[k], "FH2Mod_ViewBack_" + std::to_string(k));
     if (const int b = name_number(n, L"FH2Mod_Bar_", kViewKinds); b >= 0) return flag_descriptor(g_bar_desc[b], "FH2Mod_Bar_" + std::to_string(b));
+    if (std::wcsncmp(n, L"FH2Mod_Slot_", 12) == 0) return slot_descriptor(n);
     Row* r = row_by_prop(n);
     return r ? descriptor_for(r) : nullptr;
 }
@@ -1172,6 +1316,47 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
     return set_file(&g_owner_mod, (std::string("UI/Scenes/Anthem/") + file).c_str(), page.data(), page.size()) != 0;
 }
 
+// A page of a mod's own design: A_HUDOptions.xaml's frame (background, player bar, help bar,
+// the screen's padding and tilt) around the mod's XAML. Its content takes the place of the
+// BasicOptions panel (title, list and description); its resources go into the page's, after
+// the platform's converters; its help, if any, takes the place of DefaultHelpPanel.
+bool write_custom_page(const char* file, const std::string& resources, const std::string& content, const std::string& help) {
+    std::string page = read_ui("Scenes/Anthem/A_HUDOptions.xaml");
+    if (page.empty()) return false;
+    const std::string res = "\r\n            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowIf\" UseHidden=\"false\" InvertResult=\"false\" />\r\n"
+                            "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_ShowIfHidden\" UseHidden=\"true\" InvertResult=\"false\" />\r\n"
+                            "            <local:FZBooleanToVisibilityConverter x:Key=\"FH2Mod_HideIf\" UseHidden=\"false\" InvertResult=\"true\" />\r\n" +
+                            resources + "\r\n        ";
+    const std::size_t basic    = page.find("<StackPanel Name=\"BasicOptions\"");
+    const std::size_t tilt_end = basic == std::string::npos ? basic : page.find("</ContentControl>", basic);
+    const std::size_t end      = tilt_end == std::string::npos ? tilt_end : page.rfind("</StackPanel>", tilt_end);
+    const std::string help_el  = "<ContentControl x:Name=\"DefaultHelpPanel\"";
+    const std::size_t h0 = page.find(help_el), h1 = h0 == std::string::npos ? h0 : page.find("/>", h0);
+    if (end == std::string::npos || end < basic || h1 == std::string::npos || h1 > basic ||
+        !replace_between(page, "<ResourceDictionary>", "</ResourceDictionary>", res, false)) {
+        slog("A_HUDOptions.xaml doesn't look as expected; no page for " + std::string(file));
+        return false;
+    }
+    // (positions again: the resources moved them)
+    const std::size_t b0 = page.find("<StackPanel Name=\"BasicOptions\"");
+    const std::size_t b1 = page.rfind("</StackPanel>", page.find("</ContentControl>", b0)) + std::string("</StackPanel>").size();
+    page.replace(b0, b1 - b0, content);
+    const std::size_t p0 = page.find(help_el), p1 = page.find("/>", p0) + 2;
+    if (help.empty()) {
+        std::string bar = page.substr(p0, p1 - p0);
+        erase_attr(bar, "local:ControllerButtonPanel.ADescription");
+        erase_attr(bar, "local:ControllerButtonPanel.YDescription");
+        swap_attr(bar, "local:ControllerButtonPanel.BDescription", "{local:Loc HelpButtons.IDS_Back}");
+        page.replace(p0, p1 - p0, bar);
+    } else {
+        page.replace(p0, p1 - p0, "<Grid>\r\n" + help + "\r\n</Grid>");
+    }
+    // Extra Options leaves pages alone that aren't declared exactly x:Class="ForzaUI.A_HudOptions"
+    const std::string cls = "x:Class=\"ForzaUI.A_HudOptions\"";
+    if (const std::size_t c = page.find(cls); c != std::string::npos) page.replace(c, cls.size(), "x:Class =\"ForzaUI.A_HudOptions\"");
+    return set_file(&g_owner_mod, (std::string("UI/Scenes/Anthem/") + file).c_str(), page.data(), page.size()) != 0;
+}
+
 // The Mods page (Settings > Mods, and the MODS tab's All settings): every mod's rows.
 bool write_mods_page() {
     std::vector<PageItem> items;
@@ -1477,7 +1662,12 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
             if (g_pages[j].mod == e.mod) {   // A shows the page (a view of its own)
                 const ModPage& pg = g_pages[j];
                 PageItem it = info(pg.label, pg.description);
-                if (pg.tile >= 0 && g_tile_page[pg.tile] == static_cast<int>(j))
+                const bool on_tile = pg.tile >= 0 && g_tile_page[pg.tile] == static_cast<int>(j);
+                if (pg.custom && pg.rows.empty())   // only on its tile
+                    it.description += (it.description.empty() ? "" : " ") +
+                                      (on_tile ? std::string("Open it from the pause menu's ") + kTiles[pg.tile].name + " tile."
+                                               : std::string("It needs a pause-menu tile to open from, and doesn't have one."));
+                else if (on_tile)
                     it.description += (it.description.empty() ? "" : " ") + std::string("The pause menu's ") + kTiles[pg.tile].name +
                                       " tile opens it too.";
                 it.open_view = j < g_page_view.size() ? g_page_view[j] : 0;
@@ -1594,7 +1784,8 @@ bool write_hub_page(int p) {
             {
                 std::scoped_lock lk2{g_mu};
                 g_page_view.assign(g_pages.size(), 0);
-                for (std::size_t j = 0; j < g_pages.size() && pages.size() < static_cast<std::size_t>(kMaxPageViews); ++j)
+                for (std::size_t j = 0; j < g_pages.size() && pages.size() < static_cast<std::size_t>(kMaxPageViews); ++j) {
+                    if (g_pages[j].custom && g_pages[j].rows.empty()) continue;   // only on its tile
                     for (std::size_t i = 0; i < nmods; ++i)
                         if (g_entries[i].mod && g_entries[i].mod == g_pages[j].mod) {
                             g_page_view[j] = static_cast<int>(nmods + 1 + pages.size());
@@ -1602,6 +1793,7 @@ bool write_hub_page(int p) {
                             owners.push_back(static_cast<int>(i + 1));
                             break;
                         }
+                }
             }
             std::vector<std::vector<PageItem>> views;
             std::vector<ViewTitle> names;
@@ -1639,16 +1831,27 @@ bool write_hub_page(int p) {
         // a mod's page on a game tile: a page of its own
         const std::size_t t = static_cast<std::size_t>(p - kHubTilePage);
         std::vector<PageItem> items;
-        std::string title;
-        bool select = false;
+        std::string title, res, content, help;
+        bool select = false, custom = false;
         {
             std::scoped_lock lk2{g_mu};
             const int j = g_tile_page[t];
             if (j < 0) return false;
             const ModPage& pg = g_pages[j];
-            items  = page_items(pg);
-            title  = pg.title;
-            select = pg.on_select != nullptr;
+            custom = pg.custom;
+            if (custom) {   // of the mod's own design
+                res     = pg.xaml_resources;
+                content = pg.xaml_content;
+                help    = pg.xaml_help;
+            } else {
+                items  = page_items(pg);
+                title  = pg.title;
+                select = pg.on_select != nullptr;
+            }
+        }
+        if (custom) {
+            g_tile_acts[t].clear();
+            return write_custom_page(hub_file(p).c_str(), res, content, help);
         }
         for (char& c : title) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
         g_tile_acts[t] = row_acts(items, "FirstItem");
@@ -2227,7 +2430,11 @@ void open_hub_page(void* page, int which) {
         {
             std::scoped_lock lk{g_mu};
             j = g_tile_page[which - kHubTilePage];
+            if (j >= 0 && g_pages[j].custom)
+                for (auto& slot : g_pages[j].slots) slot = 0;   // slots start at 0, before on_open
         }
+        g_custom_obj   = nullptr;
+        g_custom_shown = j;
         if (j >= 0) pages_opening(j);
     }
     write_hub_page(which);   // up to date (update checks finish after the game starts)
@@ -2430,14 +2637,22 @@ void d_hud_page_loaded(void* page) {
     } else if (g_installed_page.load() == page) {
         g_installed_page = nullptr;
     }
+    bool tile_page = false;
     for (std::size_t t = 0; t < kTileCount; ++t)
         if (was_shown == kHubTilePage + static_cast<int>(t)) {
             g_tile_page_obj[t] = page;
             g_selected         = 0;
+            tile_page          = true;
         } else if (g_tile_page_obj[t].load() == page) {
             g_tile_page_obj[t] = nullptr;
         }
+    if (!tile_page) {   // another page: a page of a mod's own design isn't up
+        g_custom_obj   = nullptr;
+        g_custom_shown = -1;
+    }
 }
+
+
 
 // A page's buttons: vtable +0x578, (page, button, pressed) -> handled. The page gets A as 18
 // and B as 45 (seen in the log); on the options pages both leave the page.
@@ -2447,6 +2662,67 @@ constexpr int kButtonA                       = 18;
 constexpr int kButtonB                       = 45;
 using PageButtonFn = bool (*)(void* page, int button, bool pressed);
 PageButtonFn o_hud_page_button = nullptr;
+
+void* tile_page_object(int j) {
+    std::scoped_lock lk{g_mu};
+    for (std::size_t t = 0; t < kTileCount; ++t)
+        if (g_tile_page[t] == j) return g_tile_page_obj[t].load();
+    return nullptr;
+}
+
+bool call_on_button(FH2PageButtonFn fn, void* user, const char* key, int button, int* result) {
+    __try {
+        *result = fn(user, key, button);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// A page of a mod's own design on tile t: A and B go to its on_button first. Other buttons are
+// logged once each (their codes are for a later API), and go on as usual.
+bool g_custom_handled[3] = {};   // per FH2_BUTTON_: the press was handled, so its release is too
+std::set<int> g_buttons_seen;
+
+bool custom_page_button(void* page, int j, int button, bool pressed) {
+    const int code = button == kButtonA ? FH2_BUTTON_A : button == kButtonB ? FH2_BUTTON_B : 0;
+    if (!code) {
+        if (pressed && g_buttons_seen.insert(button).second) slog("button " + std::to_string(button) + " on a mod's page");
+        return o_hud_page_button(page, button, pressed);
+    }
+    if (pressed) {
+        FH2Mod* mod = nullptr;
+        FH2PageButtonFn fn = nullptr;
+        void* user = nullptr;
+        std::string key;
+        {
+            std::scoped_lock lk{g_mu};
+            mod  = g_pages[j].mod;
+            fn   = g_pages[j].on_button;
+            user = g_pages[j].user;
+            key  = g_pages[j].key;
+        }
+        int r = FH2_PAGE_IGNORED;
+        if (fn) {
+            g_in_callback   = true;
+            g_callback_page = page;
+            if (!call_on_button(fn, user, key.c_str(), code, &r)) {
+                log_line(mod->name, "crashed in its on_button for page " + key);
+                r = FH2_PAGE_HANDLED;
+            }
+            g_in_callback   = false;
+            g_callback_page = nullptr;
+        }
+        g_custom_handled[code] = r != FH2_PAGE_IGNORED;
+        if (r == FH2_PAGE_HANDLED_SELECT) play_sound(kSoundSelect);
+        else if (r == FH2_PAGE_HANDLED_BACK) play_sound(kSoundBack, RVA_BACK_SOUNDS);
+    } else if (!g_focus_again.empty()) {
+        focus_named(page, g_focus_again.c_str());   // the element may only just have been shown
+        g_focus_again.clear();
+    }
+    if (g_custom_handled[code] || code == FH2_BUTTON_A) return true;   // A never leaves the page
+    return o_hud_page_button(page, button, pressed);
+}
 
 bool d_hud_page_button(void* page, int button, bool pressed) {
     if (page && (page == g_updates_page.load() || page == g_about_page.load()) && button == kButtonA) {
@@ -2458,6 +2734,17 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
         }
         return true;   // not Accept (it would leave the page)
     }
+    for (std::size_t t = 0; t < kTileCount; ++t)
+        if (page && page == g_tile_page_obj[t].load()) {
+            int j      = -1;
+            bool custom = false;
+            {
+                std::scoped_lock lk{g_mu};
+                j      = g_tile_page[t];
+                custom = j >= 0 && g_pages[j].custom;
+            }
+            if (custom) return custom_page_button(page, j, button, pressed);
+        }
     for (std::size_t t = 0; t < kTileCount; ++t)
         if (page && page == g_tile_page_obj[t].load() && button == kButtonA) {
             // a mod's page on a tile: A tells the mod about a row with a key, and stays
@@ -2617,6 +2904,8 @@ void hook_tiles(FH2Mod* m) {
 void hook_hud_shown(FH2Mod* m);
 bool g_hud_notice = false;   // A_Hud.xaml has the notice
 void d_pause_menu_wire(void* page) {
+    g_custom_obj   = nullptr;   // back on the pause menu: no page of a mod's own design is up
+    g_custom_shown = -1;
     g_hub_asked  = 0;
     g_hub_builds = 0;
     g_hub_return = false;
@@ -2969,6 +3258,10 @@ int pages_add(FH2Mod* m, const FH2Page* p) {
     pg.on_open     = p->on_open;
     pg.on_select   = p->on_select;
     pg.user        = p->user;
+    if (p->size >= offsetof(FH2Page, on_slot) + sizeof(void*)) {
+        pg.on_button = p->on_button;
+        pg.on_slot   = p->on_slot;
+    }
     if (tile >= 0) g_tile_page[tile] = static_cast<int>(g_pages.size() - 1);
     log_line(m->name, "page: " + pg.title + (tile >= 0 ? std::string(", on the ") + kTiles[tile].name + " tile" : std::string()) +
                           (g_written ? "; the pages are already written, so it shows from the next launch" : ""));
@@ -3007,6 +3300,71 @@ int pages_set_rows(FH2Mod* m, const char* key, const FH2PageRow* rows, uint32_t 
         }
     log_line(m->name, std::string("set_page_rows: there's no page called ") + key);
     return 0;
+}
+
+namespace {
+int page_index(FH2Mod* m, const char* key) {   // under g_mu
+    if (!m || !key) return -1;
+    for (std::size_t j = 0; j < g_pages.size(); ++j)
+        if (g_pages[j].mod == m && g_pages[j].key == key) return static_cast<int>(j);
+    return -1;
+}
+} // namespace
+
+int pages_set_xaml(FH2Mod* m, const char* key, const char* resources, const char* content, const char* help) {
+    if (!m || !key) return 0;
+    if (!content || !std::strstr(content, "x:Name=\"FirstItem\"")) {
+        log_line(m->name, std::string("set_page_xaml: ") + key + "'s content has no element named FirstItem; the page wasn't changed");
+        return 0;
+    }
+    std::scoped_lock lk{g_mu};
+    const int j = page_index(m, key);
+    if (j < 0) {
+        log_line(m->name, std::string("set_page_xaml: there's no page called ") + key);
+        return 0;
+    }
+    ModPage& pg = g_pages[j];
+    if (!pg.custom && pg.tile < 0) log_line(m->name, std::string("set_page_xaml: ") + key + " has no tile, so nothing opens it");
+    pg.custom         = true;
+    pg.xaml_resources = resources ? resources : "";
+    pg.xaml_content   = content;
+    pg.xaml_help      = help ? help : "";
+    return 1;
+}
+
+int pages_get_slot(FH2Mod* m, const char* key, int slot) {
+    if (slot < 0 || slot >= FH2_PAGE_SLOTS) return 0;
+    std::scoped_lock lk{g_mu};
+    const int j = page_index(m, key);
+    return j < 0 ? 0 : g_pages[j].slots[slot].load();
+}
+
+int pages_set_slot(FH2Mod* m, const char* key, int slot, int value) {
+    if (slot < 0 || slot >= FH2_PAGE_SLOTS) return 0;
+    int j = -1, old = 0;
+    {
+        std::scoped_lock lk{g_mu};
+        j = page_index(m, key);
+        if (j < 0) return 0;
+        old = g_pages[j].slots[slot].exchange(value);
+    }
+    // on the UI thread, in a callback for the page that's up: its bindings see it now
+    if (old != value && g_in_callback && g_custom_shown.load() == j) notify_slot(slot, true);
+    return 1;
+}
+
+int pages_focus(FH2Mod* m, const char* key, const char* name) {
+    if (!name || !*name || !g_in_callback || !g_callback_page) return 0;
+    {
+        std::scoped_lock lk{g_mu};
+        if (page_index(m, key) != g_custom_shown.load()) return 0;
+    }
+    if (!focus_named(g_callback_page, name)) {
+        log_line(m->name, std::string("focus_page_element: no element called ") + name + " on page " + key);
+        return 0;
+    }
+    g_focus_again = name;   // again when the button comes up: a list that has only just shown may not have taken it
+    return 1;
 }
 
 int settings_get(FH2Mod* m, const char* key) {

@@ -43,6 +43,15 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     rows[2].label = "Picked row"; rows[2].key = "pick"; rows[2].description = "Press A";
     rows[3].label = "Red row"; rows[3].value = "Alert"; rows[3].value_alert = 1;
     api->set_page_rows(g_mod, "Stats", rows, 4);
+    // ... and on its tile, a page of its own design (Installed mods still shows the rows)
+    api->set_page_xaml(g_mod, "Stats", "<Color x:Key=\"Test_Color\">#FF102030</Color>", "<StackPanel>no FirstItem</StackPanel>", nullptr);
+    api->set_page_xaml(g_mod, "Stats", "<Color x:Key=\"Test_Color\">#FF102030</Color>",
+                       "<Grid x:Name=\"TestContent\"><Button x:Name=\"FirstItem\" Visibility=\"{Binding FH2Mod_Slot_2_Is_1, "
+                       "Converter={StaticResource FH2Mod_ShowIf}}\" /></Grid>",
+                       "<ContentControl x:Name=\"DefaultHelpPanel\" Style=\"{StaticResource A_Style_ContentControl_DefaultButtonBar}\" />");
+    if (api->get_page_slot(g_mod, "Stats", 2) == 0 && api->set_page_slot(g_mod, "Stats", 2, 1) && api->get_page_slot(g_mod, "Stats", 2) == 1 &&
+        !api->set_page_slot(g_mod, "Stats", 16, 1) && !api->focus_page_element(g_mod, "Stats", "FirstItem"))
+        api->log(g_mod, "page slots ok");
     FH2Page other{sizeof other};
     other.key = "Other"; other.title = "Other"; other.tile = "Nope";
     api->add_page(g_mod, &other);

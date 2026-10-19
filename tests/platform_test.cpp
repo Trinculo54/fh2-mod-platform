@@ -190,6 +190,8 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] add_page: there's no tile called Nope; Other is only under MODS > Installed mods"));
         CHECK(has(log, "[TestMod] add_page: there's already a page called Other"));
         CHECK(has(log, "[TestMod] set_page_rows: there's no page called Missing"));
+        CHECK(has(log, "[TestMod] set_page_xaml: Stats's content has no element named FirstItem"));
+        CHECK(has(log, "[TestMod] page slots ok"));
         // The game's menus were given: the pages are written. (Not with the game mapped: this
         // test's copy of it doesn't pass the menus' code checks, so the platform takes them out.)
         if (fs::exists(L"FH2\\Mount\\media\\UI.zip") && argc <= 2) {
@@ -199,8 +201,12 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(installed, "local:BindingProxy.A=\"Test stats &amp; more\"") && has(installed, "x:Name=\"PART_Button_FH2Mod_Page_0\""));
             CHECK(has(installed, "Content=\"TEST STATS\"") && has(installed, "{Binding FH2Mod_ViewIn_") && has(installed, "{Binding FH2Mod_Bar_3"));
             CHECK(has(installed, "The pause menu's Achievements tile opens it too."));
-            CHECK(has(tile, "Content=\"TEST STATS\"") && has(tile, "FH2Mod_InfoRow_Heading") && has(tile, "FH2Mod_InfoRow_Dim"));
-            CHECK(has(tile, "Heading=\"Footer &lt;line&gt;\"") && has(tile, "local:BindingProxy.B=\"Alert\""));
+            CHECK(has(installed, "FH2Mod_InfoRow_Heading") && has(installed, "FH2Mod_InfoRow_Dim"));
+            CHECK(has(installed, "Heading=\"Footer &lt;line&gt;\"") && has(installed, "local:BindingProxy.B=\"Alert\""));
+            // the tile: the page of TestMod's own design, in the options page's frame
+            CHECK(has(tile, "<Grid x:Name=\"TestContent\">") && !has(tile, "BasicOptions") && has(tile, "x:Key=\"FH2Mod_ShowIf\""));
+            CHECK(has(tile, "<Color x:Key=\"Test_Color\">") && has(tile, "<Grid>\r\n<ContentControl x:Name=\"DefaultHelpPanel\" Style="));
+            CHECK(has(tile, "x:Name=\"BottomBar\"") && has(tile, "x:Class =\"ForzaUI.A_HudOptions\""));
         }
     } else {
         // TestMod gone: its tables and notice are cleaned up, HelloMod's stays.
