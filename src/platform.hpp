@@ -61,6 +61,9 @@ int settings_get(FH2Mod* mod, const char* key);
 void settings_set(FH2Mod* mod, const char* key, int value);
 float settings_get_slider(FH2Mod* mod, const char* key);
 void settings_set_slider(FH2Mod* mod, const char* key, float value);
+// Pages of the mods' own (API 8).
+int pages_add(FH2Mod* mod, const FH2Page* page);
+int pages_set_rows(FH2Mod* mod, const char* page_key, const FH2PageRow* rows, uint32_t count);
 // After every fh2mod_init: writes the pages and hooks the game if any mod added a row.
 void settings_start(const FH2ModApi* api);
 

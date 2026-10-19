@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define FH2MOD_API_VERSION 7
+#define FH2MOD_API_VERSION 8
 
 #ifdef __cplusplus
 #define FH2MOD_EXPORT extern "C" __declspec(dllexport)
@@ -47,6 +47,9 @@ typedef struct FH2Mod FH2Mod;
 typedef struct FH2Hook FH2Hook;
 /* One row on the Mods page (API 4), defined below FH2ModApi. */
 typedef struct FH2Setting FH2Setting;
+/* A page of your own, and one of its rows (API 8), defined below FH2ModApi. */
+typedef struct FH2Page FH2Page;
+typedef struct FH2PageRow FH2PageRow;
 
 /* The CPU's registers at an instruction hook (API 7): see hook_instruction.
    rsp is what it was at the hooked instruction; changing it has no effect. */
@@ -300,6 +303,26 @@ typedef struct FH2ModApi {
        often every frame: keep it short. If it crashes, that hook is
        switched off and the crash goes in the log. */
     FH2Hook* (*hook_instruction)(FH2Mod* mod, const char* name, void* at, FH2InstructionFn fn, void* user);
+
+    /* ==== API version 8 (platform 2.7.0): check api_version >= 8 ======== */
+
+    /* ---- Pages -------------------------------------------------------------
+       A page of your own in the game's menus, laid out like the Mods page: a
+       list of rows, each with a label on the left and a value on the right,
+       and the selected row's description beside the list. Your mod's page
+       under MODS > Installed mods gets a row that opens it. A page can also
+       take over a pause-menu tile that does nothing on PC: FH2Page.tile.
+
+       Add pages from fh2mod_init (one added later only shows from the next
+       launch). Their rows can change at any time: the page is written each
+       time it's opened, from the rows you last set. Returns 1 if the page was
+       added, 0 if not (the log says why). */
+    int (*add_page)(FH2Mod* mod, const FH2Page* page);
+    /* Your page `page_key` now has these `count` rows (copied), in this
+       order; the next time it opens, it shows them. Call it whenever they
+       change, or from the page's on_open. Returns 1, or 0 if you have no page
+       called `page_key` (or a row is unusable; the log says which). */
+    int (*set_page_rows)(FH2Mod* mod, const char* page_key, const FH2PageRow* rows, uint32_t count);
 } FH2ModApi;
 
 /* Called on the game's UI thread when the player changes a row: keep it
@@ -341,6 +364,46 @@ struct FH2Setting {
        ignored. On an older platform it would come out as an On/Off row, so
        only add one when api_version >= 6. ---- */
     const char* url;               /* "http://..." or "https://..." */
+};
+
+/* Pages (API 8). Both callbacks run on the game's UI thread: keep them short,
+   and don't call into the game from them. */
+/* The page is about to be written to be shown: set its rows now if you
+   haven't kept them up to date. Opening MODS > Installed mods writes every
+   mod's pages, so it's called then too. */
+typedef void (*FH2PageOpenFn)(void* user, const char* page_key);
+/* The player pressed A on a row that has a key. */
+typedef void (*FH2PageSelectFn)(void* user, const char* page_key, const char* row_key);
+
+struct FH2Page {
+    uint32_t size;                 /* sizeof(FH2Page) */
+    const char* key;               /* unique within your mod: letters, digits and '_', like "List" */
+    const char* title;             /* the page's title, UTF-8: "Achievements" (shown in capitals) */
+    const char* label;             /* the row on your mod's page that opens it; NULL = the title */
+    const char* description;       /* that row's description; may be NULL */
+    /* A pause-menu tile that opens this page instead of what it did on Xbox:
+       "Achievements" (the tile on the pause menu and on its Storm Island
+       tab). One mod per tile. NULL for none. */
+    const char* tile;
+    FH2PageOpenFn on_open;         /* may be NULL */
+    FH2PageSelectFn on_select;     /* may be NULL: A then does nothing on the page */
+    void* user;                    /* passed to on_open and on_select */
+};
+
+#define FH2_ROW_NORMAL  0
+#define FH2_ROW_DIM     1          /* label and value in grey: locked, not available yet */
+#define FH2_ROW_HEADING 2          /* label in the game's orange: a heading over the rows after it */
+
+/* One row of a page (API 8). */
+struct FH2PageRow {
+    uint32_t size;                 /* sizeof(FH2PageRow) */
+    const char* key;               /* passed to on_select when A is pressed on it; NULL: A does nothing */
+    const char* label;             /* left, UTF-8: "Island Explorer" */
+    const char* value;             /* right: "12 / 50"; may be NULL */
+    const char* description;       /* beside the list while the row is selected; may be NULL */
+    const char* footer;            /* a line at the bottom of the description panel; may be NULL */
+    int style;                     /* FH2_ROW_NORMAL, FH2_ROW_DIM or FH2_ROW_HEADING */
+    int value_alert;               /* nonzero: the value in red */
 };
 
 /* What a mod exports. */

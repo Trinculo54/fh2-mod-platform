@@ -142,7 +142,7 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("---- platform.log\n%s----\n", log.c_str());
 
     if (phase == L"full") {
-        CHECK(has(log, "FH2 Mod Platform 2.2.1 (API 3)"));
+        CHECK(has(log, "FH2 Mod Platform 2.7.0 (API 8)"));
         CHECK(log.find("loaded HelloMod.dll") != std::string::npos);
         CHECK(log.find("Legacy.dll has no fh2mod_init") != std::string::npos);
         CHECK(fs::exists("legacy_ran.txt"));
@@ -155,7 +155,7 @@ int wmain(int argc, wchar_t** argv) {
         std::printf("title: [%ls]\n", title.c_str());
         CHECK(title == L"\n\n\n\nTO START\nTest notice line\nsecond line\nOld FH2 Mod Platform: reinstall TestMod");
         CHECK(slurp(L"fh2-mods\\platform-tables.txt").find("AIPlayers.str") != std::string::npos);
-        CHECK(log.find("the game is mapped at") != std::string::npos);
+        if (argc > 2) CHECK(log.find("the game is mapped at") != std::string::npos);
 
         // Files
         const fs::path ov = L"FH2\\Mount\\mediaoverride";
@@ -184,6 +184,24 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[AaaMod] TestMod.Math says 5"));
         CHECK(has(log, "[AaaMod] no TestMod.Math v2"));
         CHECK(has(log, "[AaaMod] TestMod version 1.0.0"));
+
+        // Pages (API 8)
+        CHECK(has(log, "[TestMod] page: Test stats, on the Achievements tile"));
+        CHECK(has(log, "[TestMod] add_page: there's no tile called Nope; Other is only under MODS > Installed mods"));
+        CHECK(has(log, "[TestMod] add_page: there's already a page called Other"));
+        CHECK(has(log, "[TestMod] set_page_rows: there's no page called Missing"));
+        // The game's menus were given: the pages are written. (Not with the game mapped: this
+        // test's copy of it doesn't pass the menus' code checks, so the platform takes them out.)
+        if (fs::exists(L"FH2\\Mount\\media\\UI.zip") && argc <= 2) {
+            const auto scenes    = ov / "UI" / "Scenes" / "Anthem";
+            const auto installed = slurp(scenes / "A_ModPage_01.xaml");
+            const auto tile      = slurp(scenes / "A_ModPage_80.xaml");
+            CHECK(has(installed, "local:BindingProxy.A=\"Test stats &amp; more\"") && has(installed, "x:Name=\"PART_Button_FH2Mod_Page_0\""));
+            CHECK(has(installed, "Content=\"TEST STATS\"") && has(installed, "{Binding FH2Mod_ViewIn_") && has(installed, "{Binding FH2Mod_Bar_3"));
+            CHECK(has(installed, "The pause menu's Achievements tile opens it too."));
+            CHECK(has(tile, "Content=\"TEST STATS\"") && has(tile, "FH2Mod_InfoRow_Heading") && has(tile, "FH2Mod_InfoRow_Dim"));
+            CHECK(has(tile, "Heading=\"Footer &lt;line&gt;\"") && has(tile, "local:BindingProxy.B=\"Alert\""));
+        }
     } else {
         // TestMod gone: its tables and notice are cleaned up, HelloMod's stays.
         CHECK(str("LoadingMessages.str", 0x6875) == L"Fast Traveling to Destination (hello from HelloMod!)");

@@ -5,6 +5,9 @@
 # winsqlite3.dll in Wine's system32 (Wine doesn't have one; build SQLite's
 # amalgamation as a DLL with that name):
 #   tests/run_platform_test.sh <EN.zip> <gamedbRC.slt> [forza_durango_release_final.exe]
+# With FH2_MEDIA set to your install's media folder, its UI.zip and stateflow.zip
+# are copied in too, and the menus the platform writes (the MODS tab, pages) are
+# checked.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 b=$root/build-test
@@ -18,6 +21,9 @@ cp "$1" "$dir/FH2/Mount/media/Stripped/StringTables/EN.zip"
 cp "$2" "$dir/FH2/Mount/media/Stripped/gamedbRC.slt"
 chmod u+w "$dir/FH2/Mount/media/Stripped/gamedbRC.slt"
 printf 'made by hand' > "$dir/FH2/Mount/mediaoverride/UI/handmade.xml"
+if [ -n "${FH2_MEDIA:-}" ]; then
+    cp "$FH2_MEDIA/UI.zip" "$FH2_MEDIA/stateflow.zip" "$dir/FH2/Mount/media/"
+fi
 exe=()
 [ -n "${3:-}" ] && exe=("$(winepath -w "$3" 2>/dev/null || echo "Z:${3//\//\\}")")
 cd "$dir"

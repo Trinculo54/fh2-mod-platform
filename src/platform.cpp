@@ -847,6 +847,8 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.set_setting       = settings_set;
                 g_api.get_slider        = settings_get_slider;
                 g_api.set_slider        = settings_set_slider;
+                g_api.add_page          = pages_add;
+                g_api.set_page_rows     = pages_set_rows;
                 return load_mods(nullptr);
             },
             nullptr, 0, nullptr))
