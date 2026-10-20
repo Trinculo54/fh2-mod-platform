@@ -412,7 +412,10 @@ uint8_t* g_view_in_desc[kMaxViews]   = {};
 uint8_t* g_view_back_desc[kMaxViews] = {};
 uint8_t* g_bar_desc[kViewKinds]      = {};
 int view_kind(int k) { return k >= 0 && k < kMaxViews ? g_view_kind[k].load() : kViewList; }
-void** __cdecl view_get(void** out, void* desc, void*) {
+void** __cdecl view_get(void** out, void* desc, void* obj) {
+    // Only Installed mods binds these, and they're read as it loads: so switch_view can notify
+    // from the first press of A, before the selection has moved and FH2Mod_Selected been set.
+    if (obj) g_view_obj = obj;
     const int now = g_view.load();
     const bool back = g_view_back.load();
     bool v = false;
