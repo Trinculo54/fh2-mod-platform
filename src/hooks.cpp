@@ -314,14 +314,8 @@ FILETIME process_start() {
 // "AZIMUTH: winmm proxy initialized". Before that, it writes nothing this
 // launch. Returns "" while it's still to come, or what settled it.
 std::string extra_options_state() {
-    HMODULE w = GetModuleHandleW(L"winmm.dll");
-    if (!w) return "no Extra Options";
-    wchar_t path[MAX_PATH], sys[MAX_PATH];
-    const DWORD n = GetModuleFileNameW(w, path, MAX_PATH);
-    const UINT s  = GetSystemDirectoryW(sys, MAX_PATH);
-    if (!n || n >= MAX_PATH) return "no Extra Options";
-    const fs::path dir = fs::path{path}.parent_path();
-    if (s && s < MAX_PATH && lstrcmpiW(dir.c_str(), sys) == 0) return "no Extra Options";
+    const fs::path dir = extra_options_dir();
+    if (dir.empty()) return "no Extra Options";
     const fs::path log = dir / L"FH2_ExtraOptions.log";
     HANDLE f = CreateFileW(log.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -347,6 +341,23 @@ std::string extra_options_state() {
 }
 
 bool code_ready() { return g_code_ready.load(std::memory_order_acquire); }
+
+// Extra Options' winmm.dll is next to azimuth.exe, but the winmm.dll loaded isn't it: Wine and
+// Proton use their own unless WINEDLLOVERRIDES="winmm=n,b" says otherwise. (Windows always takes
+// the one in the program's folder.) The file is recognised by its export's name in it.
+bool extra_options_left_out_by_wine() {
+    HMODULE n = GetModuleHandleW(L"ntdll.dll");
+    if (!n || !GetProcAddress(n, "wine_get_version") || !extra_options_dir().empty()) return false;
+    HANDLE f = CreateFileW((azimuth_dir() / L"winmm.dll").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    std::string data(4 * 1024 * 1024, '\0');
+    DWORD got = 0;
+    if (!ReadFile(f, data.data(), static_cast<DWORD>(data.size()), &got, nullptr)) got = 0;
+    CloseHandle(f);
+    data.resize(got);
+    return data.find(std::string("Fh2TweaksStatus", 16)) != std::string::npos;
+}
 
 void open_disk_image();
 bool code_sections_executable(std::string* first_bad);
@@ -387,6 +398,10 @@ void watch_for_code() {
             }
             Sleep(50);
         }
+        if (why == "no Extra Options" && extra_options_left_out_by_wine())
+            plog("Extra Options isn't running: its winmm.dll is next to azimuth.exe, but Wine is using its own "
+                 "winmm.dll instead. Set WINEDLLOVERRIDES=\"winmm=n,b\" for Azimuth (the FH2 Mod Platform's "
+                 "docs/linux.md); until then, text, file and database changes don't reach the game");
         wait_for_executable_code();
         plog("hooks: game code is ready (" + why + ")");
         g_code_ready.store(true, std::memory_order_release);
@@ -429,6 +444,16 @@ std::vector<std::unique_ptr<Site>> g_sites;
 bool g_minhook = false;
 
 } // namespace
+
+fs::path extra_options_dir() {
+    HMODULE w = GetModuleHandleW(L"winmm.dll");
+    if (!w || !GetProcAddress(w, "Fh2TweaksStatus")) return {};
+    wchar_t path[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(w, path, MAX_PATH);
+    if (!n || n >= MAX_PATH) return {};
+    return fs::path{path}.parent_path();
+}
+
 } // namespace fh2platform
 
 struct FH2Hook {

@@ -14,7 +14,7 @@ WINEDLLOVERRIDES="winmm=n,b"
 - Lutris, Heroic or Bottles: add `winmm` as a DLL override, native then builtin, in the game's settings (or set the environment variable above there).
 - Wine on its own: start Azimuth with `WINEDLLOVERRIDES="winmm=n,b" wine azimuth.exe`, or add `winmm` (native, builtin) under Libraries in `winecfg`.
 
-Without it Extra Options doesn't run. The platform's text, file and database changes reach the game through Extra Options' `mediaoverride` folder, so none of them show up, and the platform also waits 20 seconds for Extra Options before mods can hook the game.
+Without it Extra Options doesn't run. The platform's text, file and database changes reach the game through Extra Options' `mediaoverride` folder, so none of them show up. From 2.7.1, `fh2-mods\platform.log` says so ("Extra Options isn't running: its winmm.dll is next to azimuth.exe, but Wine is using its own winmm.dll instead"); older versions said nothing, and waited 20 seconds for Extra Options before mods could hook the game.
 
 **2. The platform loads as it is.** With Wine 9.0, the `d3dcompiler_47.dll` next to `azimuth.exe` is used without an override. If `fh2-mods\platform.log` never appears, your Wine or Proton build is using its own copy: add it to the override, `WINEDLLOVERRIDES="winmm,d3dcompiler_47=n,b"`.
 
@@ -33,7 +33,7 @@ Without it Extra Options doesn't run. The platform's text, file and database cha
 ## When something doesn't work
 
 - **There's no `fh2-mods\platform.log`.** The platform didn't load: add `d3dcompiler_47` to the override (step 2).
-- **`platform.log` is there, but there's no MODS tile and no changed text.** Extra Options isn't running: check the `winmm` override (step 1). `FH2_ExtraOptions.log` next to `azimuth.exe` is rewritten every time Extra Options starts, so an old date on it means it didn't.
+- **`platform.log` is there, but there's no MODS tile and no changed text.** Extra Options isn't running: check the `winmm` override (step 1). From 2.7.1 `platform.log` says "Extra Options isn't running" when Wine is the reason. `FH2_ExtraOptions.log` next to `azimuth.exe` is rewritten every time Extra Options starts, so an old date on it means it didn't.
 - **`platform.log` says database changes are off.** The platform is older than 2.7.1 (step 3).
 - Crash reports go to `fh2-mods\crashes` as on Windows. Paths in logs start with `Z:\`, which is your Linux root, `/`.
 
@@ -41,6 +41,6 @@ Without it Extra Options doesn't run. The platform's text, file and database cha
 
 - **Only use DLLs Wine has.** `winsqlite3.dll` isn't one: build SQLite into your mod, as the platform does (`third_party/sqlite`), or use the platform's database functions. Check what you load with `llvm-objdump -p` and against the DLLs in your Wine install.
 - **Wine ignores a proxy DLL named after one of its own** (`winmm.dll`, `dxgi.dll`, `version.dll`, `winhttp.dll` and many more) unless the player sets an override. `d3dcompiler_47.dll` is used as it is with Wine 9.0.
-- **When Wine uses its own copy, it still reports the path of the file in the game folder** (`GetModuleFileName`, `GetModuleHandleEx` with that path). To tell whether a proxy is really loaded, look for one of its exports, not at its path: Extra Options' is `Fh2TweaksStatus`.
+- **When Wine uses its own copy, it still reports the path of the file in the game folder** (`GetModuleFileName`, `GetModuleHandleEx` with that path). To tell whether a proxy is really loaded, look for one of its exports, not at its path: Extra Options' is `Fh2TweaksStatus`, which is how the platform recognises it from 2.7.1.
 - **Other things that differ:** most of WinRT (`Windows.Media.Control` and the like) isn't there; WASAPI loopback capture isn't supported; `SendInput` only reaches Wine's own windows; `ShellExecute` on a URL opens the Linux browser; `CryptProtectData` works, but its protection is weak.
 - **Test in a fresh prefix**, such as `WINEPREFIX=$(mktemp -d) wineboot -i`. A DLL you added to your own prefix while testing hides the problem from you: the platform's tests once had a `winsqlite3.dll` put in theirs, which is how this one went unnoticed.

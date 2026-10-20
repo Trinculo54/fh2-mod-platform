@@ -1557,15 +1557,10 @@ std::string with_v(const std::string& version) { return version.empty() ? "" : "
 
 
 
-// Extra Options' log starts with "<name> <version> - ..."; empty when it isn't loaded from the
-// game's folder.
+// Extra Options' log starts with "<name> <version> - ..."; empty when Extra Options isn't loaded.
 std::string extra_options_line() {
-    HMODULE w = GetModuleHandleW(L"winmm.dll");
-    wchar_t path[MAX_PATH], sys[MAX_PATH];
-    if (!w || !GetModuleFileNameW(w, path, MAX_PATH)) return "";
-    const UINT s = GetSystemDirectoryW(sys, MAX_PATH);
-    std::filesystem::path dir = std::filesystem::path{path}.parent_path();
-    if (s && s < MAX_PATH && lstrcmpiW(dir.c_str(), sys) == 0) return "";
+    const std::filesystem::path dir = extra_options_dir();
+    if (dir.empty()) return "";
     std::string line = "Installed";
     if (FILE* f = _wfopen((dir / L"FH2_ExtraOptions.log").c_str(), L"rb")) {
         char b[256] = {};

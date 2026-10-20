@@ -50,6 +50,11 @@ void remove_leftover_file(const char* media_path);
 void apply_database(const std::vector<FH2Mod*>& mods);
 
 // hooks.cpp: the hook API, and what crash reports say about hooks.
+// The folder of Extra Options' winmm.dll if that's the winmm.dll loaded, else empty. Extra
+// Options is recognised by its Fh2TweaksStatus export, not by where winmm.dll is: Wine and
+// Proton load their own winmm.dll instead of the one beside azimuth.exe unless told otherwise
+// (WINEDLLOVERRIDES="winmm=n,b"), and still report that file's path for it.
+std::filesystem::path extra_options_dir();
 void fill_hook_api(FH2ModApi& api);
 bool hook_at(const void* p, char* out, std::size_t n); // p is in a hook's trampoline or stub
 int hook_count();
