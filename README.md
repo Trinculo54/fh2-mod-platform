@@ -18,6 +18,8 @@ Everything the platform does is logged to `fh2-mods\platform.log`: which mods it
 
 **Racing wheels ([fh2wheel](https://github.com/iamAzoDx/fh2wheel)).** fh2wheel ships its own `D3DCOMPILER_47.dll` too, a small loader that only loads `fh2wheel.dll`, and only one of the two files can sit next to `azimuth.exe`. From platform 2.6.1 the platform loads `fh2wheel.dll` itself when it finds it there, so to use both: install fh2wheel as its instructions say, then install (or reinstall) a platform mod, so that the platform's `d3dcompiler_47.dll` is the one in place. Keep `fh2wheel.dll` and `fh2wheel-config.exe` next to `azimuth.exe`. fh2wheel then shows up on the MODS tab, `platform.log` says it loaded it, and its settings stay in `fh2wheel-config.exe`. If fh2wheel's `D3DCOMPILER_47.dll` ends up in place instead, the wheel works but none of the platform's mods load.
 
+**On Linux (Wine or Proton).** The platform works as it is, but Extra Options needs a DLL override (`WINEDLLOVERRIDES="winmm=n,b"`), database changes need platform 2.7.1 or newer, and a few mods have limits there. All of it is in [docs/linux.md](docs/linux.md).
+
 To remove the platform, delete `d3dcompiler_47.dll` and the `fh2-mods` folder. That removes every mod built on it.
 
 ## For mod makers
