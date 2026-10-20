@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 # Bump VERSION before tagging a release (the tag build checks they match).
-project(fh2_mod_platform VERSION 2.7.0 LANGUAGES C CXX RC)
+project(fh2_mod_platform VERSION 2.7.1 LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -42,9 +42,17 @@ set(_minhook third_party/minhook/src)
 set(_minhook_src ${_minhook}/hook.c ${_minhook}/buffer.c ${_minhook}/trampoline.c ${_minhook}/hde/hde64.c)
 set_source_files_properties(${_minhook_src} PROPERTIES COMPILE_OPTIONS "$<$<NOT:$<BOOL:${MSVC}>>:-w>")
 
+# SQLite (public domain, third_party/sqlite/VERSION.txt), built in for the game
+# database changes. Windows has its own (winsqlite3.dll), but Wine and Proton
+# don't, so relying on it switched database changes off for Linux players.
+set(_sqlite_src third_party/sqlite/sqlite3.c)
+set_source_files_properties(${_sqlite_src} PROPERTIES
+    COMPILE_OPTIONS "$<IF:$<BOOL:${MSVC}>,/W0;/O1,-w;-Os>"
+    COMPILE_DEFINITIONS "SQLITE_OMIT_LOAD_EXTENSION;SQLITE_DEFAULT_MEMSTATUS=0")
+
 add_library(fh2mod_platform SHARED src/platform.cpp src/strings.cpp src/updates.cpp src/files.cpp
-            src/database.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/version.rc ${_minhook_src})
-target_include_directories(fh2mod_platform PRIVATE third_party/minhook/include ${_minhook})
+            src/database.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
+target_include_directories(fh2mod_platform PRIVATE third_party/minhook/include ${_minhook} third_party/sqlite)
 if(NOT MSVC)
     # InterlockedCompareExchange128, for rewriting call sites atomically.
     set_source_files_properties(src/hooks.cpp PROPERTIES COMPILE_OPTIONS -mcx16)
@@ -76,8 +84,8 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 
     option(FH2MOD_TESTS "Build the offline test" OFF)
     if(FH2MOD_TESTS)
-        add_executable(platform_test tests/platform_test.cpp src/strings.cpp src/updates.cpp)
-        target_include_directories(platform_test PRIVATE include src)
+        add_executable(platform_test tests/platform_test.cpp src/strings.cpp src/updates.cpp ${_sqlite_src})
+        target_include_directories(platform_test PRIVATE include src third_party/sqlite)
         target_compile_definitions(platform_test PRIVATE UNICODE _UNICODE)
         target_link_options(platform_test PRIVATE -municode -static -Wl,--image-base=0x10000000)
         add_library(test_mod SHARED tests/test_mod.cpp)

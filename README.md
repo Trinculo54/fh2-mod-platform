@@ -18,6 +18,8 @@ Everything the platform does is logged to `fh2-mods\platform.log`: which mods it
 
 **Racing wheels ([fh2wheel](https://github.com/iamAzoDx/fh2wheel)).** fh2wheel ships its own `D3DCOMPILER_47.dll` too, a small loader that only loads `fh2wheel.dll`, and only one of the two files can sit next to `azimuth.exe`. From platform 2.6.1 the platform loads `fh2wheel.dll` itself when it finds it there, so to use both: install fh2wheel as its instructions say, then install (or reinstall) a platform mod, so that the platform's `d3dcompiler_47.dll` is the one in place. Keep `fh2wheel.dll` and `fh2wheel-config.exe` next to `azimuth.exe`. fh2wheel then shows up on the MODS tab, `platform.log` says it loaded it, and its settings stay in `fh2wheel-config.exe`. If fh2wheel's `D3DCOMPILER_47.dll` ends up in place instead, the wheel works but none of the platform's mods load.
 
+**On Linux (Wine or Proton).** The platform works as it is, but Extra Options needs a DLL override (`WINEDLLOVERRIDES="winmm=n,b"`), database changes need platform 2.7.1 or newer, and a few mods have limits there. All of it is in [docs/linux.md](docs/linux.md).
+
 To remove the platform, delete `d3dcompiler_47.dll` and the `fh2-mods` folder. That removes every mod built on it.
 
 ## For mod makers
@@ -70,11 +72,11 @@ The platform is built with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/r
 
 A mod usually adds this repo as a git submodule and builds the platform alongside itself, so its release zip always carries a matching `d3dcompiler_47.dll`. [`docs/writing-a-mod.md`](docs/writing-a-mod.md) shows the CMake for that.
 
-Configuring with `-DFH2MOD_TESTS=ON` builds an offline test, which runs under Wine as a stand-in for `azimuth.exe` with the example mod, two test mods and an old-style mod in `fh2-mods`. It needs `EN.zip` and `gamedbRC.slt` from your own install, plus a SQLite DLL named `winsqlite3.dll` in Wine's `system32`, since Wine doesn't come with one: `tests/run_platform_test.sh <EN.zip> <gamedbRC.slt> [forza_durango_release_final.exe]`. The hook test needs only the game exe, and runs three launches (no Extra Options, Extra Options finishing late, and a crash inside a hook); it covers instruction hooks and byte patches too, and `PreciseTest.dll` checks instruction hooks inside the running game: `tests/run_hook_test.sh <forza_durango_release_final.exe>`.
+Configuring with `-DFH2MOD_TESTS=ON` builds an offline test, which runs under Wine as a stand-in for `azimuth.exe` with the example mod, two test mods and an old-style mod in `fh2-mods`. It needs `EN.zip` and `gamedbRC.slt` from your own install: `tests/run_platform_test.sh <EN.zip> <gamedbRC.slt> [forza_durango_release_final.exe]`. The hook test needs only the game exe, and runs three launches (no Extra Options, Extra Options finishing late, and a crash inside a hook); it covers instruction hooks and byte patches too, and `PreciseTest.dll` checks instruction hooks inside the running game: `tests/run_hook_test.sh <forza_durango_release_final.exe>`.
 
 ## License
 
-Released under the [MIT License](LICENSE), so you can build anything on it, open source or not. The platform includes [MinHook](https://github.com/TsudaKageyu/minhook) (in `third_party/minhook`), which is under the BSD 2-Clause license; `dist/LICENSE-MinHook.txt` is its notice, to ship alongside `d3dcompiler_47.dll`.
+Released under the [MIT License](LICENSE), so you can build anything on it, open source or not. The platform includes [MinHook](https://github.com/TsudaKageyu/minhook) (in `third_party/minhook`), which is under the BSD 2-Clause license; `dist/LICENSE-MinHook.txt` is its notice, to ship alongside `d3dcompiler_47.dll`. It also includes [SQLite](https://sqlite.org) (in `third_party/sqlite`), which is in the public domain.
 
 ## Disclaimer
 

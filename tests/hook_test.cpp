@@ -5,8 +5,11 @@
 //   azimuth.exe <phase> <path to forza_durango_release_final.exe>
 // phase "plain": no Extra Options. "eo": a stand-in winmm.dll is loaded and
 // FH2_ExtraOptions.log only says it's done 3 seconds after the game is
-// mapped (an old log from before this launch must not count). "crash": a
-// hooked function crashes, and the report has to list the hooks.
+// mapped (an old log from before this launch must not count). "wine-builtin":
+// the stand-in is next to azimuth.exe, but Wine loads its own winmm.dll (no
+// override), as for a Linux player who hasn't set one: no waiting for Extra
+// Options, and the log says how to fix it. "crash": a hooked function
+// crashes, and the report has to list the hooks.
 #include <windows.h>
 
 #include <cstdio>
@@ -80,7 +83,7 @@ static LONG WINAPI after_crash(EXCEPTION_POINTERS*) {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc < 3) {
-        std::printf("usage: azimuth.exe plain|eo|crash <forza_durango_release_final.exe>\n");
+        std::printf("usage: azimuth.exe plain|eo|wine-builtin|crash <forza_durango_release_final.exe>\n");
         return 2;
     }
     const std::wstring phase = argv[1];
@@ -88,7 +91,11 @@ int wmain(int argc, wchar_t** argv) {
         std::ofstream{"crash.txt"} << "1";
         SetUnhandledExceptionFilter(after_crash);
     }
-    if (phase == L"eo") CHECK(LoadLibraryW(L".\\winmm.dll") != nullptr); // Extra Options' proxy
+    if (phase == L"eo") CHECK(GetProcAddress(LoadLibraryW(L".\\winmm.dll"), "Fh2TweaksStatus")); // Extra Options' proxy
+    if (phase == L"wine-builtin") {
+        HMODULE w = LoadLibraryW(L".\\winmm.dll"); // Wine's own, though it says it's this one
+        CHECK(w && !GetProcAddress(w, "Fh2TweaksStatus"));
+    }
     CHECK(LoadLibraryW(L"d3dcompiler_47.dll") != nullptr);
     Sleep(500);
     CHECK(map_game(argv[2]) != nullptr); // "press Play"
@@ -110,7 +117,7 @@ int wmain(int argc, wchar_t** argv) {
     Sleep(200);
     log = slurp(L"fh2-mods\\platform.log");
     std::printf("---- platform.log\n%s----\n", log.c_str());
-    CHECK(has(log, "FH2 Mod Platform 2.7.0 (API 8)"));
+    CHECK(has(log, "FH2 Mod Platform 2.7.1 (API 8)"));
     CHECK(has(log, "(ivictim mov)") && has(log, "(mark b) (shared with HookA, HookB)"));
     CHECK(has(log, "(prolog): it's in the function's prolog"));
     CHECK(has(log, "(mid-instruction): it isn't the start of an instruction"));
@@ -128,13 +135,17 @@ int wmain(int argc, wchar_t** argv) {
     CHECK(has(log, "[HookB] can't switch another mod's hook"));
     CHECK(has(log, "[HookA] can't hook call HookMod.dll+0x") && has(log, "(not a call): there's no CALL or JMP rel32 there"));
     CHECK(has(log, "hooks: checking game code against"));
+    const auto at = log.find("wait_for_code took ");
+    CHECK(at != std::string::npos);
+    const unsigned long waited = at == std::string::npos ? 0 : std::stoul(log.substr(at + 19));
     if (phase == L"eo") {
         CHECK(has(log, "hooks: game code is ready (Extra Options has applied its patches)"));
-        const auto at = log.find("wait_for_code took ");
-        CHECK(at != std::string::npos && std::stoul(log.substr(at + 19)) >= 2000);
+        CHECK(waited >= 2000);
     } else {
         CHECK(has(log, "hooks: game code is ready (no Extra Options)"));
+        CHECK(waited < 2000);
     }
+    CHECK(has(log, "WINEDLLOVERRIDES=\"winmm=n,b\"") == (phase == L"wine-builtin"));
     std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
     std::fflush(stdout);
     TerminateProcess(GetCurrentProcess(), fails);

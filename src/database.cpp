@@ -4,9 +4,9 @@
 // to mediaoverride\Stripped\gamedbRC.slt, which Extra Options' mount makes
 // the game read instead.
 //
-// SQLite comes from Windows itself (System32\winsqlite3.dll, in every
-// Windows 10 and 11), loaded the first time it's needed, so the platform
-// doesn't carry a copy.
+// SQLite is built in (third_party/sqlite). Up to 2.7.0 the platform used
+// Windows' own copy, System32\winsqlite3.dll, which Wine and Proton don't
+// have, so Linux players got no database changes at all.
 //
 // The copy is rebuilt only when its inputs change: fh2-mods\platform-db.txt
 // keeps a hash of the original database's size and date and every mod's
@@ -15,6 +15,8 @@
 #include "updates.hpp"
 
 #include <windows.h>
+
+#include "sqlite3.h"
 
 #include <cstdio>
 #include <fstream>
@@ -25,34 +27,6 @@ namespace fh2platform {
 namespace fs = std::filesystem;
 
 namespace {
-
-struct Sqlite {
-    int (*open_v2)(const char*, void**, int, const char*) = nullptr;
-    int (*exec)(void*, const char*, int (*)(void*, int, char**, char**), void*, char**) = nullptr;
-    int (*close)(void*) = nullptr;
-    void (*free_)(void*) = nullptr;
-    int (*total_changes)(void*) = nullptr;
-    const char* (*errmsg)(void*) = nullptr;
-    bool ok = false;
-};
-
-const Sqlite& sqlite() {
-    static Sqlite s;
-    static std::once_flag once;
-    std::call_once(once, [] {
-        HMODULE h = LoadLibraryExW(L"winsqlite3.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-        if (!h) return;
-        auto get = [&](auto& fn, const char* name) {
-            fn = reinterpret_cast<std::remove_reference_t<decltype(fn)>>(
-                reinterpret_cast<void*>(GetProcAddress(h, name)));
-            return fn != nullptr;
-        };
-        s.ok = get(s.open_v2, "sqlite3_open_v2") && get(s.exec, "sqlite3_exec") && get(s.close, "sqlite3_close") &&
-               get(s.free_, "sqlite3_free") && get(s.total_changes, "sqlite3_total_changes") &&
-               get(s.errmsg, "sqlite3_errmsg");
-    });
-    return s;
-}
 
 std::mutex g_db_mu;
 
@@ -92,9 +66,6 @@ struct Fnv {
     }
     void add(const std::string& s) { add(s.data(), s.size() + 1); }
 };
-
-constexpr int kOpenReadWrite = 0x00000002;
-constexpr int kOpenFullMutex = 0x00010000;
 
 } // namespace
 
@@ -142,11 +113,6 @@ void apply_database(const std::vector<FH2Mod*>& mods) {
         return;
     }
 
-    const Sqlite& sq = sqlite();
-    if (!sq.ok) {
-        plog("database: Windows' SQLite (winsqlite3.dll) isn't available, so database changes are off");
-        return;
-    }
     fs::create_directories(target.parent_path(), ec);
     auto tmp = target;
     tmp += L".platform-tmp";
@@ -155,39 +121,39 @@ void apply_database(const std::vector<FH2Mod*>& mods) {
         return;
     }
     SetFileAttributesW(tmp.c_str(), FILE_ATTRIBUTE_NORMAL);
-    void* db = nullptr;
-    if (sq.open_v2(narrow(tmp.wstring()).c_str(), &db, kOpenReadWrite | kOpenFullMutex, nullptr) != 0) {
-        plog(std::string("database: couldn't open the copy: ") + (db ? sq.errmsg(db) : "out of memory"));
-        if (db) sq.close(db);
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(narrow(tmp.wstring()).c_str(), &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nullptr) != SQLITE_OK) {
+        plog(std::string("database: couldn't open the copy: ") + (db ? sqlite3_errmsg(db) : "out of memory"));
+        if (db) sqlite3_close(db);
         DeleteFileW(tmp.c_str());
         return;
     }
-    sq.exec(db, "PRAGMA journal_mode=MEMORY", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "PRAGMA journal_mode=MEMORY", nullptr, nullptr, nullptr);
     int applied = 0;
     std::vector<std::string> results;
     for (auto* m : with_sql) {
         char* err      = nullptr;
-        const int before = sq.total_changes(db);
-        int rc         = sq.exec(db, "BEGIN", nullptr, nullptr, &err);
-        for (std::size_t i = 0; rc == 0 && i < m->sql.size(); ++i) rc = sq.exec(db, m->sql[i].c_str(), nullptr, nullptr, &err);
-        if (rc == 0) rc = sq.exec(db, "COMMIT", nullptr, nullptr, &err);
-        if (rc == 0) {
+        const int before = sqlite3_total_changes(db);
+        int rc         = sqlite3_exec(db, "BEGIN", nullptr, nullptr, &err);
+        for (std::size_t i = 0; rc == SQLITE_OK && i < m->sql.size(); ++i) rc = sqlite3_exec(db, m->sql[i].c_str(), nullptr, nullptr, &err);
+        if (rc == SQLITE_OK) rc = sqlite3_exec(db, "COMMIT", nullptr, nullptr, &err);
+        if (rc == SQLITE_OK) {
             ++applied;
-            results.push_back(m->name + "\t" + std::to_string(sq.total_changes(db) - before) + " row(s) changed");
+            results.push_back(m->name + "\t" + std::to_string(sqlite3_total_changes(db) - before) + " row(s) changed");
         } else {
-            std::string why = err ? err : sq.errmsg(db);
+            std::string why = err ? err : sqlite3_errmsg(db);
             for (auto& c : why)
                 if (c == '\n' || c == '\r' || c == '\t') c = ' ';
             results.push_back(m->name + "\tFAILED, so none of its changes were made: " + why);
-            sq.exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+            sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
         }
         {
             const auto& r = results.back();
             log_line(r.substr(0, r.find('\t')), "database: " + r.substr(r.find('\t') + 1));
         }
-        if (err) sq.free_(err);
+        if (err) sqlite3_free(err);
     }
-    sq.close(db);
+    sqlite3_close(db);
 
     if (!applied) {
         DeleteFileW(tmp.c_str());

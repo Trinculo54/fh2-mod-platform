@@ -412,7 +412,10 @@ uint8_t* g_view_in_desc[kMaxViews]   = {};
 uint8_t* g_view_back_desc[kMaxViews] = {};
 uint8_t* g_bar_desc[kViewKinds]      = {};
 int view_kind(int k) { return k >= 0 && k < kMaxViews ? g_view_kind[k].load() : kViewList; }
-void** __cdecl view_get(void** out, void* desc, void*) {
+void** __cdecl view_get(void** out, void* desc, void* obj) {
+    // Only Installed mods binds these, and they're read as it loads: so switch_view can notify
+    // from the first press of A, before the selection has moved and FH2Mod_Selected been set.
+    if (obj) g_view_obj = obj;
     const int now = g_view.load();
     const bool back = g_view_back.load();
     bool v = false;
@@ -1557,15 +1560,10 @@ std::string with_v(const std::string& version) { return version.empty() ? "" : "
 
 
 
-// Extra Options' log starts with "<name> <version> - ..."; empty when it isn't loaded from the
-// game's folder.
+// Extra Options' log starts with "<name> <version> - ..."; empty when Extra Options isn't loaded.
 std::string extra_options_line() {
-    HMODULE w = GetModuleHandleW(L"winmm.dll");
-    wchar_t path[MAX_PATH], sys[MAX_PATH];
-    if (!w || !GetModuleFileNameW(w, path, MAX_PATH)) return "";
-    const UINT s = GetSystemDirectoryW(sys, MAX_PATH);
-    std::filesystem::path dir = std::filesystem::path{path}.parent_path();
-    if (s && s < MAX_PATH && lstrcmpiW(dir.c_str(), sys) == 0) return "";
+    const std::filesystem::path dir = extra_options_dir();
+    if (dir.empty()) return "";
     std::string line = "Installed";
     if (FILE* f = _wfopen((dir / L"FH2_ExtraOptions.log").c_str(), L"rb")) {
         char b[256] = {};
