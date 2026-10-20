@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Runs the platform test under Wine. Needs a build with -DFH2MOD_TESTS=ON in
-# build-test/, files from your own install (EN.zip from
-# media\Stripped\StringTables and media\Stripped\gamedbRC.slt), and a
-# winsqlite3.dll in Wine's system32 (Wine doesn't have one; build SQLite's
-# amalgamation as a DLL with that name):
+# build-test/ and files from your own install (EN.zip from
+# media\Stripped\StringTables and media\Stripped\gamedbRC.slt). SQLite is built
+# into the platform and the test, so a fresh Wine prefix is all it needs:
 #   tests/run_platform_test.sh <EN.zip> <gamedbRC.slt> [forza_durango_release_final.exe]
 # With FH2_MEDIA set to your install's media folder, its UI.zip and stateflow.zip
 # are copied in too, and the menus the platform writes (the MODS tab, pages) are

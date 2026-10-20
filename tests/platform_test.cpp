@@ -11,6 +11,8 @@
 
 #include <windows.h>
 
+#include "sqlite3.h"
+
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -49,24 +51,16 @@ static bool ai_has(const wchar_t* name) {
 
 // AIPlayers.XP of `id` in the database override, or -1.
 static int db_xp(int id) {
-    HMODULE h = LoadLibraryW(L"winsqlite3.dll");
-    if (!h) return -2;
-    auto open  = reinterpret_cast<int (*)(const char*, void**, int, const char*)>(GetProcAddress(h, "sqlite3_open_v2"));
-    auto prep  = reinterpret_cast<int (*)(void*, const char*, int, void**, const char**)>(GetProcAddress(h, "sqlite3_prepare_v2"));
-    auto step  = reinterpret_cast<int (*)(void*)>(GetProcAddress(h, "sqlite3_step"));
-    auto col   = reinterpret_cast<int (*)(void*, int)>(GetProcAddress(h, "sqlite3_column_int"));
-    auto fin   = reinterpret_cast<int (*)(void*)>(GetProcAddress(h, "sqlite3_finalize"));
-    auto close = reinterpret_cast<int (*)(void*)>(GetProcAddress(h, "sqlite3_close"));
     if (!fs::exists("FH2\\Mount\\mediaoverride\\Stripped\\gamedbRC.slt")) return -1;
-    void* db = nullptr;
-    void* st = nullptr;
-    int xp   = -1;
-    if (open("FH2\\Mount\\mediaoverride\\Stripped\\gamedbRC.slt", &db, 1, nullptr) == 0 &&
-        prep(db, ("SELECT XP FROM AIPlayers WHERE Id = " + std::to_string(id)).c_str(), -1, &st, nullptr) == 0 &&
-        step(st) == 100)
-        xp = col(st, 0);
-    if (st) fin(st);
-    close(db);
+    sqlite3* db = nullptr;
+    sqlite3_stmt* st = nullptr;
+    int xp = -1;
+    if (sqlite3_open_v2("FH2\\Mount\\mediaoverride\\Stripped\\gamedbRC.slt", &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK &&
+        sqlite3_prepare_v2(db, ("SELECT XP FROM AIPlayers WHERE Id = " + std::to_string(id)).c_str(), -1, &st, nullptr) == SQLITE_OK &&
+        sqlite3_step(st) == SQLITE_ROW)
+        xp = sqlite3_column_int(st, 0);
+    if (st) sqlite3_finalize(st);
+    sqlite3_close(db);
     return xp;
 }
 
@@ -142,7 +136,7 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("---- platform.log\n%s----\n", log.c_str());
 
     if (phase == L"full") {
-        CHECK(has(log, "FH2 Mod Platform 2.7.0 (API 8)"));
+        CHECK(has(log, "FH2 Mod Platform 2.7.1 (API 8)"));
         CHECK(log.find("loaded HelloMod.dll") != std::string::npos);
         CHECK(log.find("Legacy.dll has no fh2mod_init") != std::string::npos);
         CHECK(fs::exists("legacy_ran.txt"));

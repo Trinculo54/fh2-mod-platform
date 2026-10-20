@@ -70,11 +70,11 @@ The platform is built with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/r
 
 A mod usually adds this repo as a git submodule and builds the platform alongside itself, so its release zip always carries a matching `d3dcompiler_47.dll`. [`docs/writing-a-mod.md`](docs/writing-a-mod.md) shows the CMake for that.
 
-Configuring with `-DFH2MOD_TESTS=ON` builds an offline test, which runs under Wine as a stand-in for `azimuth.exe` with the example mod, two test mods and an old-style mod in `fh2-mods`. It needs `EN.zip` and `gamedbRC.slt` from your own install, plus a SQLite DLL named `winsqlite3.dll` in Wine's `system32`, since Wine doesn't come with one: `tests/run_platform_test.sh <EN.zip> <gamedbRC.slt> [forza_durango_release_final.exe]`. The hook test needs only the game exe, and runs three launches (no Extra Options, Extra Options finishing late, and a crash inside a hook); it covers instruction hooks and byte patches too, and `PreciseTest.dll` checks instruction hooks inside the running game: `tests/run_hook_test.sh <forza_durango_release_final.exe>`.
+Configuring with `-DFH2MOD_TESTS=ON` builds an offline test, which runs under Wine as a stand-in for `azimuth.exe` with the example mod, two test mods and an old-style mod in `fh2-mods`. It needs `EN.zip` and `gamedbRC.slt` from your own install: `tests/run_platform_test.sh <EN.zip> <gamedbRC.slt> [forza_durango_release_final.exe]`. The hook test needs only the game exe, and runs three launches (no Extra Options, Extra Options finishing late, and a crash inside a hook); it covers instruction hooks and byte patches too, and `PreciseTest.dll` checks instruction hooks inside the running game: `tests/run_hook_test.sh <forza_durango_release_final.exe>`.
 
 ## License
 
-Released under the [MIT License](LICENSE), so you can build anything on it, open source or not. The platform includes [MinHook](https://github.com/TsudaKageyu/minhook) (in `third_party/minhook`), which is under the BSD 2-Clause license; `dist/LICENSE-MinHook.txt` is its notice, to ship alongside `d3dcompiler_47.dll`.
+Released under the [MIT License](LICENSE), so you can build anything on it, open source or not. The platform includes [MinHook](https://github.com/TsudaKageyu/minhook) (in `third_party/minhook`), which is under the BSD 2-Clause license; `dist/LICENSE-MinHook.txt` is its notice, to ship alongside `d3dcompiler_47.dll`. It also includes [SQLite](https://sqlite.org) (in `third_party/sqlite`), which is in the public domain.
 
 ## Disclaimer
 

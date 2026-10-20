@@ -142,7 +142,7 @@ Building the copy takes a moment, so it's only redone when something changed. `f
 
 Statements added in `fh2mod_init` are applied for you. For later ones, call `apply_database` from your own thread. Like string tables, the database is read once at startup, so later changes show from the next launch.
 
-SQLite comes from Windows itself (`winsqlite3.dll`, part of Windows 10 and 11). To look around the database, open a copy of it in any SQLite browser.
+The platform has SQLite built in (3.53.4 from platform 2.7.1; before that it used Windows' own `winsqlite3.dll`, which Wine and Proton don't have). If your mod reads a SQLite file itself, build SQLite in too rather than loading `winsqlite3.dll`, or it won't work for Linux players ([linux.md](linux.md)). To look around the database, open a copy of it in any SQLite browser.
 
 ## Interfaces between mods (API 2)
 
