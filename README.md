@@ -42,6 +42,7 @@ The platform calls `fh2mod_init` on its own thread right after loading your DLL,
 
 - **Game text.** Change any string in the game's string tables, by key or by matching text, in every language. The platform merges the edits from every mod and writes them to the game's override folder (`mediaoverride`), so two mods editing the same table don't overwrite each other.
 - **Title-screen notices.** Lines of your own under "PRESS (A) TO START", stacked with every other mod's.
+- **Title-screen entries.** From platform 2.8.0, a line with a button of its own there, like "(Y) START ON STORM ISLAND", that runs your code and can start the game for the player, and tells you afterwards that it did.
 - **Update checks.** Name your GitHub repo and the title screen tells players when you publish a newer release.
 - **Version checks.** Say which platform version you ship with, and players get told when an older one is installed.
 - **Logging.** Lines go to `fh2-mods\platform.log`, tagged with your mod's name.

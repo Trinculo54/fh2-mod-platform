@@ -83,6 +83,8 @@ If two mods set the same key, the one loaded later wins, in alphabetical order o
 
 You don't need it for updates: register with `github_repo` and the platform checks your latest GitHub release (at most every six hours, remembered between launches, and again straight away when a different version of your mod is installed) and adds "MyMod 1.1.0 is available" itself when it's newer than your `version`. It compares `x.y.z` numbers, with or without a leading `v`, so tag releases to match your version. It also adds "Old FH2 Mod Platform: reinstall MyMod" when the installed platform is older than your `platform_version`.
 
+From platform 2.8.0 (API 9), `add_title_entry` adds a line there with a button of its own, like "(Y) START ON STORM ISLAND", and calls your code when the player presses it. Your code can have the platform start the game straight after, and `title_started_by` then tells your mod that this start was its entry's. There are four buttons for every mod together, so add one entry at most. [`api.md`](api.md#title-screen-entries-api-9) has the details.
+
 ## Replacing game files
 
 To swap out a whole file the game loads, such as a texture, an XML file or the Drivatar cache, use `set_file(mod, "drivatarglobalcache/DefaultCache.bin", data, size)` instead of writing into `mediaoverride` yourself. The path is relative to `media`, and a zip counts as a folder: `media\UI.zip\x.xml` is `"UI/x.xml"`. The platform makes sure only one mod replaces a given file and logs it when a second one tries. It also deletes the file once your mod stops claiming it, whether you call `clear_file` or the player removes your mod. Check the return value: 0 means you didn't get the file. These calls need API version 2, so check `api->api_version >= 2` first.

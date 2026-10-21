@@ -78,6 +78,9 @@ int pages_set_slot(FH2Mod* mod, const char* page_key, int slot, int value);
 int pages_focus(FH2Mod* mod, const char* page_key, const char* name);
 int pages_set_tile_text(FH2Mod* mod, const char* page_key, const char* text);
 int pages_set_tile_colors(FH2Mod* mod, const char* page_key, uint32_t background, uint32_t text);
+// Title-screen entries (API 9).
+int title_add(FH2Mod* mod, const FH2TitleEntry* entry);
+const char* title_started_by(FH2Mod* mod);
 // After every fh2mod_init: writes the pages and hooks the game if any mod added a row.
 void settings_start(const FH2ModApi* api);
 

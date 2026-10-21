@@ -624,6 +624,27 @@ uint8_t* mod_notice_descriptor() {
     return g_mod_notice_desc;
 }
 
+// FH2Mod_TitleReady: whether the title screen is hooked, so the lines of the mods' title-screen
+// entries can show (write_title_page keeps them collapsed until it's true; a binding that never
+// resolves leaves the title screen as the game ships it).
+uint8_t* g_title_desc = nullptr;
+std::atomic<bool> g_title_ready{false};
+void** __cdecl title_ready_get(void** out, void*, void*) {
+    bool v = g_title_ready.load();
+    *out   = nullptr;
+    reinterpret_cast<BoxBoolFn>(g_base + RVA_BOX_BOOL)(out, &v);
+    return out;
+}
+uint8_t* title_ready_descriptor() {
+    std::scoped_lock lk{g_desc_mu};
+    if (!g_title_desc) {
+        void* bool_type = reinterpret_cast<TypeFn>(g_base + RVA_BOOL_TYPE)(0);
+        g_title_desc    = new_descriptor("FH2Mod_TitleReady", reinterpret_cast<void*>(&title_ready_get),
+                                         reinterpret_cast<void*>(&notice_set), bool_type);
+    }
+    return g_title_desc;
+}
+
 // ---- pages of a mod's own design: their slots (API 8) ------------------------------------------
 // FH2Mod_Slot_<n>: an int of the page's, for two-way bindings; FH2Mod_Slot_<n>_Is_<v>: whether
 // it's v. They read the page being opened or shown (g_custom_shown). A mod changes them from its
@@ -796,6 +817,7 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     if (std::wcscmp(n, L"FH2Mod_UpdateBadge") == 0) return badge_descriptor(false);
     if (std::wcscmp(n, L"FH2Mod_ErrorBadge") == 0) return badge_descriptor(true);
     if (std::wcscmp(n, L"FH2Mod_ModNotice") == 0) return mod_notice_descriptor();
+    if (std::wcscmp(n, L"FH2Mod_TitleReady") == 0) return title_ready_descriptor();
     if (const int k = name_number(n, L"FH2Mod_View_", kMaxViews); k >= 0) return flag_descriptor(g_view_desc[k], "FH2Mod_View_" + std::to_string(k));
     if (const int k = name_number(n, L"FH2Mod_ViewIn_", kMaxViews); k >= 0)
         return flag_descriptor(g_view_in_desc[k], "FH2Mod_ViewIn_" + std::to_string(k));
@@ -3262,6 +3284,214 @@ void hook_hud_shown(FH2Mod* m) {
         g_api->enable_hooks(m, k);
 }
 
+// ---- title-screen entries (API 9) -----------------------------------------------------------
+// The title screen is the Splash page (UI.zip Scenes\Anthem\A_Splash.xaml; C++ Splash, vtable
+// 0x142E533C8): the attract video, the logo and "PRESS (A) TO START" (Main.str IDS_Press and
+// IDS_To_Start, which also carries the notices), with no control to focus. The pad reaches the
+// top page's vtable +0x578 (page, key, pressed) as keys (see pad_button); Splash's is the shared
+// 0x140CEC3D0, which runs the key handlers a page registered. Splash registers only A (key 18,
+// at 0x140E8F9AD, when it's shown): its handler 0x140EA0D40 returns while the state at
+// page+0x448 is 3 or 4 (0 waiting, 1 A pressed, 2 a popup up, 3/4 on its way to loading), and
+// otherwise sets 1 and starts signing in. So X, Y, LB and RB do nothing there: each entry gets
+// one. Its line is written into the page under the Grid holding HelpButton (fading with it in
+// the five state storyboards), and our +0x578 runs its on_press while the state is 0;
+// FH2_TITLE_START then presses A through the original, so OnStart's own checks and the
+// sign-in run as ever.
+constexpr uintptr_t RVA_SPLASH_BUTTON_SLOT = 0x2E53940;   // Splash vtable +0x578 (holds RVA_PAGE_BUTTON)
+constexpr uintptr_t RVA_SPLASH_ON_START    = 0x0EA0D40;   // Splash::OnStart (A)
+constexpr uintptr_t RVA_SPLASH_A_HANDLER   = 0x0E8F9A5;   // Splash shown: registers A (key 18)
+constexpr std::size_t kSplashState         = 0x448;       // int, see above
+constexpr std::size_t kMaxTitleLabel       = 32;          // bytes; the panel is 326 px wide (about 24 characters)
+const char* const kTitleFile               = "UI/Scenes/Anthem/A_Splash.xaml";
+struct TitleEntry {
+    FH2Mod* mod;
+    std::string key, label;
+    FH2TitlePressFn on_press;
+    void* user;
+    int button;                              // FH2_BUTTON_
+};
+std::deque<TitleEntry> g_titles;             // guarded by g_mu (entries are never removed)
+std::atomic<int> g_title_started{-1};        // the entry whose on_press started the game, -1 for none
+bool g_title_page = false;                   // A_Splash.xaml is written with the entries
+bool g_title_handled[7] = {};                // per FH2_BUTTON_: the press was an entry's (UI thread only)
+const int kTitleButtons[] = {FH2_BUTTON_Y, FH2_BUTTON_X, FH2_BUTTON_RB, FH2_BUTTON_LB};
+
+const char* button_letters(int b) {
+    switch (b) {
+        case FH2_BUTTON_X: return "X";
+        case FH2_BUTTON_Y: return "Y";
+        case FH2_BUTTON_LB: return "LB";
+        case FH2_BUTTON_RB: return "RB";
+        default: return nullptr;
+    }
+}
+
+std::string ascii_upper(std::string s) {
+    for (char& c : s)
+        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+    return s;
+}
+
+// A_Splash.xaml with every entry's line in it, or remove_leftover_file when there are none.
+bool write_title_page() {
+    std::vector<std::pair<int, std::string>> lines;
+    {
+        std::scoped_lock lk{g_mu};
+        for (const TitleEntry& e : g_titles) lines.emplace_back(e.button, e.label);
+    }
+    if (lines.empty()) {
+        remove_leftover_file(kTitleFile);
+        return false;
+    }
+    std::string page = read_ui("Scenes/Anthem/A_Splash.xaml");
+    const std::string fade  = "<DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"(UIElement.Opacity)\" Storyboard.TargetName=\"HelpButton\">";
+    const std::string close = "</DoubleAnimationUsingKeyFrames>";
+    auto count = [&page](const std::string& what) {
+        std::size_t n = 0;
+        for (std::size_t at = page.find(what); at != std::string::npos; at = page.find(what, at + 1)) ++n;
+        return n;
+    };
+    if (page.empty() || count(fade) != 5 || count("x:Name=\"HelpButton\"") != 1 || count("x:Name=\"LoadingControl\"") != 1 ||
+        count("</ResourceDictionary>") != 1) {
+        slog("A_Splash.xaml doesn't look as expected; no title-screen entries");
+        remove_leftover_file(kTitleFile);
+        return false;
+    }
+    // each state's storyboard: the entries take HelpButton's opacity (a copy of its block)
+    std::string out;
+    std::size_t at = 0;
+    for (std::size_t f = page.find(fade); f != std::string::npos; f = page.find(fade, f + 1)) {
+        const std::size_t e = page.find(close, f);
+        if (e == std::string::npos) {
+            slog("A_Splash.xaml doesn't look as expected; no title-screen entries");
+            remove_leftover_file(kTitleFile);
+            return false;
+        }
+        const std::size_t end  = e + close.size();
+        const std::size_t line = page.rfind('\n', f) + 1;
+        std::string copy       = page.substr(f, end - f);
+        swap_all(copy, "Storyboard.TargetName=\"HelpButton\"", "Storyboard.TargetName=\"FH2Mod_TitleEntries\"");
+        out += page.substr(at, end - at) + "\r\n" + page.substr(line, f - line) + copy;
+        at = end;
+    }
+    out += page.substr(at);
+    page = out;
+    // the lines, under the Grid that holds HelpButton and LoadingControl
+    std::string panel = "\r\n                    <!-- FH2 Mod Platform: title-screen entries -->\r\n"
+                        "                    <StackPanel x:Name=\"FH2Mod_TitleEntries\" Style=\"{StaticResource FH2Mod_Style_TitleEntries}\" "
+                        "HorizontalAlignment=\"Center\" Margin=\"0, 8, 0, 0\">";
+    for (const auto& [button, label] : lines)
+        panel += std::string("\r\n                        <StackPanel Orientation=\"Horizontal\" HorizontalAlignment=\"Center\" Margin=\"0, 4, 0, 0\">\r\n"
+                             "                            <local:FZMaterial ImageSource=\"{StaticResource A_BitmapImage_ControllerButton_") +
+                 button_letters(button) + "}\" Width=\"32\" Height=\"32\" />\r\n"
+                 "                            <local:FZTextBlock Text=\"" + xml_escape(ascii_upper(label)) +
+                 "\" Style=\"{StaticResource A_Style_Text_LoadingSmall}\" Margin=\"8, 0, 0, 0\" />\r\n"
+                 "                        </StackPanel>";
+    panel += "\r\n                    </StackPanel>";
+    const std::size_t grid = page.find("</Grid>", page.find("x:Name=\"LoadingControl\""));
+    if (grid == std::string::npos) {
+        slog("A_Splash.xaml doesn't look as expected; no title-screen entries");
+        remove_leftover_file(kTitleFile);
+        return false;
+    }
+    page.insert(grid + 7, panel);
+    // collapsed unless the title screen is hooked
+    page.insert(page.find("</ResourceDictionary>"),
+                "    <Style x:Key=\"FH2Mod_Style_TitleEntries\" TargetType=\"StackPanel\">\r\n"
+                "                <Setter Property=\"Visibility\" Value=\"Collapsed\" />\r\n"
+                "                <Style.Triggers>\r\n"
+                "                    <DataTrigger Binding=\"{Binding FH2Mod_TitleReady}\" Value=\"True\">\r\n"
+                "                        <Setter Property=\"Visibility\" Value=\"Visible\" />\r\n"
+                "                    </DataTrigger>\r\n"
+                "                </Style.Triggers>\r\n"
+                "            </Style>\r\n        ");
+    g_title_page = set_file(&g_owner_mod, kTitleFile, page.data(), page.size()) != 0;
+    return g_title_page;
+}
+
+PageButtonFn o_splash_button = nullptr;
+
+bool call_on_press(FH2TitlePressFn fn, void* user, const char* key, int* result) {
+    __try {
+        *result = fn(user, key);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+int splash_state(void* page) {
+    __try {
+        return *reinterpret_cast<int*>(static_cast<uint8_t*>(page) + kSplashState);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+
+bool d_splash_button(void* page, int button, bool pressed) {
+    const int code = pad_button(button);
+    if (code == FH2_BUTTON_A && pressed && splash_state(page) == 0) g_title_started = -1;   // the player's own start
+    if (!g_title_ready.load() || !button_letters(code)) return o_splash_button(page, button, pressed);
+    int j               = -1;
+    FH2Mod* mod         = nullptr;
+    FH2TitlePressFn fn  = nullptr;
+    void* user          = nullptr;
+    std::string key;
+    {
+        std::scoped_lock lk{g_mu};
+        for (std::size_t i = 0; i < g_titles.size(); ++i)
+            if (g_titles[i].button == code) {
+                j    = static_cast<int>(i);
+                mod  = g_titles[i].mod;
+                fn   = g_titles[i].on_press;
+                user = g_titles[i].user;
+                key  = g_titles[i].key;
+            }
+    }
+    if (j < 0) return o_splash_button(page, button, pressed);
+    if (!pressed) {   // the release of an entry's press is the entry's too
+        const bool ours        = g_title_handled[code];
+        g_title_handled[code] = false;
+        return ours || o_splash_button(page, button, pressed);
+    }
+    if (splash_state(page) != 0) return o_splash_button(page, button, pressed);   // already signing in
+    g_title_handled[code] = true;
+    play_sound(kSoundSelect);
+    int r = FH2_TITLE_HANDLED;
+    if (!call_on_press(fn, user, key.c_str(), &r)) {
+        log_line(mod->name, "crashed in its on_press for title entry " + key);
+        r = FH2_TITLE_HANDLED;
+    }
+    if (r == FH2_TITLE_START) {
+        log_line(mod->name, "title entry " + key + " starts the game");
+        g_title_started = j;
+        o_splash_button(page, kButtonA, true);   // A, as the player would press it
+    }
+    return true;
+}
+
+// Checks the title screen's code and makes (doesn't enable) the hook on its buttons; null if
+// it can't, with the page's lines taken back out.
+FH2Hook* hook_title(FH2Mod* m) {
+    const uint8_t on_start[]  = {0x8B, 0x81, 0x48, 0x04, 0x00, 0x00, 0x83, 0xE8, 0x03, 0x83, 0xF8, 0x01};   // the state at +0x448, 3 and 4
+    const uint8_t a_handler[] = {0xBA, 0x12, 0x00, 0x00, 0x00, 0x48, 0x8B, 0xCE, 0xE8, 0xDE, 0xB6, 0x58, 0x00};   // A (18) registered
+    void** slot = reinterpret_cast<void**>(g_base + RVA_SPLASH_BUTTON_SLOT);
+    if (!code_matches(RVA_SPLASH_ON_START + 0x27, on_start, sizeof on_start) ||
+        !code_matches(RVA_SPLASH_A_HANDLER, a_handler, sizeof a_handler) || !readable(slot, 8) ||
+        *slot != reinterpret_cast<void*>(g_base + RVA_PAGE_BUTTON)) {
+        slog("the title screen's code doesn't look as expected; no title-screen entries");
+        clear_file(&g_owner_mod, kTitleFile);
+        return nullptr;
+    }
+    FH2Hook* h = g_api->hook_pointer(m, "Title screen: buttons", slot, reinterpret_cast<void*>(&d_splash_button),
+                                     reinterpret_cast<void**>(&o_splash_button));
+    if (!h) {
+        slog("hooking the title screen failed; no title-screen entries");
+        clear_file(&g_owner_mod, kTitleFile);
+    }
+    return h;
+}
+
 // ---- hooking up ----------------------------------------------------------------------------
 void hook_game() {
     void* base = g_api->wait_for_code(0xFFFFFFFFu);
@@ -3332,6 +3562,7 @@ void hook_game() {
     }
 
     FH2Mod* m = &g_owner_mod;
+    FH2Hook* title = g_title_page ? hook_title(m) : nullptr;
     if (!g_api->hook_function(m, "AVUI::Type::FindProperty", reinterpret_cast<void*>(g_base + RVA_FIND_PROPERTY),
                               reinterpret_cast<void*>(&d_find_property), reinterpret_cast<void**>(&o_find_property)) ||
         !g_api->hook_function(m, "PauseOptionsMenu: wire the tiles", reinterpret_cast<void*>(g_base + RVA_PAUSE_WIRE_TILES),
@@ -3345,6 +3576,10 @@ void hook_game() {
         return;
     }
     slog("ready");
+    if (title) {
+        g_title_ready = true;
+        slog("title-screen entries ready");
+    }
     hook_hub();
 }
 
@@ -3686,6 +3921,75 @@ int pages_focus(FH2Mod* m, const char* key, const char* name) {
     return 1;
 }
 
+int title_add(FH2Mod* m, const FH2TitleEntry* e) {
+    if (!m || !e) return 0;
+    if (e->size < offsetof(FH2TitleEntry, button) + sizeof(int)) {
+        log_line(m->name, "add_title_entry: the FH2TitleEntry's size is too small (set size = sizeof(FH2TitleEntry))");
+        return 0;
+    }
+    if (!valid_key(e->key)) {
+        log_line(m->name, std::string("add_title_entry: \"") + (e->key ? e->key : "") + "\" isn't a usable key (letters, digits, _)");
+        return 0;
+    }
+    if (!e->label || !*e->label) {
+        log_line(m->name, std::string("add_title_entry: ") + e->key + " needs a label");
+        return 0;
+    }
+    if (!e->on_press) {
+        log_line(m->name, std::string("add_title_entry: ") + e->key + " needs an on_press");
+        return 0;
+    }
+    if (g_written) {
+        log_line(m->name, std::string("add_title_entry: ") + e->key + " came after the title screen was written; add entries from fh2mod_init");
+        return 0;
+    }
+    if (e->button && !button_letters(e->button)) {
+        log_line(m->name, std::string("add_title_entry: ") + e->key + "'s button has to be FH2_BUTTON_Y, _X, _RB or _LB (or 0 for the next free one)");
+        return 0;
+    }
+    std::scoped_lock lk{g_mu};
+    auto owner = [](int b) -> const TitleEntry* {
+        for (const TitleEntry& t : g_titles)
+            if (t.button == b) return &t;
+        return nullptr;
+    };
+    for (const TitleEntry& t : g_titles)
+        if (t.mod == m && t.key == e->key) {
+            log_line(m->name, std::string("add_title_entry: there's already an entry called ") + e->key);
+            return 0;
+        }
+    int button = 0;
+    if (e->button && !owner(e->button)) button = e->button;
+    for (int b : kTitleButtons)
+        if (!button && !owner(b)) button = b;
+    if (!button) {
+        log_line(m->name, std::string("add_title_entry: no button left for ") + e->key + " (four entries at most, from every mod)");
+        return 0;
+    }
+    if (e->button && button != e->button) {
+        const TitleEntry* o = owner(e->button);
+        log_line(m->name, std::string("add_title_entry: ") + button_letters(e->button) + " is " + o->mod->name + "'s " + o->key + "; " + e->key +
+                              " gets " + button_letters(button));
+    }
+    std::string label = e->label;
+    if (label.size() > kMaxTitleLabel) {
+        std::size_t cut = kMaxTitleLabel;
+        while (cut > 0 && (static_cast<unsigned char>(label[cut]) & 0xC0) == 0x80) --cut;   // not inside a character
+        label.resize(cut);
+        log_line(m->name, std::string("add_title_entry: ") + e->key + "'s label is cut to \"" + label + "\"");
+    }
+    g_titles.push_back({m, e->key, label, e->on_press, e->user, button});
+    log_line(m->name, std::string("title-screen entry: (") + button_letters(button) + ") " + ascii_upper(label));
+    return 1;
+}
+
+const char* title_started_by(FH2Mod* m) {
+    const int j = g_title_started.load();
+    if (!m || j < 0) return nullptr;
+    std::scoped_lock lk{g_mu};
+    return j < static_cast<int>(g_titles.size()) && g_titles[j].mod == m ? g_titles[j].key.c_str() : nullptr;
+}
+
 int settings_get(FH2Mod* m, const char* key) {
     if (!m || !key) return -1;
     std::scoped_lock lk{g_mu};
@@ -3811,7 +4115,8 @@ void settings_start(const FH2ModApi* api) {
     add_hub_rows();
     g_written = true;
     const char* const files[] = {"UI/Scenes/Anthem/A_PauseOptions.xaml", "UI/Scenes/Anthem/A_ModOptions.xaml",
-                                 "UI/Scenes/Anthem/A_PauseMenu.xaml",    "stateflow/pause.xml", "stateflow/ui_screens.xml"};
+                                 "UI/Scenes/Anthem/A_PauseMenu.xaml",    "stateflow/pause.xml", "stateflow/ui_screens.xml",
+                                 kTitleFile};
     if (game_mount().empty()) {
         slog("the game folder wasn't found; no Mods page or MODS tab");
         for (const char* f : files) remove_leftover_file(f);
@@ -3854,9 +4159,10 @@ void settings_start(const FH2ModApi* api) {
     }
     if (!mods_page) remove_leftover_file("UI/Scenes/Anthem/A_ModOptions.xaml");
     if (!write_hud_notice()) remove_leftover_file("UI/Scenes/Anthem/A_Hud.xaml");
+    write_title_page();
     slog(std::to_string(n) + " row(s) on the Mods page, " + std::to_string(g_entries.size()) + " mod(s) on the MODS tab" +
          (g_hub_files ? "" : " (not shown)"));
-    if (g_hub_files || g_settings_tile) std::thread(hook_game).detach();
+    if (g_hub_files || g_settings_tile || g_title_page) std::thread(hook_game).detach();
     if (g_hub_files)
         // Update checks finish after this (from the cache, usually within a second or two): the
         // UPDATES tile's count is rewritten while the game is likely still to read the page.

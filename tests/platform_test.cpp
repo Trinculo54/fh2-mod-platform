@@ -136,7 +136,7 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("---- platform.log\n%s----\n", log.c_str());
 
     if (phase == L"full") {
-        CHECK(has(log, "FH2 Mod Platform 2.7.4 (API 8)"));
+        CHECK(has(log, "FH2 Mod Platform 2.8.0 (API 9)"));
         CHECK(has(log, "media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride"));
         CHECK(log.find("loaded HelloMod.dll") != std::string::npos);
         CHECK(log.find("Legacy.dll has no fh2mod_init") != std::string::npos);
@@ -189,6 +189,15 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] page slots ok"));
         CHECK(has(log, "[TestMod] set_page_xaml: Stats's content isn't well-formed (</Grid> doesn't match <Button>)"));
         CHECK(has(log, "[TestMod] set_page_rows: row 1 of Stats isn't the size of the first"));
+        // title-screen entries (API 9)
+        CHECK(has(log, "[TestMod] title-screen entry: (Y) DRIVE THE TEST GARAGE") && has(log, "[TestMod] title-screen entry: (X) SECOND ENTRY"));
+        CHECK(has(log, "[TestMod] add_title_entry: there's already an entry called Garage"));
+        CHECK(has(log, "[TestMod] add_title_entry: Y is TestMod's Garage; Third gets RB"));
+        CHECK(has(log, "[TestMod] add_title_entry: Third's label is cut to \"Third entry with a label that is\""));
+        CHECK(has(log, "[TestMod] title-screen entry: (LB) FOURTH & <LAST>"));
+        CHECK(has(log, "[TestMod] add_title_entry: no button left for Fifth (four entries at most, from every mod)"));
+        CHECK(has(log, "[TestMod] add_title_entry: \"bad key\" isn't a usable key (letters, digits, _)"));
+        CHECK(has(log, "[TestMod] no title start yet"));
         CHECK(has(log, "[TestMod] tile text ok") && has(log, "[TestMod] set_page_tile_text: Other isn't on a tile") &&
               has(log, "[TestMod] set_page_tile_colors: Other isn't on a tile"));
         // The game's menus were given: the pages are written. (Not with the game mapped: this
@@ -215,6 +224,14 @@ int wmain(int argc, wchar_t** argv) {
                   has(pause, "Template=\"{StaticResource FH2Mod_Template_IconTile_0}\""));
             CHECK(has(pause, "Color=\"{Binding FH2Mod_TileBack_0, RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type Page}}}\"") &&
                   has(pause, "{Binding FH2Mod_TileTitle_0,") && has(pause, "{Binding FH2Mod_TileLine_0,") && has(pause, "{Binding FH2Mod_TileIcon_0,"));
+            // the title screen: the entries' lines under PRESS (A) TO START, fading with it in all five states
+            const auto splash = slurp(scenes / "A_Splash.xaml");
+            std::size_t refs = 0;
+            for (std::size_t at = splash.find("\"FH2Mod_TitleEntries\""); at != std::string::npos; at = splash.find("\"FH2Mod_TitleEntries\"", at + 1)) ++refs;
+            CHECK(refs == 6);
+            CHECK(has(splash, "{Binding FH2Mod_TitleReady}") && has(splash, "<Setter Property=\"Visibility\" Value=\"Collapsed\" />"));
+            CHECK(has(splash, "A_BitmapImage_ControllerButton_Y}") && has(splash, "Text=\"DRIVE THE TEST GARAGE\""));
+            CHECK(has(splash, "A_BitmapImage_ControllerButton_LB}") && has(splash, "Text=\"FOURTH &amp; &lt;LAST&gt;\""));
         }
     } else {
         // TestMod gone: its tables and notice are cleaned up, HelloMod's stays.
@@ -224,6 +241,7 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(slurp(L"fh2-mods\\platform-tables.txt").find("AIPlayers.str") == std::string::npos);
         const fs::path ov = L"FH2\\Mount\\mediaoverride";
         CHECK(!fs::exists(ov / "UI" / "keep.xml") && !fs::exists(ov / "UI" / "handmade.xml"));
+        CHECK(!fs::exists(ov / "UI" / "Scenes" / "Anthem" / "A_Splash.xaml"));   // no title entries left
         CHECK(slurp(ov / "drivatarglobalcache" / "DefaultCache.bin") == "from AaaMod");
         CHECK(has(log, "removed the media\\UI\\keep.xml override (TestMod no longer replaces it)"));
         CHECK(!fs::exists(ov / "Stripped" / "gamedbRC.slt"));

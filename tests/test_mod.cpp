@@ -1,5 +1,6 @@
 // A mod for the platform test: notices, conflicting edits, a late edit,
-// file overrides, database changes, an interface for AaaMod, pages (API 8).
+// file overrides, database changes, an interface for AaaMod, pages (API 8),
+// title-screen entries (API 9).
 #include "fh2mod.h"
 #include <windows.h>
 
@@ -66,6 +67,25 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
         !api->set_page_tile_text(g_mod, "Missing", "x") && api->set_page_tile_colors(g_mod, "Stats", 0xFF3667DB, 0xFFFEFEFE) &&
         !api->set_page_tile_colors(g_mod, "Other", 0, 0))
         api->log(g_mod, "tile text ok");
+
+    // Title-screen entries: Y by default, X asked for, Y asked for again (taken: the next free one,
+    // RB), LB, then none left; a repeated key, a bad one, a long label cut to 32 bytes.
+    FH2TitleEntry te{sizeof te};
+    te.key = "Garage"; te.label = "Drive the test garage";
+    te.on_press = [](void*, const char*) { return FH2_TITLE_START; };
+    api->add_title_entry(g_mod, &te);
+    api->add_title_entry(g_mod, &te);                     // refused: already there
+    te.key = "Second"; te.label = "Second entry"; te.button = FH2_BUTTON_X;
+    api->add_title_entry(g_mod, &te);
+    te.key = "Third"; te.label = "Third entry with a label that is far too long"; te.button = FH2_BUTTON_Y;
+    api->add_title_entry(g_mod, &te);
+    te.key = "Fourth"; te.label = "Fourth & <last>"; te.button = 0;
+    api->add_title_entry(g_mod, &te);
+    te.key = "Fifth"; te.label = "No room";
+    api->add_title_entry(g_mod, &te);                     // refused: four at most
+    te.key = "bad key";
+    api->add_title_entry(g_mod, &te);                     // refused: not a key
+    if (!api->title_started_by(g_mod)) api->log(g_mod, "no title start yet");
 
     CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
         Sleep(300);

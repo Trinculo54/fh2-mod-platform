@@ -1,6 +1,6 @@
 # API reference
 
-Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5, 7 with 2.6 and 8 with 2.7. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 the Mods page, version 5 its sliders, version 6 mod descriptions and link rows for the MODS tab, version 7 byte patches and instruction hooks, and version 8 pages of your own; the sections for those say so.
+Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5, 7 with 2.6, 8 with 2.7 and 9 with 2.8. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 the Mods page, version 5 its sliders, version 6 mod descriptions and link rows for the MODS tab, version 7 byte patches and instruction hooks, version 8 pages of your own, and version 9 title-screen entries; the sections for those say so.
 
 ## Rules that apply everywhere
 
@@ -517,6 +517,46 @@ static int page_button(void*, const char* key, int button) {
 ```
 
 The game's XAML reader isn't forgiving: a page it can't read can take the game down when it opens. Base your XAML on the game's own pages, change a little at a time, and check every `StaticResource` you use exists. The Achievements mod's page (`src/ui.cpp` in its repo) is a complete example.
+
+## Title-screen entries (API 9)
+
+```c
+int add_title_entry(FH2Mod* mod, const FH2TitleEntry* entry);
+const char* title_started_by(FH2Mod* mod);
+
+typedef struct FH2TitleEntry {
+    uint32_t size;                 /* sizeof(FH2TitleEntry) */
+    const char* key;               /* unique within your mod: "Storm" */
+    const char* label;             /* "Start on Storm Island" (shown in capitals) */
+    FH2TitlePressFn on_press;      /* int (*)(void* user, const char* key) */
+    void* user;
+    int button;                    /* FH2_BUTTON_Y, _X, _RB or _LB; 0 = the next free one */
+} FH2TitleEntry;
+```
+
+An entry is a line of your own on the title screen, under "PRESS (A) TO START" and the notices, with a button that runs your code: "(Y) START ON STORM ISLAND". Use it for something the player chooses before the game loads, like starting somewhere other than where the save left off.
+
+- **Buttons.** Each entry has its own: Y, X, RB, then LB, in the order mods add them. Ask for one with `button` and you get it if it's free; if it's taken, you get the next free one and the log says so. There are four at most, from every mod together, so add one entry, not one per option.
+- **When.** Add entries from `fh2mod_init`. The title screen is written once every mod's `fh2mod_init` has returned, so an entry added later only shows from the next launch.
+- **The label.** UTF-8, shown in capitals in the game's small title-screen text. About 24 characters fit beside the button; anything past 32 bytes is cut, and the log says so.
+- **`on_press`** runs on the game's UI thread when the player presses the entry's button while the title screen waits for A. Keep it short: set a flag, or start a thread of your own. Return `FH2_TITLE_HANDLED` to stay on the title screen, or `FH2_TITLE_START` for the platform to press A for the player straight after. The game then signs in, loads the save and loads the world as it always does. A press while the game is already signing in goes to the game, not to you.
+- **`title_started_by`** returns the key of your entry that started the game, or `NULL` if the player pressed A, another mod's entry started it, or it hasn't started yet. Pressing A on the title screen later (after going back to it) sets it back to `NULL`. Call it from any thread, typically from a hook on the world or save loading, to know whether this start is yours.
+
+```cpp
+static int on_storm(void*, const char*) { return FH2_TITLE_START; }
+
+// in fh2mod_init
+if (api->api_version >= 9) {
+    FH2TitleEntry e{sizeof e, "Storm", "Start on Storm Island", on_storm, nullptr, FH2_BUTTON_Y};
+    api->add_title_entry(mod, &e);
+}
+
+// later, where your mod picks the world to load
+const char* by = api->api_version >= 9 ? api->title_started_by(mod) : nullptr;
+if (by && std::strcmp(by, "Storm") == 0) { /* this start is Storm Island's */ }
+```
+
+The lines are part of the platform's own copy of `UI/Scenes/Anthem/A_Splash.xaml`, hidden until its hook on the title screen's buttons is in place, so if the game's code doesn't look as expected they never show and `platform.log` says why. [`game-notes.md`](game-notes.md#menus) has how the title screen works.
 
 ## Crash reports
 

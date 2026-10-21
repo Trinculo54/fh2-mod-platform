@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define FH2MOD_API_VERSION 8
+#define FH2MOD_API_VERSION 9
 
 #ifdef __cplusplus
 #define FH2MOD_EXPORT extern "C" __declspec(dllexport)
@@ -50,6 +50,8 @@ typedef struct FH2Setting FH2Setting;
 /* A page of your own, and one of its rows (API 8), defined below FH2ModApi. */
 typedef struct FH2Page FH2Page;
 typedef struct FH2PageRow FH2PageRow;
+/* A title-screen entry (API 9), defined below FH2ModApi. */
+typedef struct FH2TitleEntry FH2TitleEntry;
 
 /* The CPU's registers at an instruction hook (API 7): see hook_instruction.
    rsp is what it was at the hooked instruction; changing it has no effect. */
@@ -374,6 +376,32 @@ typedef struct FH2ModApi {
        reads them each time it's shown. Returns 1, or 0 if you have no page
        called `page_key` or it isn't on a tile. */
     int (*set_page_tile_colors)(FH2Mod* mod, const char* page_key, uint32_t background, uint32_t text);
+
+    /* ==== API version 9 (platform 2.8.0): check api_version >= 9 ======== */
+
+    /* ---- Title-screen entries ----------------------------------------------
+       A line of your own on the title screen, under "PRESS (A) TO START" and
+       its notices, that runs your code when the player presses its button:
+       "(Y) START ON STORM ISLAND". Each entry has a button of its own, Y, X, RB
+       then LB in the order mods add them (or the one you ask for, if it's
+       free): four at most, from every mod together. The lines show while the
+       title screen waits for A, and go with "PRESS (A) TO START" once the
+       game starts signing in. If the platform can't hook the title screen
+       (the game's code isn't as expected), they don't show at all and the
+       log says why.
+
+       Add entries from fh2mod_init: the title screen is written when every
+       mod's fh2mod_init has returned, so one added later only shows from the
+       next launch. Returns 1 if the entry was added, 0 if not (a bad or
+       repeated key, no label, no on_press, no button left; the log says
+       why). */
+    int (*add_title_entry)(FH2Mod* mod, const FH2TitleEntry* entry);
+    /* The key of your entry that started the game (its on_press returned
+       FH2_TITLE_START), or NULL if the player started it with A, another
+       mod's entry did, or it hasn't started yet. A later press of A on the
+       title screen sets it back to NULL. Call it from any thread: from your
+       hook on the world loading, say, to know whether this start is yours. */
+    const char* (*title_started_by)(FH2Mod* mod);
 } FH2ModApi;
 
 /* Called on the game's UI thread when the player changes a row: keep it
@@ -461,6 +489,28 @@ struct FH2Page {
     /* Pages of your own design (set_page_xaml). Both may be NULL. */
     FH2PageButtonFn on_button;
     FH2PageSlotFn on_slot;
+};
+
+/* Title-screen entries (API 9). Called on the game's UI thread when the
+   player presses the entry's button on the title screen. Keep it short (set
+   a flag, start a thread of your own) and don't call into the game from it.
+   Return FH2_TITLE_HANDLED to stay on the title screen, or FH2_TITLE_START
+   for the platform to press A for the player straight after: the game then
+   signs in, loads the save and loads the world as it always does, and
+   title_started_by names this entry. */
+typedef int (*FH2TitlePressFn)(void* user, const char* key);
+
+#define FH2_TITLE_HANDLED 0
+#define FH2_TITLE_START   1
+
+/* One title-screen entry (API 9). */
+struct FH2TitleEntry {
+    uint32_t size;                 /* sizeof(FH2TitleEntry) */
+    const char* key;               /* unique within your mod: letters, digits and '_', like "Storm" */
+    const char* label;             /* UTF-8, shown in capitals after its button: "Start on Storm Island"; about 24 characters fit */
+    FH2TitlePressFn on_press;
+    void* user;                    /* passed to on_press */
+    int button;                    /* FH2_BUTTON_Y, _X, _RB or _LB to ask for that one; 0 = the next free one */
 };
 
 #define FH2_ROW_NORMAL  0

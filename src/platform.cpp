@@ -985,6 +985,8 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.focus_page_element = pages_focus;
                 g_api.set_page_tile_text = pages_set_tile_text;
                 g_api.set_page_tile_colors = pages_set_tile_colors;
+                g_api.add_title_entry   = title_add;
+                g_api.title_started_by  = title_started_by;
                 return load_mods(nullptr);
             },
             nullptr, 0, nullptr))
