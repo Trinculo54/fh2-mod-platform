@@ -388,16 +388,19 @@ typedef struct FH2ModApi {
        title screen waits for A, and go with "PRESS (A) TO START" once the
        game starts signing in. If the platform can't hook the title screen
        (the game's code isn't as expected), they don't show at all and the
-       log says why.
+       log says why. An entry can be a list instead (FH2TitleEntry.choices):
+       its press shows the game's message box over the title screen with the
+       choices and a Back, and the pick calls on_choose.
 
        Add entries from fh2mod_init: the title screen is written when every
        mod's fh2mod_init has returned, so one added later only shows from the
        next launch. Returns 1 if the entry was added, 0 if not (a bad or
-       repeated key, no label, no on_press, no button left; the log says
+       repeated key, no label, no on_press, no button left, a list without
+       on_choose or with more than FH2_TITLE_MAX_CHOICES; the log says
        why). */
     int (*add_title_entry)(FH2Mod* mod, const FH2TitleEntry* entry);
-    /* The key of your entry that started the game (its on_press returned
-       FH2_TITLE_START), or NULL if the player started it with A, another
+    /* The key of your entry that started the game (its on_press or
+       on_choose returned FH2_TITLE_START), or NULL if the player started it with A, another
        mod's entry did, or it hasn't started yet. A later press of A on the
        title screen sets it back to NULL. Call it from any thread: from your
        hook on the world loading, say, to know whether this start is yours. */
@@ -499,18 +502,30 @@ struct FH2Page {
    signs in, loads the save and loads the world as it always does, and
    title_started_by names this entry. */
 typedef int (*FH2TitlePressFn)(void* user, const char* key);
+/* The same for an entry with a list (FH2TitleEntry.choices): called when the
+   player picks one, with its position in the list from 0. */
+typedef int (*FH2TitleChooseFn)(void* user, const char* key, uint32_t choice);
 
 #define FH2_TITLE_HANDLED 0
 #define FH2_TITLE_START   1
+#define FH2_TITLE_MAX_CHOICES 10
 
 /* One title-screen entry (API 9). */
 struct FH2TitleEntry {
     uint32_t size;                 /* sizeof(FH2TitleEntry) */
     const char* key;               /* unique within your mod: letters, digits and '_', like "Storm" */
     const char* label;             /* UTF-8, shown in capitals after its button: "Start on Storm Island"; about 24 characters fit */
-    FH2TitlePressFn on_press;
-    void* user;                    /* passed to on_press */
+    FH2TitlePressFn on_press;      /* may be NULL for an entry with choices (it isn't called then) */
+    void* user;                    /* passed to on_press and on_choose */
     int button;                    /* FH2_BUTTON_Y, _X, _RB or _LB to ask for that one; 0 = the next free one */
+    /* A list instead of an action: the press shows the game's message box
+       over the title screen with these choices and a Back, and picking one
+       calls on_choose. The choices are copied. */
+    const char* const* choices;    /* UTF-8, shown as given; NULL = no list */
+    uint32_t choice_count;         /* 1 to FH2_TITLE_MAX_CHOICES */
+    FH2TitleChooseFn on_choose;
+    const char* list_title;        /* the box's title (shown in capitals); NULL = the label */
+    const char* list_message;      /* text over the choices; may be NULL */
 };
 
 #define FH2_ROW_NORMAL  0

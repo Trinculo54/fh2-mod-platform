@@ -2427,6 +2427,11 @@ void* fn_get(PopupFn* self) { return &self->popup; }
 void* g_fn_vt[7] = {reinterpret_cast<void*>(&fn_copy), reinterpret_cast<void*>(&fn_copy), reinterpret_cast<void*>(&fn_call),
                     reinterpret_cast<void*>(&fn_type), reinterpret_cast<void*>(&fn_delete), reinterpret_cast<void*>(&fn_dtor),
                     reinterpret_cast<void*>(&fn_get)};
+void handle_title_choice(PopupFn* self);
+void fn_call_title(PopupFn* self) { handle_title_choice(self); }
+void* g_title_fn_vt[7] = {reinterpret_cast<void*>(&fn_copy), reinterpret_cast<void*>(&fn_copy), reinterpret_cast<void*>(&fn_call_title),
+                          reinterpret_cast<void*>(&fn_type), reinterpret_cast<void*>(&fn_delete), reinterpret_cast<void*>(&fn_dtor),
+                          reinterpret_cast<void*>(&fn_get)};
 
 using MakeItemsFn     = void** (*)(void** out);
 using MakeItemFn      = void** (*)(void** out, const int* id, void** label);
@@ -2448,15 +2453,16 @@ void release(uint8_t* obj) {
         reinterpret_cast<ObjectFreeFn>(g_base + RVA_OBJECT_FREE)(obj);
 }
 
-bool show_popup_inner(void* page) {
-    static FakeLocString* title   = loc_string(kTitle);
-    static FakeLocString* message = loc_string(kMessage);
-    static FakeLocString* labels[3] = {loc_string(kChoices[0]), loc_string(kChoices[1]), loc_string(kChoices[2])};
+// The message box over `page`, with `labels` as its items (ids 0, 1, ...). `fn_vt` is the
+// vtable of the handler it calls with the chosen item: g_fn_vt for the restart choices,
+// g_title_fn_vt for a title-screen entry's list.
+bool show_list_inner(void* page, FakeLocString* title, FakeLocString* message, FakeLocString* const* labels, int count,
+                     void** fn_vt) {
     void* items = nullptr;
     reinterpret_cast<MakeItemsFn>(g_base + RVA_MAKE_ITEMS)(&items);
     if (!items) return false;
     auto* coll = static_cast<uint8_t*>(items);
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < count; ++i) {
         void* item  = nullptr;
         void* label = labels[i];
         reinterpret_cast<MakeItemFn>(g_base + RVA_MAKE_ITEM)(&item, &i, &label);
@@ -2474,7 +2480,7 @@ bool show_popup_inner(void* page) {
         return false;
     }
     reinterpret_cast<PopupHelpFn>(g_base + RVA_POPUP_HELP)(popup, 6);
-    PopupFn fn{g_fn_vt, popup, page};
+    PopupFn fn{fn_vt, popup, page};
     StdFunction f{};
     f.impl = fn_copy(&fn, nullptr);   // on the heap; the callee deletes it
     reinterpret_cast<PopupHandlerFn>(g_base + RVA_POPUP_HANDLER)(popup, 2, &f, true);
@@ -2482,13 +2488,20 @@ bool show_popup_inner(void* page) {
     return true;
 }
 
-bool show_popup(void* page) {
+bool show_list(void* page, FakeLocString* title, FakeLocString* message, FakeLocString* const* labels, int count, void** fn_vt) {
     __try {
-        return show_popup_inner(page);
+        return show_list_inner(page, title, message, labels, count, fn_vt);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         g_popup_ok = false;
         return false;
     }
+}
+
+bool show_popup(void* page) {
+    static FakeLocString* title     = loc_string(kTitle);
+    static FakeLocString* message   = loc_string(kMessage);
+    static FakeLocString* labels[3] = {loc_string(kChoices[0]), loc_string(kChoices[1]), loc_string(kChoices[2])};
+    return show_list(page, title, message, labels, 3, g_fn_vt);
 }
 
 int chosen_item(void* popup) {
@@ -3296,7 +3309,8 @@ void hook_hud_shown(FH2Mod* m) {
 // one. Its line is written into the page under the Grid holding HelpButton (fading with it in
 // the five state storyboards), and our +0x578 runs its on_press while the state is 0;
 // FH2_TITLE_START then presses A through the original, so OnStart's own checks and the
-// sign-in run as ever.
+// sign-in run as ever. An entry with a list shows the message box (show_list) over Splash
+// instead, and the pick does the same through on_choose.
 constexpr uintptr_t RVA_SPLASH_BUTTON_SLOT = 0x2E53940;   // Splash vtable +0x578 (holds RVA_PAGE_BUTTON)
 constexpr uintptr_t RVA_SPLASH_ON_START    = 0x0EA0D40;   // Splash::OnStart (A)
 constexpr uintptr_t RVA_SPLASH_A_HANDLER   = 0x0E8F9A5;   // Splash shown: registers A (key 18)
@@ -3309,9 +3323,15 @@ struct TitleEntry {
     FH2TitlePressFn on_press;
     void* user;
     int button;                              // FH2_BUTTON_
+    FH2TitleChooseFn on_choose = nullptr;    // an entry with a list: its choices, then Back
+    std::vector<std::string> choices;
+    std::wstring list_title, list_message;
+    std::vector<std::wstring> wchoices;
+    std::vector<FakeLocString*> loc;         // title, message, the choices, Back (made once it's in g_titles)
 };
-std::deque<TitleEntry> g_titles;             // guarded by g_mu (entries are never removed)
+std::deque<TitleEntry> g_titles;             // guarded by g_mu (entries are never removed or moved)
 std::atomic<int> g_title_started{-1};        // the entry whose on_press started the game, -1 for none
+std::atomic<int> g_title_list{-1};           // the entry whose list is up, -1 for none
 bool g_title_page = false;                   // A_Splash.xaml is written with the entries
 bool g_title_handled[7] = {};                // per FH2_BUTTON_: the press was an entry's (UI thread only)
 const int kTitleButtons[] = {FH2_BUTTON_Y, FH2_BUTTON_X, FH2_BUTTON_RB, FH2_BUTTON_LB};
@@ -3420,6 +3440,15 @@ bool call_on_press(FH2TitlePressFn fn, void* user, const char* key, int* result)
     }
 }
 
+bool call_on_choose(FH2TitleChooseFn fn, void* user, const char* key, uint32_t choice, int* result) {
+    __try {
+        *result = fn(user, key, choice);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 int splash_state(void* page) {
     __try {
         return *reinterpret_cast<int*>(static_cast<uint8_t*>(page) + kSplashState);
@@ -3437,6 +3466,7 @@ bool d_splash_button(void* page, int button, bool pressed) {
     FH2TitlePressFn fn  = nullptr;
     void* user          = nullptr;
     std::string key;
+    std::vector<FakeLocString*> loc;
     {
         std::scoped_lock lk{g_mu};
         for (std::size_t i = 0; i < g_titles.size(); ++i)
@@ -3446,6 +3476,7 @@ bool d_splash_button(void* page, int button, bool pressed) {
                 fn   = g_titles[i].on_press;
                 user = g_titles[i].user;
                 key  = g_titles[i].key;
+                loc  = g_titles[i].loc;
             }
     }
     if (j < 0) return o_splash_button(page, button, pressed);
@@ -3456,6 +3487,14 @@ bool d_splash_button(void* page, int button, bool pressed) {
     }
     if (splash_state(page) != 0) return o_splash_button(page, button, pressed);   // already signing in
     g_title_handled[code] = true;
+    if (!loc.empty()) {   // the list (the message box plays its own sound)
+        g_title_list = j;
+        if (!g_popup_ok || !show_list(page, loc[0], loc[1], loc.data() + 2, static_cast<int>(loc.size()) - 2, g_title_fn_vt)) {
+            g_title_list = -1;
+            log_line(mod->name, "couldn't show the list for title entry " + key);
+        }
+        return true;
+    }
     play_sound(kSoundSelect);
     int r = FH2_TITLE_HANDLED;
     if (!call_on_press(fn, user, key.c_str(), &r)) {
@@ -3468,6 +3507,38 @@ bool d_splash_button(void* page, int button, bool pressed) {
         o_splash_button(page, kButtonA, true);   // A, as the player would press it
     }
     return true;
+}
+
+// A pick from a title entry's list (the message box's chosen-item handler, on the UI thread).
+// The box closes by itself; Back, the last item, does nothing else.
+void handle_title_choice(PopupFn* self) {
+    const int j      = g_title_list.exchange(-1);
+    const int choice = chosen_item(self->popup);
+    FH2Mod* mod         = nullptr;
+    FH2TitleChooseFn fn = nullptr;
+    void* user          = nullptr;
+    std::string key, label;
+    {
+        std::scoped_lock lk{g_mu};
+        if (j < 0 || j >= static_cast<int>(g_titles.size())) return;
+        const TitleEntry& e = g_titles[j];
+        if (choice < 0 || choice >= static_cast<int>(e.choices.size())) return;   // Back
+        mod   = e.mod;
+        fn    = e.on_choose;
+        user  = e.user;
+        key   = e.key;
+        label = e.choices[choice];
+    }
+    int r = FH2_TITLE_HANDLED;
+    if (!call_on_choose(fn, user, key.c_str(), static_cast<uint32_t>(choice), &r)) {
+        log_line(mod->name, "crashed in its on_choose for title entry " + key);
+        r = FH2_TITLE_HANDLED;
+    }
+    if (r == FH2_TITLE_START) {
+        log_line(mod->name, "title entry " + key + " (" + label + ") starts the game");
+        g_title_started = j;
+        if (splash_state(self->page) == 0) o_splash_button(self->page, kButtonA, true);   // A, as the player would press it
+    }
 }
 
 // Checks the title screen's code and makes (doesn't enable) the hook on its buttons; null if
@@ -3935,7 +4006,27 @@ int title_add(FH2Mod* m, const FH2TitleEntry* e) {
         log_line(m->name, std::string("add_title_entry: ") + e->key + " needs a label");
         return 0;
     }
-    if (!e->on_press) {
+    // a list: choices (from the struct's newer part), each with a label, and on_choose
+    const bool has_list = e->size >= offsetof(FH2TitleEntry, list_message) + sizeof(const char*) && e->choices;
+    std::vector<std::string> choices;
+    if (has_list) {
+        if (e->choice_count < 1 || e->choice_count > FH2_TITLE_MAX_CHOICES) {
+            log_line(m->name, std::string("add_title_entry: ") + e->key + " can have 1 to " + std::to_string(FH2_TITLE_MAX_CHOICES) +
+                                  " choices, not " + std::to_string(e->choice_count));
+            return 0;
+        }
+        for (uint32_t i = 0; i < e->choice_count; ++i) {
+            if (!e->choices[i] || !*e->choices[i]) {
+                log_line(m->name, std::string("add_title_entry: ") + e->key + "'s choice " + std::to_string(i) + " has no label");
+                return 0;
+            }
+            choices.emplace_back(e->choices[i]);
+        }
+        if (!e->on_choose) {
+            log_line(m->name, std::string("add_title_entry: ") + e->key + " has choices but no on_choose");
+            return 0;
+        }
+    } else if (!e->on_press) {
         log_line(m->name, std::string("add_title_entry: ") + e->key + " needs an on_press");
         return 0;
     }
@@ -3978,8 +4069,27 @@ int title_add(FH2Mod* m, const FH2TitleEntry* e) {
         label.resize(cut);
         log_line(m->name, std::string("add_title_entry: ") + e->key + "'s label is cut to \"" + label + "\"");
     }
-    g_titles.push_back({m, e->key, label, e->on_press, e->user, button});
-    log_line(m->name, std::string("title-screen entry: (") + button_letters(button) + ") " + ascii_upper(label));
+    TitleEntry& t = g_titles.emplace_back();
+    t.mod         = m;
+    t.key         = e->key;
+    t.label       = label;
+    t.on_press    = e->on_press;
+    t.user        = e->user;
+    t.button      = button;
+    if (has_list) {
+        // the strings stay where they are: the entry doesn't move once it's in g_titles
+        t.on_choose    = e->on_choose;
+        t.choices      = std::move(choices);
+        t.list_title   = widen(e->list_title && *e->list_title ? e->list_title : label.c_str());
+        t.list_message = widen(e->list_message ? e->list_message : "");
+        for (const std::string& c : t.choices) t.wchoices.push_back(widen(c));
+        t.wchoices.push_back(L"Back");
+        t.loc.push_back(loc_string(t.list_title.c_str()));
+        t.loc.push_back(loc_string(t.list_message.c_str()));
+        for (const std::wstring& c : t.wchoices) t.loc.push_back(loc_string(c.c_str()));
+    }
+    log_line(m->name, std::string("title-screen entry: (") + button_letters(button) + ") " + ascii_upper(label) +
+                          (has_list ? " (a list of " + std::to_string(t.choices.size()) + ")" : ""));
     return 1;
 }
 

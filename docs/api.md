@@ -528,9 +528,14 @@ typedef struct FH2TitleEntry {
     uint32_t size;                 /* sizeof(FH2TitleEntry) */
     const char* key;               /* unique within your mod: "Storm" */
     const char* label;             /* "Start on Storm Island" (shown in capitals) */
-    FH2TitlePressFn on_press;      /* int (*)(void* user, const char* key) */
+    FH2TitlePressFn on_press;      /* int (*)(void* user, const char* key); NULL for a list */
     void* user;
     int button;                    /* FH2_BUTTON_Y, _X, _RB or _LB; 0 = the next free one */
+    const char* const* choices;    /* a list instead: its choices (UTF-8), or NULL */
+    uint32_t choice_count;         /* 1 to FH2_TITLE_MAX_CHOICES (10) */
+    FH2TitleChooseFn on_choose;    /* int (*)(void* user, const char* key, uint32_t choice) */
+    const char* list_title;        /* the box's title; NULL = the label */
+    const char* list_message;      /* text over the choices; may be NULL */
 } FH2TitleEntry;
 ```
 
@@ -540,6 +545,7 @@ An entry is a line of your own on the title screen, under "PRESS (A) TO START" a
 - **When.** Add entries from `fh2mod_init`. The title screen is written once every mod's `fh2mod_init` has returned, so an entry added later only shows from the next launch.
 - **The label.** UTF-8, shown in capitals in the game's small title-screen text. About 24 characters fit beside the button; anything past 32 bytes is cut, and the log says so.
 - **`on_press`** runs on the game's UI thread when the player presses the entry's button while the title screen waits for A. Keep it short: set a flag, or start a thread of your own. Return `FH2_TITLE_HANDLED` to stay on the title screen, or `FH2_TITLE_START` for the platform to press A for the player straight after. The game then signs in, loads the save and loads the world as it always does. A press while the game is already signing in goes to the game, not to you.
+- **Lists.** Give `choices` (and `choice_count`, `on_choose`) and the press shows the game's message box over the title screen instead, titled `list_title` (or the label), with `list_message` over the choices and a Back under them. Picking a choice calls `on_choose` with its position from 0, on the UI thread, with the same return values as `on_press`; Back just closes the box. `on_press` isn't called for a list and can be `NULL`. The choices are copied when you add the entry, so they're fixed until the next launch. Up to 10 fit on screen, and about 30 characters of each.
 - **`title_started_by`** returns the key of your entry that started the game, or `NULL` if the player pressed A, another mod's entry started it, or it hasn't started yet. Pressing A on the title screen later (after going back to it) sets it back to `NULL`. Call it from any thread, typically from a hook on the world or save loading, to know whether this start is yours.
 
 ```cpp
@@ -554,6 +560,18 @@ if (api->api_version >= 9) {
 // later, where your mod picks the world to load
 const char* by = api->api_version >= 9 ? api->title_started_by(mod) : nullptr;
 if (by && std::strcmp(by, "Storm") == 0) { /* this start is Storm Island's */ }
+```
+
+A list, with the title and Back added by the game's message box:
+
+```cpp
+static const char* const kWorlds[] = {"Mainland", "Storm Island"};
+static int on_world(void*, const char*, uint32_t choice) { g_world = choice; return FH2_TITLE_START; }
+
+FH2TitleEntry e{};
+e.size = sizeof e; e.key = "World"; e.label = "Choose where to start"; e.button = FH2_BUTTON_Y;
+e.choices = kWorlds; e.choice_count = 2; e.on_choose = on_world;
+api->add_title_entry(mod, &e);
 ```
 
 The lines are part of the platform's own copy of `UI/Scenes/Anthem/A_Splash.xaml`, hidden until its hook on the title screen's buttons is in place, so if the game's code doesn't look as expected they never show and `platform.log` says why. [`game-notes.md`](game-notes.md#menus) has how the title screen works.

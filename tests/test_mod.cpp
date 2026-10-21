@@ -68,15 +68,30 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
         !api->set_page_tile_colors(g_mod, "Other", 0, 0))
         api->log(g_mod, "tile text ok");
 
-    // Title-screen entries: Y by default, X asked for, Y asked for again (taken: the next free one,
-    // RB), LB, then none left; a repeated key, a bad one, a long label cut to 32 bytes.
+    // Title-screen entries: Y by default, X asked for (a list), Y asked for again (taken: the next
+    // free one, RB), LB, then none left; a repeated key, a bad one, a long label cut to 32 bytes,
+    // lists with too many choices, an empty choice or no on_choose.
     FH2TitleEntry te{sizeof te};
     te.key = "Garage"; te.label = "Drive the test garage";
     te.on_press = [](void*, const char*) { return FH2_TITLE_START; };
     api->add_title_entry(g_mod, &te);
     api->add_title_entry(g_mod, &te);                     // refused: already there
-    te.key = "Second"; te.label = "Second entry"; te.button = FH2_BUTTON_X;
+    static const char* const many[] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"};
+    static const char* const blank[] = {"Fine", ""};
+    static const char* const two[]   = {"Track one", "Track two"};
+    te.key = "Second"; te.label = "Second entry"; te.button = FH2_BUTTON_X; te.on_press = nullptr;
+    te.on_choose = [](void*, const char*, uint32_t choice) { return choice == 1 ? FH2_TITLE_START : FH2_TITLE_HANDLED; };
+    te.choices = many; te.choice_count = 11;
+    api->add_title_entry(g_mod, &te);                     // refused: 1 to 10
+    te.choices = blank; te.choice_count = 2;
+    api->add_title_entry(g_mod, &te);                     // refused: a choice without a label
+    te.choices = two; te.on_choose = nullptr;
+    api->add_title_entry(g_mod, &te);                     // refused: no on_choose
+    te.on_choose = [](void*, const char*, uint32_t choice) { return choice == 1 ? FH2_TITLE_START : FH2_TITLE_HANDLED; };
+    te.list_title = "Pick a track"; te.list_message = "Both are test tracks.";
     api->add_title_entry(g_mod, &te);
+    te.choices = nullptr; te.choice_count = 0; te.on_choose = nullptr; te.list_title = nullptr; te.list_message = nullptr;
+    te.on_press = [](void*, const char*) { return FH2_TITLE_START; };
     te.key = "Third"; te.label = "Third entry with a label that is far too long"; te.button = FH2_BUTTON_Y;
     api->add_title_entry(g_mod, &te);
     te.key = "Fourth"; te.label = "Fourth & <last>"; te.button = 0;
