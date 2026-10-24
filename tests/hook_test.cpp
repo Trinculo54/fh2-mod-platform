@@ -117,7 +117,7 @@ int wmain(int argc, wchar_t** argv) {
     Sleep(200);
     log = slurp(L"fh2-mods\\platform.log");
     std::printf("---- platform.log\n%s----\n", log.c_str());
-    CHECK(has(log, "FH2 Mod Platform 2.7.1 (API 8)"));
+    CHECK(has(log, "FH2 Mod Platform 2.7.2 (API 8)"));
     CHECK(has(log, "(ivictim mov)") && has(log, "(mark b) (shared with HookA, HookB)"));
     CHECK(has(log, "(prolog): it's in the function's prolog"));
     CHECK(has(log, "(mid-instruction): it isn't the start of an instruction"));
