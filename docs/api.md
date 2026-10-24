@@ -136,9 +136,26 @@ void apply_database(FH2Mod* mod);
 
 `media\Stripped\gamedbRC.slt` is a SQLite database that holds most of the game's data: cars (`Data_Car`), events, AI drivers and around 280 more tables. `add_sql` queues statements to run against it. One call can hold several statements separated by semicolons, and calls add up.
 
-The platform copies the original database and runs every mod's statements, in load order, each mod inside its own transaction. If any statement from a mod fails, all of that mod's changes are rolled back and the SQLite error is logged, while the other mods' changes still apply. The result goes to `mediaoverride\Stripped\gamedbRC.slt`. When no mod has statements any more, it's deleted.
+The platform copies the database the game would read and runs every mod's statements, in load order, each mod inside its own transaction. If any statement from a mod fails, all of that mod's changes are rolled back and the SQLite error is logged, while the other mods' changes still apply. The result goes to `mediaoverride\Stripped\gamedbRC.slt`, which the game reads first.
 
-Building the copy takes a moment, so it's only redone when something changed. `fh2-mods\platform-db.txt` remembers a hash of the original database and every mod's statements, and the log repeats the results from the last build.
+Other mods put a database of their own there too, such as traffic car mods, and FH2MP puts the server's there for online play. From platform 2.7.2 the platform's copy is built on what's there:
+
+- **Another mod's database in `mediaoverride\Stripped`** is built on. A copy of it is kept as `fh2-mods\platform-db-base.slt`.
+- **Otherwise a car pack's in `mediapc\Stripped`** is built on, and without one, the original in `media\Stripped`.
+- **FH2MP's online copy** is built over. FH2MP puts it back when you play online. The platform knows it by its bytes, or by the size and date the server's database had at earlier launches. A date up to 2 s off still counts when it's a whole hundredth of a second, as every date is on a game drive with FAT32 (which keeps dates to 2 s) or exFAT. Any other date has to be the same, so another mod's database that's the same size and dated a moment from the server's isn't taken for FH2MP's copy.
+- **When no mod has statements any more**, or none of them could be applied, the platform's copy is deleted and the other mod's database is put back, byte for byte and with its own date. It's also put back when the platform's copy was deleted along with the last mod that changes the database, even after FH2MP put the server's database in its place online. While FH2MP is installed, the platform keeps a copy of another mod's database even when no mod has statements, and puts it back after you've played online.
+- **A plain copy of the game's database, or a car pack's,** put in `mediaoverride\Stripped` means the other mod was uninstalled that way. Its kept copy isn't built on or put back any more, and goes to `fh2-mods\platform-db-base.previous.slt`.
+- **A file the platform replaces that it can't make again**, such as a copy another install of the platform built, is kept as `fh2-mods\platform-db-base.previous.slt`. Only the last one is kept, and the log says each time.
+
+Up to 2.7.1 the platform always built from `media`'s database, so another mod's database in `mediaoverride` was lost. A copy an older platform left there is built again, or deleted once no mod changes the database. That includes a plain copy of the game's, which 2.7.1 left when no statement changed a row.
+
+Every copy the platform builds has the platform's mark in its header (`application_id` 0x46483244, "FH2D"; the game doesn't read it), and `fh2-mods\platform-db.txt` has its size and date. That's how the platform tells its own copy from other mods' databases. So:
+
+- **Don't delete `mediaoverride\Stripped\gamedbRC.slt` in your mod's uninstall steps.** The platform deletes its own copy and puts back what was there. If another mod still changes the database, deleting it means the copy is built again without the other mod's database, which is then only kept in `platform-db-base.previous.slt`.
+- **Don't ship the platform's copy in your mod.** Because of the mark, it's never built on: the platform builds over it from the game's own database. If your mod ships a database of its own, start from the game's original, or set `PRAGMA application_id = 0` on it.
+- **Two Azimuth folders sharing one game folder** don't know each other's copy. Keep the mods that change the database in one of them. FH2MP can be in the other: from platform 2.7.2, each folder lists the size and date of its FH2MP's copies in `mediaoverride\Stripped\platform-db-fh2mp.txt`, so the other folder doesn't take the server's database for another mod's.
+
+Building the copy takes a moment, so it's only redone when something changed. `fh2-mods\platform-db.txt` remembers a hash of the database it's built on and every mod's statements, and the log repeats the results from the last build.
 
 Statements added in `fh2mod_init` are applied for you. For later ones, call `apply_database` from your own thread. Like string tables, the database is read once at startup, so later changes show from the next launch.
 

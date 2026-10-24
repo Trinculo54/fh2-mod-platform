@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 # Bump VERSION before tagging a release (the tag build checks they match).
-project(fh2_mod_platform VERSION 2.7.1 LANGUAGES C CXX RC)
+project(fh2_mod_platform VERSION 2.7.2 LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -114,5 +114,14 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_library(legacy_mod SHARED tests/legacy_mod.cpp)
         set_target_properties(legacy_mod PROPERTIES OUTPUT_NAME Legacy PREFIX "")
         target_link_options(legacy_mod PRIVATE -static)
+        # The database test, run by tests/run_platform_test.sh too; DbMod.dll plays each mod it needs.
+        add_executable(database_test tests/database_test.cpp ${_sqlite_src})
+        target_include_directories(database_test PRIVATE third_party/sqlite)
+        target_compile_definitions(database_test PRIVATE UNICODE _UNICODE)
+        target_link_options(database_test PRIVATE -municode -static)
+        add_library(db_mod SHARED tests/db_mod.cpp)
+        target_link_libraries(db_mod PRIVATE fh2mod_api)
+        set_target_properties(db_mod PROPERTIES OUTPUT_NAME DbMod PREFIX "")
+        target_link_options(db_mod PRIVATE -static)
     endif()
 endif()

@@ -6,7 +6,8 @@
 #   tests/run_platform_test.sh <EN.zip> <gamedbRC.slt> [forza_durango_release_final.exe]
 # With FH2_MEDIA set to your install's media folder, its UI.zip and stateflow.zip
 # are copied in too, and the menus the platform writes (the MODS tab, pages) are
-# checked.
+# checked. Then the database test (tests/database_test.cpp) runs in the same
+# folder, with other mods' databases in mediaoverride and mediapc.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 b=$root/build-test
@@ -14,7 +15,7 @@ dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
 mkdir -p "$dir/fh2-mods" "$dir/FH2/Mount/media/Stripped/StringTables" "$dir/FH2/Mount/mediaoverride/UI"
 cp "$b/platform_test.exe" "$dir/azimuth.exe"
-cp "$b/d3dcompiler_47.dll" "$dir/"
+cp "$b/d3dcompiler_47.dll" "$b/database_test.exe" "$b/DbMod.dll" "$dir/"
 cp "$b/AaaMod.dll" "$b/HelloMod.dll" "$b/TestMod.dll" "$b/Legacy.dll" "$dir/fh2-mods/"
 cp "$1" "$dir/FH2/Mount/media/Stripped/StringTables/EN.zip"
 cp "$2" "$dir/FH2/Mount/media/Stripped/gamedbRC.slt"
@@ -29,4 +30,5 @@ cd "$dir"
 wine azimuth.exe full "${exe[@]}"
 rm fh2-mods/TestMod.dll
 wine azimuth.exe removed
+wine database_test.exe
 wine azimuth.exe crash
