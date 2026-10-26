@@ -932,7 +932,10 @@ static void failures() {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc > 1 && std::wstring{argv[1]} == L"launch") {
-        // As azimuth.exe: the platform logs "N mod(s) loaded" once the database is done.
+        // As azimuth.exe: the platform logs "N mod(s) loaded" once the database is done. The last
+        // launch's log goes first: the platform only starts a new one from its own thread, and on a
+        // slow drive the old one's "mod(s) loaded" could otherwise end this launch before it starts.
+        DeleteFileW(L"fh2-mods\\platform.log");
         if (!LoadLibraryW(L"d3dcompiler_47.dll")) return 2;
         for (int i = 0; i < 600; ++i) {
             Sleep(50);
