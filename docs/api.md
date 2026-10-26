@@ -1,6 +1,6 @@
 # API reference
 
-Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5, 7 with 2.6, 8 with 2.7 and 9 with 2.8. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 the Mods page, version 5 its sliders, version 6 mod descriptions and link rows for the MODS tab, version 7 byte patches and instruction hooks, version 8 pages of your own, and version 9 title-screen entries; the sections for those say so.
+Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5, 7 with 2.6, 8 with 2.7 and 9 with 2.8. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 the Mods page, version 5 its sliders, version 6 mod descriptions and link rows for the MODS tab, version 7 byte patches and instruction hooks, version 8 pages of your own, and version 9 title-screen entries, choice rows and online play (FH2MP); the sections for those say so.
 
 ## Rules that apply everywhere
 
@@ -45,6 +45,8 @@ Call once, from `fh2mod_init`. It returns your handle, or null if `info` is miss
 | `github_repo` | `"Owner/Repo"`, or null. When set (and `check_updates` is 1), the platform checks your latest release on GitHub, at most every six hours, and shows "Name x.y.z is available" on the title screen when it's newer than `version`. The six hours start over when a different `version` is installed, and a remembered release older than `version` is never trusted, so installing an older or newer build checks again straight away. |
 | `platform_version` | The platform version you ship with. Pass `FH2MOD_PLATFORM_VERSION`. If the installed platform is older, players get "Old FH2 Mod Platform: reinstall Name". |
 | `check_updates` | 0 to never go online for your mod. Give players a setting for it. |
+| `description` | API 6: a sentence or two for the MODS tab's Installed mods page, or null. |
+| `offline_only` | API 9: nonzero if your mod shouldn't run in online play. See [Online play](#online-play-api-9). |
 
 The update check runs in the background. If GitHub can't be reached, the last answer is used.
 
@@ -304,13 +306,18 @@ typedef struct FH2Setting {
     FH2SettingChangedFn on_change; /* void (*)(void* user, const char* key, int value); may be NULL */
     void* user;
     /* API 5: sliders. Zeroed, the row is On/Off. */
-    int kind;                      /* FH2_SETTING_ON_OFF or FH2_SETTING_SLIDER */
+    int kind;                      /* FH2_SETTING_ON_OFF, _SLIDER, _LINK (API 6) or _CHOICE (API 9) */
     float min, max;                /* the slider's range */
     float step;                    /* one press of left or right; 0 = a hundredth of the range */
     float slider_value;            /* its current value */
     float display_scale;           /* the number shown is value * this (100 shows 0.12 as 12); 0 = 1 */
     int decimals;                  /* digits after the decimal point, 0 to 3 */
     FH2SliderChangedFn on_slide;   /* void (*)(void* user, const char* key, float value); may be NULL */
+    /* API 6: links */
+    const char* url;               /* with kind = FH2_SETTING_LINK */
+    /* API 9: choices */
+    const char* const* choices;    /* with kind = FH2_SETTING_CHOICE: the names, UTF-8 */
+    uint32_t choice_count;         /* 2 to FH2_SETTING_MAX_CHOICES (32) */
 } FH2Setting;
 ```
 
@@ -352,6 +359,20 @@ if (api->api_version >= 5) {
     s.key = "SparkAmount"; s.label = "Spark amount"; s.description = "How many sparks fly, in percent.";
     s.kind = FH2_SETTING_SLIDER; s.min = 0; s.max = 2; s.step = 0.05f;
     s.slider_value = g_spark_amount; s.display_scale = 100; s.on_slide = slid;
+    api->add_setting(mod, &s);
+}
+```
+
+**Choices (API 9, platform 2.8.0).** Set `kind = FH2_SETTING_CHOICE` and give `choices` and `choice_count`, and the row shows one of them by name, between the same left and right arrows as the game's own option rows ("Speedometer: Analogue / Digital"). Left and right step through them, stopping at the ends. `value` is the index of the one chosen, from 0, and `on_change`, `get_setting` and `set_setting` use that index (`set_setting` keeps it in range). The names are copied when you add the row; there can be 2 to 32 of them, and a dozen or so characters of each fit. `needs_restart` works as for a switch. Use it wherever a number would otherwise stand for something with a name, like a button or a mode. An older platform would show it as an On/Off row, so only add one when `api_version >= 9`:
+
+```cpp
+static const char* const kButtons[] = {"LB", "RB", "A", "B", "X", "Y"};
+
+if (api->api_version >= 9) {
+    FH2Setting s{sizeof s};
+    s.key = "Button"; s.label = "Nitro button"; s.description = "The button that burns nitro.";
+    s.kind = FH2_SETTING_CHOICE; s.choices = kButtons; s.choice_count = 6;
+    s.value = g_button; s.on_change = changed;   // changed() gets the index: 0 for LB, 1 for RB...
     api->add_setting(mod, &s);
 }
 ```
@@ -575,6 +596,30 @@ api->add_title_entry(mod, &e);
 ```
 
 The lines are part of the platform's own copy of `UI/Scenes/Anthem/A_Splash.xaml`, hidden until its hook on the title screen's buttons is in place, so if the game's code doesn't look as expected they never show and `platform.log` says why. [`game-notes.md`](game-notes.md#menus) has how the title screen works.
+
+## Online play (API 9)
+
+```c
+int playing_online(void);
+/* and in FH2ModInfo: */
+int offline_only;
+```
+
+[FH2MP](https://github.com/Charelene/FH2MP) brings back online play, and runs on the platform itself (its `fh2-mods\FH2MP.dll`). Some mods shouldn't run in online play, because they change how cars drive or what other players see: a nitro boost, say. From platform 2.8.0 such a mod isn't loaded when the game is started from the FH2MP launcher.
+
+- **Online is decided once, before any mod loads.** It's online when FH2MP's launcher has handed the game a session (its `data\bin\fh2mp-session.txt`, which the launcher writes before starting the game and removes when it ends; the platform only checks that it's there, and never reads it, as it holds the player's token), and `FH2MP.dll` is in `fh2-mods` and turned on. `playing_online` is never true without FH2MP. The log says "started from the FH2MP launcher (online play)".
+- **`offline_only`**: set it to 1 in your `FH2ModInfo` if your mod shouldn't run online. Online, `register_mod` then returns `NULL`, so call `register_mod` first in `fh2mod_init` and return straight away when it gives you `NULL` (as every mod should anyway); what you return then isn't reported as a problem. The platform remembers it, and from the next online launch doesn't load your DLL at all. Offline, nothing changes. Older platforms ignore the member, so set it whatever the version.
+- **The player decides in the end.** Where FH2MP is installed, each mod's page on MODS > Installed mods has a **Load when playing online** switch, set from your `offline_only` until the player changes it. Their choice is kept in `fh2-mods\platform-online.txt` and takes effect the next time the game starts from the launcher. It works for any DLL in `fh2-mods`, platform mods or not, so players can also turn off a mod whose author hasn't set the flag.
+- **`playing_online`** returns 1 when the game is online in that sense, 0 otherwise. Call it from anywhere, `fh2mod_init` included; it doesn't change during the session. Use it to turn off just the part of your mod that shouldn't run online and keep the rest. Check `api_version >= 9` first.
+- **What it can't switch off**: files you copied into `mediaoverride` yourself (your mod's zip, say). The game reads those online too. Files you put there with `set_file` are your mod's, and go with it.
+
+```cpp
+FH2ModInfo info{sizeof info, "Nitro", "1.2.0", "Me/Nitro", FH2MOD_PLATFORM_VERSION, 1};
+info.description  = "Fast & Furious style nitro.";
+info.offline_only = 1;   // the boost would be a cheat online
+g_mod = api->register_mod(&info);
+if (!g_mod) return 0;    // online (or a bad info): nothing to do
+```
 
 ## Crash reports
 

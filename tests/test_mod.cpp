@@ -102,6 +102,25 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->add_title_entry(g_mod, &te);                     // refused: not a key
     if (!api->title_started_by(g_mod)) api->log(g_mod, "no title start yet");
 
+    // A choice row (API 9), its index through get_setting and set_setting (kept in range), and
+    // two refused: one choice, and more than FH2_SETTING_MAX_CHOICES.
+    static const char* const buttons[] = {"LB", "RB", "A & <B>"};
+    static const char* const lots[FH2_SETTING_MAX_CHOICES + 1] = {"x", "x"};
+    FH2Setting ch{sizeof ch};
+    ch.key = "Button"; ch.label = "Test button"; ch.description = "Which button.";
+    ch.kind = FH2_SETTING_CHOICE; ch.choices = buttons; ch.choice_count = 3; ch.value = 1;
+    ch.on_change = [](void*, const char*, int) {};
+    if (api->add_setting(g_mod, &ch) && api->get_setting(g_mod, "Button") == 1) {
+        api->set_setting(g_mod, "Button", 7);
+        if (api->get_setting(g_mod, "Button") == 2) api->log(g_mod, "choice row ok");
+        api->set_setting(g_mod, "Button", 1);
+    }
+    ch.key = "One"; ch.choice_count = 1;
+    api->add_setting(g_mod, &ch);                         // refused: one choice
+    ch.key = "Lots"; ch.choices = lots; ch.choice_count = FH2_SETTING_MAX_CHOICES + 1;
+    api->add_setting(g_mod, &ch);                         // refused: too many
+    api->log(g_mod, api->playing_online() ? "playing online" : "playing offline");
+
     CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
         Sleep(300);
         g_api->replace_string(g_mod, "AIPlayers.str", L"Super Final", L"Buddy2");

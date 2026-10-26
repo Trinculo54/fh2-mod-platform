@@ -32,3 +32,16 @@ rm fh2-mods/TestMod.dll
 wine azimuth.exe removed
 wine database_test.exe
 wine azimuth.exe crash
+# Online play (platform 2.8.0): a stand-in FH2MP.dll (it only has to be there), OfflineMod, and
+# the session file the FH2MP launcher writes.
+rm -f crash.txt
+cp "$b/Legacy.dll" fh2-mods/FH2MP.dll
+cp "$b/OfflineMod.dll" fh2-mods/
+mkdir -p data/bin
+printf 'xuid=1\ntoken=test\n' > data/bin/fh2mp-session.txt
+wine azimuth.exe online-first
+wine azimuth.exe online
+printf 'OfflineMod.dll\t1\nHelloMod.dll\t0\n' > fh2-mods/platform-online.txt
+wine azimuth.exe online-chosen
+printf 'fh2mp.dll\n' > fh2-mods/platform-disabled.txt
+wine azimuth.exe fh2mp-off

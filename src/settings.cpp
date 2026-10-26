@@ -96,6 +96,8 @@ struct Row {
     float fboot = 0, fmin = 0, fmax = 1, fstep = 0.01f, scale = 1;
     int decimals = 0;
     FH2SliderChangedFn on_slide = nullptr;
+    // choices (API 9): a slider over 0 .. n-1, shown by name; `value` is the index
+    std::vector<std::string> choices;
 };
 std::mutex g_mu;                     // guards the list (rows are never removed)
 std::deque<Row> g_rows;
@@ -313,9 +315,17 @@ void slider_set(Row* r, void* obj, uint8_t* value) {
     const bool pending_before = restart_pending();
     const float old          = r->fvalue.exchange(f);
     if (std::fabs(old - f) < r->fstep * 0.01f) return;
-    log_line(r->mod->name, r->key + " set to " + show(*r, f) + " on the Mods page");
-    if (r->on_slide && !call_on_slide(r->on_slide, r->user, r->key.c_str(), f))
-        log_line(r->mod->name, "crashed in its on_slide for " + r->key);
+    if (!r->choices.empty()) {   // a choice row (API 9): its index, to on_change
+        const int v = static_cast<int>(std::lround(f));
+        r->value    = v;
+        log_line(r->mod->name, r->key + " set to " + r->choices[static_cast<std::size_t>(v)] + " on the Mods page");
+        if (r->on_change && !call_on_change(r->on_change, r->user, r->key.c_str(), v))
+            log_line(r->mod->name, "crashed in its on_change for " + r->key);
+    } else {
+        log_line(r->mod->name, r->key + " set to " + show(*r, f) + " on the Mods page");
+        if (r->on_slide && !call_on_slide(r->on_slide, r->user, r->key.c_str(), f))
+            log_line(r->mod->name, "crashed in its on_slide for " + r->key);
+    }
     if (restart_pending() != pending_before && obj && g_notice_desc) notify_changed(obj, g_notice_desc);
 }
 
@@ -920,6 +930,64 @@ std::string slider_resources(const Row& r, std::size_t i) {
     return res;
 }
 
+// A choice row's style (API 9): laid out like the game's own option rows (A_Style_SpinnerControl_Default,
+// Shared_Spinners.xaml: the label, then the value between a left and a right arrow), but a Slider over
+// the choices' numbers, so it binds to a float property of ours like a slider. The control's
+// SpinnerControl takes its items from a list the page's C++ object makes, which a page of ours
+// can't; this shows each name by the slider's Value instead, as the game's own rating slider shows
+// its stars (F606_RateDialog.xaml: Trigger Property="Value" Value="1", ...). The Track is there,
+// unseen, for the Slider's own workings.
+std::string choice_resources(const Row& r, std::size_t i) {
+    const std::string n    = std::to_string(i);
+    const std::size_t last = r.choices.size() - 1;
+    std::string names, triggers;
+    for (std::size_t c = 0; c <= last; ++c) {
+        names += "                                        <local:FZTextBlock x:Name=\"FH2Mod_Choice_" + std::to_string(c) + "\" Text=\"" +
+                 xml_escape(r.choices[c]) + "\" Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Center\"" +
+                 (c ? " Visibility=\"Hidden\"" : "") + " />\r\n";
+        std::string set;
+        if (c == 0) set += "                                    <Setter TargetName=\"LeftArrow\" Property=\"Visibility\" Value=\"Hidden\" />\r\n";
+        if (c == last) set += "                                    <Setter TargetName=\"RightArrow\" Property=\"Visibility\" Value=\"Hidden\" />\r\n";
+        if (c) {
+            set += "                                    <Setter TargetName=\"FH2Mod_Choice_0\" Property=\"Visibility\" Value=\"Hidden\" />\r\n";
+            set += "                                    <Setter TargetName=\"FH2Mod_Choice_" + std::to_string(c) +
+                   "\" Property=\"Visibility\" Value=\"Visible\" />\r\n";
+        }
+        triggers += "                                <Trigger Property=\"Value\" Value=\"" + std::to_string(c) + "\">\r\n" + set +
+                    "                                </Trigger>\r\n";
+    }
+    return "            <Style x:Key=\"FH2Mod_Choice_" + n + "\" TargetType=\"Slider\" BasedOn=\"{StaticResource A_Style_Slider_Options}\">\r\n"
+           "                <Setter Property=\"Minimum\" Value=\"0\" />\r\n"
+           "                <Setter Property=\"Maximum\" Value=\"" + std::to_string(last) + "\" />\r\n"
+           "                <Setter Property=\"SmallChange\" Value=\"1\" />\r\n"
+           "                <Setter Property=\"LargeChange\" Value=\"1\" />\r\n"
+           "                <Setter Property=\"Template\">\r\n"
+           "                    <Setter.Value>\r\n"
+           "                        <ControlTemplate TargetType=\"Slider\">\r\n"
+           "                            <Grid FocusManager.IsFocusScope=\"True\" VerticalAlignment=\"Center\">\r\n"
+           "                                <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition /></Grid.ColumnDefinitions>\r\n"
+           "                                <local:FZTextBlock x:Name=\"PART_Label\" Text=\"{Binding Tag.Heading, RelativeSource={RelativeSource TemplatedParent}}\" "
+           "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Left\" />\r\n"
+           "                                <Grid Grid.Column=\"1\">\r\n"
+           "                                    <Track x:Name=\"PART_Track\" Opacity=\"0\" />\r\n"
+           "                                    <DockPanel>\r\n"
+           "                                        <Grid DockPanel.Dock=\"Left\"><ContentControl x:Name=\"LeftArrow\" Style=\"{StaticResource A_Style_Arrow_Left}\" /></Grid>\r\n"
+           "                                        <Grid DockPanel.Dock=\"Right\"><ContentControl x:Name=\"RightArrow\" Style=\"{StaticResource A_Style_Arrow_Right}\" /></Grid>\r\n"
+           "                                        <Grid>\r\n" +
+           names +
+           "                                        </Grid>\r\n"
+           "                                    </DockPanel>\r\n"
+           "                                </Grid>\r\n"
+           "                            </Grid>\r\n"
+           "                            <ControlTemplate.Triggers>\r\n" +
+           triggers +
+           "                            </ControlTemplate.Triggers>\r\n"
+           "                        </ControlTemplate>\r\n"
+           "                    </Setter.Value>\r\n"
+           "                </Setter>\r\n"
+           "            </Style>\r\n";
+}
+
 // A page laid out like the HUD options page (A_HUDOptions.xaml), with a list of our own. An item
 // is one of our rows, or a line of information: a row with a label and a description and no
 // value to change.
@@ -1010,6 +1078,12 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
             if (r.restart) desc += (desc.empty() ? "" : " ") + std::string("Takes effect the next time you start the game.");
             if (r.mod != &g_hub_owner) desc += (desc.empty() ? "" : " ") + std::string("(") + r.mod->name + ")";
             data_item(label, desc);
+            if (!r.choices.empty()) {
+                res += choice_resources(r, it.row);
+                rows += "                                        <Slider Value=\"{Binding " + r.prop + "}\" Tag=\"{StaticResource " + key +
+                        "}\" Style=\"{StaticResource FH2Mod_Choice_" + std::to_string(it.row) + "}\"" + first + " />\r\n";
+                continue;
+            }
             if (r.slider) {
                 res += slider_resources(r, it.row);
                 rows += "                                        <Slider Value=\"{Binding " + r.prop + "}\" Tag=\"{StaticResource " + key +
@@ -1540,6 +1614,7 @@ bool write_settings_page() {
 // Installed mods has a switch per mod in fh2-mods, with that mod's own rows under it.
 std::vector<ModEntry> g_entries;     // fh2-mods, in load order (set once, before the hooks)
 std::vector<int> g_entry_row;        // each entry's switch row in g_rows
+std::vector<int> g_entry_online_row; // each entry's "Load when playing online" row in g_rows, or -1
 std::mutex g_page_mu;                // one page written at a time
 
 enum HubPage { kHubInstalled = 1, kHubUpdates, kHubGetMods, kHubAbout, kHubAllSettings = 6, kHubModPage = 10, kHubTilePage = 80 };
@@ -1558,8 +1633,15 @@ void hub_switch_changed(void* user, const char*, int v) {
     if (i < g_entries.size()) set_mod_enabled(g_entries[i].dll, v != 0);
 }
 
+void hub_online_changed(void* user, const char*, int v) {
+    const auto i = reinterpret_cast<std::uintptr_t>(user);
+    if (i < g_entries.size()) set_mod_online(g_entries[i].dll, v != 0);
+}
+
 void add_hub_rows() {
     g_entries = mod_entries();
+    // "Load when playing online" (platform 2.8.0), only where FH2MP is installed, and not for FH2MP
+    const bool fh2mp = fh2mp_installed();
     std::scoped_lock lk{g_mu};
     for (std::size_t i = 0; i < g_entries.size(); ++i) {
         const ModEntry& e = g_entries[i];
@@ -1574,6 +1656,24 @@ void add_hub_rows() {
         r.on_change = &hub_switch_changed;
         r.user     = reinterpret_cast<void*>(static_cast<std::uintptr_t>(i));
         g_entry_row.push_back(static_cast<int>(g_rows.size() - 1));
+        if (!fh2mp || _wcsicmp(e.dll.c_str(), L"FH2MP.dll") == 0) {
+            g_entry_online_row.push_back(-1);
+            continue;
+        }
+        Row& o       = g_rows.emplace_back();
+        o.mod        = &g_hub_owner;
+        o.key        = "ModOnline_" + std::to_string(i);
+        o.label      = "Load when playing online";
+        o.description = std::string("Off: when you start the game from the FH2MP launcher, the game doesn't load ") + e.name +
+                        ", so it can't change online play. " +
+                        (e.offline_only ? "Its author made it for offline play, so it's off unless you turn it on. " : "") +
+                        "Takes effect the next time you start the game from the launcher.";
+        o.prop       = "FH2Mod_" + std::to_string(g_rows.size() - 1);
+        o.value      = e.loads_online ? 1 : 0;
+        o.boot       = o.value;
+        o.on_change  = &hub_online_changed;   // no restart notice: it's about the next online start
+        o.user       = reinterpret_cast<void*>(static_cast<std::uintptr_t>(i));
+        g_entry_online_row.push_back(static_cast<int>(g_rows.size() - 1));
     }
 }
 
@@ -1680,6 +1780,9 @@ std::string about_mod(const ModEntry& e) {
 
 std::string mod_note(const ModEntry& e) {
     if (!e.enabled) return "Turned off: the game doesn't load it.";
+    if (e.online_off)
+        return "Off for online play: you started the game from the FH2MP launcher, and it's set not to load then "
+               "(\"Load when playing online\" on its page).";
     if (_wcsicmp(e.dll.c_str(), L"fh2wheel.dll") == 0) return "Not a platform mod: its settings are in fh2wheel-config.exe.";
     if (!e.platform_mod) return "A mod from before the platform: it has no settings here.";
     return "";
@@ -1698,6 +1801,7 @@ void add_mod_lines(PageItem& it, const ModEntry& e) {
     } else {
         std::string state;
         if (!e.enabled) state = "turned off";
+        else if (e.online_off) state = "off for online play";
         else if (!e.problem.empty()) state = "didn't load";
         else if (!e.mod || e.mod->repo.empty() || !e.mod->check_updates) state = "doesn't check for updates";
         else state = latest.empty() ? "not checked yet" : "up to date";
@@ -1739,7 +1843,7 @@ std::vector<PageItem> installed_items() {
     for (std::size_t i = 0; i < g_entries.size(); ++i) {
         const ModEntry& e = g_entries[i];
         PageItem it = info(e.name, about_mod(e));
-        it.value    = (e.enabled ? "" : "Off  ") + (e.version.empty() ? std::string() : e.version);
+        it.value    = (!e.enabled ? "Off  " : e.online_off ? "Off online  " : "") + (e.version.empty() ? std::string() : e.version);
         it.button   = i < kMaxModPages ? static_cast<int>(i) : -1;
         add_mod_lines(it, e);
         if (!it.version_alert.empty()) {   // a newer version is out: the version in red, with a !
@@ -1769,6 +1873,7 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
     sw.note += (sw.note.empty() ? "" : " ") + std::string("Off leaves it in fh2-mods, but the game doesn't load it.");
     add_mod_lines(sw, e);
     items.push_back(sw);
+    if (i < g_entry_online_row.size() && g_entry_online_row[i] >= 0) items.push_back({g_entry_online_row[i], "", ""});
     std::size_t own = 0;
     if (e.mod) {
         std::scoped_lock lk{g_mu};
@@ -1806,6 +1911,7 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
     }
     if (!own)
         items.push_back(info("No settings", !e.enabled ? "Its settings show here once it's turned on and the game has restarted."
+                                            : e.online_off ? "It isn't loaded for online play, so its settings aren't here this time."
                                             : e.platform_mod ? "This mod has no settings of its own."
                                                              : "A mod from before the platform can't add settings here."));
     return items;
@@ -3604,7 +3710,7 @@ void hook_game() {
     };
     g_sliders_ok = true;
     for (const Check& c : slider_checks) g_sliders_ok = g_sliders_ok && code_matches(c.rva, c.bytes.data(), c.bytes.size());
-    if (!g_sliders_ok) slog("the game's float properties don't look as expected; sliders won't work");
+    if (!g_sliders_ok) slog("the game's float properties don't look as expected; sliders and choice rows won't work");
     const Check popup_checks[] = {
         {RVA_MAKE_ITEMS, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48, 0xC7, 0x44, 0x24}},
         {RVA_MAKE_ITEM, {0x40, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x40}},
@@ -3708,6 +3814,29 @@ int settings_add(FH2Mod* m, const FH2Setting* s) {
         r.fboot    = r.fvalue;
         r.value    = 0;
         r.boot     = 0;
+    }
+    if (s->size >= offsetof(FH2Setting, choice_count) + sizeof(uint32_t) && s->kind == FH2_SETTING_CHOICE) {
+        if (!s->choices || s->choice_count < 2 || s->choice_count > FH2_SETTING_MAX_CHOICES) {
+            log_line(m->name, std::string("add_setting: ") + s->key + " is a choice row but needs 2 to " +
+                                  std::to_string(FH2_SETTING_MAX_CHOICES) + " choices");
+            g_rows.pop_back();
+            return 0;
+        }
+        // shown like the game's own option rows; underneath, a slider over the choices' numbers
+        for (uint32_t c = 0; c < s->choice_count; ++c)
+            r.choices.push_back(s->choices[c] && *s->choices[c] ? s->choices[c] : "?");
+        const int last = static_cast<int>(s->choice_count) - 1;
+        const int v    = s->value < 0 ? 0 : s->value > last ? last : s->value;
+        r.slider       = true;
+        r.fmin         = 0;
+        r.fmax         = static_cast<float>(last);
+        r.fstep        = 1;
+        r.scale        = 1;
+        r.decimals     = 0;
+        r.value        = v;
+        r.boot         = v;
+        r.fvalue       = static_cast<float>(v);
+        r.fboot        = r.fvalue;
     }
     log_line(m->name, "Mods page row: " + r.label + (r.restart ? " (after a restart)" : "") +
                           (g_written ? "; the page is already written, so it shows from the next launch" : ""));
@@ -4110,7 +4239,14 @@ int settings_get(FH2Mod* m, const char* key) {
 void settings_set(FH2Mod* m, const char* key, int value) {
     if (!m || !key) return;
     std::scoped_lock lk{g_mu};
-    if (Row* r = find_row(m, key); r && !r->slider) r->value = value ? 1 : 0;
+    Row* r = find_row(m, key);
+    if (r && !r->choices.empty()) {   // a choice row: the index
+        const int last = static_cast<int>(r->choices.size()) - 1;
+        r->value       = value < 0 ? 0 : value > last ? last : value;
+        r->fvalue      = static_cast<float>(r->value.load());
+    } else if (r && !r->slider) {
+        r->value = value ? 1 : 0;
+    }
 }
 
 float settings_get_slider(FH2Mod* m, const char* key) {

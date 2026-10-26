@@ -125,7 +125,7 @@ If you can't use the platform's hooks for something (a patch in the middle of a 
 
 ## Switches in the game
 
-If players will want to turn parts of your mod on and off, or tune a number, give them rows on the Mods page (API 4; sliders API 5): Pause > Settings > MODS, shared by every mod. You pass the current value and get told when the player changes it; you keep saving it in your own settings file, as before. Rows that only work after a restart are marked so, and the game then offers to restart for the player. [`api.md`](api.md#the-mods-page-api-4-sliders-api-5) has the details and an example. Keep it to the main switches; fine-tuning still belongs in your ini.
+If players will want to turn parts of your mod on and off, or tune a number, give them rows on the Mods page (API 4; sliders API 5): Pause > Settings > MODS, shared by every mod. You pass the current value and get told when the player changes it; you keep saving it in your own settings file, as before. Rows that only work after a restart are marked so, and the game then offers to restart for the player. From platform 2.8.0 (API 9) a row can also offer named choices, like a button or a mode, instead of a number standing for one. [`api.md`](api.md#the-mods-page-api-4-sliders-api-5) has the details and an example. Keep it to the main switches; fine-tuning still belongs in your ini.
 
 ## Your own files
 
@@ -156,5 +156,6 @@ A few things keep mods from tripping over each other:
 - **Hook through the platform.** Your own copy of MinHook, or your own byte patches, can't see other mods' hooks, and the platform can't warn about clashes with them.
 - **Don't write into the game's own files.** Use the string-table, file and database functions, so that removing your mod puts everything back.
 - **Make your features switchable.** Give each one a setting, and when it's off, undo what you did, for example with `clear_strings`.
+- **Mind online play.** If your mod changes driving or what other players would see, set `offline_only` in your `FH2ModInfo` (platform 2.8.0), so it isn't loaded when the game is started from the FH2MP launcher, or check `playing_online()` and turn just that part off. [`api.md`](api.md#online-play-api-9) explains both.
 - **Don't take ages to start.** Do your setup on your own threads.
 - **Log what you change.** It's how people debug, you included.

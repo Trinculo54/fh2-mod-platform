@@ -5,7 +5,9 @@
 //   FH2\Mount\mediaoverride\UI\handmade.xml (an override placed by hand)
 //   azimuth.exe <phase> [fh2.exe]
 // phase "full": everything installed; "removed": TestMod.dll deleted;
-// "crash": AaaMod crashes on purpose.
+// "crash": AaaMod crashes on purpose; then, with an FH2MP.dll, OfflineMod.dll and FH2MP's
+// session file: "online-first", "online", "online-chosen" (the player's choices) and
+// "fh2mp-off" (FH2MP turned off on the MODS tab).
 #include "strings.hpp"
 #include "updates.hpp"
 
@@ -117,13 +119,16 @@ int wmain(int argc, wchar_t** argv) {
     HMODULE p = LoadLibraryW(L"d3dcompiler_47.dll"); // what azimuth.exe does at startup
     CHECK(p != nullptr);
     if (argc > 2) map_image(argv[2]); // "press Play"
+    // the online phases (platform 2.8.0): run after "removed", with OfflineMod and an FH2MP.dll
+    const bool online_phase = phase.rfind(L"online", 0) == 0 || phase == L"fh2mp-off";
     std::string log;
     for (int i = 0; i < 250; ++i) {
         Sleep(100);
         log = slurp(L"fh2-mods\\platform.log");
-        if (has(log, "mod(s) loaded") && has(log, "TestMod version") &&
-            (phase == L"full" ? has(log, "late edit applied")
-                              : has(log, "removed AIPlayers.str") && has(log, "keep.xml override")))
+        if (online_phase ? has(log, "mod(s) loaded")
+                         : has(log, "mod(s) loaded") && has(log, "TestMod version") &&
+                               (phase == L"full" ? has(log, "late edit applied")
+                                                 : has(log, "removed AIPlayers.str") && has(log, "keep.xml override")))
             break;
     }
     if (phase == L"crash") {
@@ -204,6 +209,11 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] no title start yet"));
         CHECK(has(log, "[TestMod] tile text ok") && has(log, "[TestMod] set_page_tile_text: Other isn't on a tile") &&
               has(log, "[TestMod] set_page_tile_colors: Other isn't on a tile"));
+        // choice rows and online play (API 9)
+        CHECK(has(log, "[TestMod] choice row ok"));
+        CHECK(has(log, "[TestMod] add_setting: One is a choice row but needs 2 to 32 choices"));
+        CHECK(has(log, "[TestMod] add_setting: Lots is a choice row but needs 2 to 32 choices"));
+        CHECK(has(log, "[TestMod] playing offline") && !has(log, "started from the FH2MP launcher"));
         // The game's menus were given: the pages are written. (Not with the game mapped: this
         // test's copy of it doesn't pass the menus' code checks, so the platform takes them out.)
         if (fs::exists(L"FH2\\Mount\\media\\UI.zip") && argc <= 2) {
@@ -236,6 +246,46 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(splash, "{Binding FH2Mod_TitleReady}") && has(splash, "<Setter Property=\"Visibility\" Value=\"Collapsed\" />"));
             CHECK(has(splash, "A_BitmapImage_ControllerButton_Y}") && has(splash, "Text=\"DRIVE THE TEST GARAGE\""));
             CHECK(has(splash, "A_BitmapImage_ControllerButton_LB}") && has(splash, "Text=\"FOURTH &amp; &lt;LAST&gt;\""));
+            // the choice row on Settings > Mods: a slider shown like the game's option rows, a name per value
+            const auto mods = slurp(scenes / "A_ModOptions.xaml");
+            CHECK(has(mods, "Style=\"{StaticResource FH2Mod_Choice_") && has(mods, "<Setter Property=\"Maximum\" Value=\"2\" />"));
+            CHECK(has(mods, "Text=\"LB\"") && has(mods, "Text=\"A &amp; &lt;B&gt;\" Style=\"{StaticResource A_Style_SliderControlText}\" "
+                                                         "HorizontalAlignment=\"Center\" Visibility=\"Hidden\""));
+            CHECK(has(mods, "<Trigger Property=\"Value\" Value=\"2\">") && has(mods, "A_Style_Arrow_Left") &&
+                  has(mods, "<Setter TargetName=\"RightArrow\" Property=\"Visibility\" Value=\"Hidden\" />"));
+            CHECK(!has(installed, "Load when playing online"));   // no FH2MP here: no such row
+        }
+    } else if (online_phase) {
+        const auto known = slurp("fh2-mods\\platform-mods.txt");
+        const bool pages = fs::exists(L"FH2\\Mount\\media\\UI.zip") && argc <= 2;
+        const auto installed = pages ? slurp(L"FH2\\Mount\\mediaoverride\\UI\\Scenes\\Anthem\\A_ModPage_01.xaml") : std::string();
+        if (phase == L"online-first") {
+            // OfflineMod is new: it loads, register_mod turns it away, and it's remembered as offline-only
+            CHECK(has(log, "started from the FH2MP launcher (online play)"));
+            CHECK(has(log, "loaded OfflineMod.dll") &&
+                  has(log, "[OfflineMod] 1.0.0 doesn't run in online play (its author says so), so it isn't started"));
+            CHECK(!has(log, "OfflineMod.dll: fh2mod_init returned") && !has(log, "[OfflineMod] running"));
+            CHECK(has(known, "OfflineMod.dll\tOfflineMod\t1.0.0\tMade for offline play.\t\t1"));
+            if (pages) {
+                CHECK(has(installed, "local:BindingProxy.C=\"Off online  1.0.0\""));
+                // each mod's page is a view of Installed mods: OfflineMod's has the switch, FH2MP's doesn't
+                CHECK(has(installed, "Heading=\"Load when playing online\"") && has(installed, "Its author made it for offline play"));
+                CHECK(!has(installed, "the game doesn't load FH2MP"));
+                CHECK(!has(slurp(L"FH2\\Mount\\mediaoverride\\UI\\Scenes\\Anthem\\A_Hud.xaml"), "OfflineMod"));   // not an error
+            }
+        } else if (phase == L"online") {
+            // ... and from then on isn't loaded at all online
+            CHECK(has(log, "OfflineMod.dll is set to stay off when playing online; not loaded") && !has(log, "loaded OfflineMod.dll"));
+            CHECK(has(log, "loaded HelloMod.dll") && has(log, "FH2MP.dll has no fh2mod_init"));
+            if (pages) CHECK(has(installed, "local:BindingProxy.C=\"Off online  1.0.0\""));
+        } else if (phase == L"online-chosen") {
+            // the player's choices (platform-online.txt) win over the author's
+            CHECK(has(log, "[OfflineMod] running online"));
+            CHECK(has(log, "HelloMod.dll is set to stay off when playing online; not loaded"));
+        } else {
+            // fh2mp-off: FH2MP turned off on the MODS tab, so a session file doesn't make it online
+            CHECK(!has(log, "started from the FH2MP launcher") && has(log, "FH2MP.dll is turned off on the MODS tab"));
+            CHECK(has(log, "[OfflineMod] running offline") && has(log, "loaded HelloMod.dll"));
         }
     } else {
         // TestMod gone: its tables and notice are cleaned up, HelloMod's stays.

@@ -66,8 +66,11 @@ struct Found {                                    // every DLL in fh2-mods, in l
     std::wstring file;
     bool loaded = false, disabled = false, has_init = false;
     std::string problem;                          // why it didn't load or start, for the MODS tab
+    bool online_off = false;                      // not loaded or started: the game is online (FH2MP)
 };
 std::vector<Found> g_found;
+std::vector<std::unique_ptr<FH2Mod>> g_held;      // mods that registered but don't run online (offline_only)
+bool g_online = false;                            // started from the FH2MP launcher (set before any mod loads)
 
 std::mutex g_log_mu;
 FILE* g_log = nullptr;
@@ -422,6 +425,10 @@ void check_updates(FH2Mod* m) {
     }
 }
 
+// In the MODS tab's section below.
+std::map<std::wstring, bool> online_choices();   // the player's "Load when playing online", per DLL (lower case)
+bool remembered_offline_only(const std::wstring& dll);
+
 FH2Mod* api_register(const FH2ModInfo* info) {
     if (!info || info->size < offsetof(FH2ModInfo, check_updates) + sizeof(int) || !info->name) return nullptr;
     auto m             = std::make_unique<FH2Mod>();
@@ -432,8 +439,27 @@ FH2Mod* api_register(const FH2ModInfo* info) {
     m->check_updates   = info->check_updates != 0;
     if (info->size >= offsetof(FH2ModInfo, description) + sizeof(const char*) && info->description)
         m->description = info->description;   // API 6
+    if (info->size >= offsetof(FH2ModInfo, offline_only) + sizeof(int))
+        m->offline_only = info->offline_only != 0;   // API 9
     m->wname           = widen(m->name);
     FH2Mod* raw        = m.get();
+    if (m->offline_only && g_online) {
+        std::scoped_lock lk{g_mu};
+        const auto choices = online_choices();
+        const auto chosen  = choices.find(lower_w(g_current_dll));
+        if (chosen == choices.end() || !chosen->second) {
+            // Its author says it shouldn't run online, and the player hasn't said otherwise. It
+            // isn't registered, so its fh2mod_init returns; it's remembered (platform-mods.txt),
+            // so the next online launch doesn't load it at all.
+            m->dll = g_current_dll;
+            for (auto& f : g_found)
+                if (lower_w(f.file) == lower_w(g_current_dll)) f.online_off = true;
+            log_line(m->name, m->version + " doesn't run in online play (its author says so), so it isn't started; "
+                                           "MODS > Installed mods has its \"Load when playing online\" switch");
+            g_held.push_back(std::move(m));
+            return nullptr;
+        }
+    }
     {
         std::scoped_lock lk{g_mu};
         m->dll = g_current_dll;
@@ -595,6 +621,32 @@ const char* api_mod_version(const char* name) {
 
 // ---- loading mods --------------------------------------------------------------
 
+int api_playing_online() { return g_online ? 1 : 0; }
+
+// ---- online play (FH2MP) ---------------------------------------------------------
+//
+// FH2MP's launcher hands the game a session in data\bin\fh2mp-session.txt before starting it,
+// and removes the file when the game ends (FH2MP's own DLL reads it and never deletes it, as
+// Azimuth can start the game twice in one launch). It holds the player's token, so the platform
+// only looks for it and never reads it. FH2MP_TOKEN in the environment does the same for FH2MP's
+// tests. Either only counts while FH2MP.dll is in fh2-mods and turned on: FH2MP then plays
+// online with it, even with a session file a crashed launcher left behind.
+bool detect_online(const std::set<std::wstring>& off) {
+    std::error_code ec;
+    if (!fs::is_regular_file(g_azimuth / "fh2-mods" / "FH2MP.dll", ec) || off.count(L"fh2mp.dll")) return false;
+    wchar_t env[8];
+    if (GetEnvironmentVariableW(L"FH2MP_TOKEN", env, 8) > 0) return true;
+    return fs::is_regular_file(g_azimuth / "data" / "bin" / "fh2mp-session.txt", ec);
+}
+
+// Whether `dll` loads when playing online: the player's choice, else not if its author marked it
+// offline-only at an earlier launch, else yes. FH2MP itself always does.
+bool loads_online(const std::wstring& dll, const std::map<std::wstring, bool>& choices) {
+    if (lower_w(dll) == L"fh2mp.dll") return true;
+    if (const auto it = choices.find(lower_w(dll)); it != choices.end()) return it->second;
+    return !remembered_offline_only(dll);
+}
+
 int call_init(FH2ModInitFn init, const FH2ModApi* api, DWORD* code) {
     __try {
         return init(api);
@@ -628,6 +680,17 @@ DWORD WINAPI load_mods(LPVOID) {
     std::sort(files.begin(), files.end());
     std::vector<LoadedDll> dlls;
     const auto off = disabled_mods();
+    g_online       = detect_online(off);
+    const auto online_choice = online_choices();
+    if (g_online) plog("started from the FH2MP launcher (online play): mods set to stay off online aren't loaded");
+    // A DLL not loaded because the game is online: noted for the MODS tab.
+    auto stays_off_online = [&](const std::wstring& f) {
+        if (!g_online || loads_online(f, online_choice)) return false;
+        plog(narrow(f) + " is set to stay off when playing online; not loaded");
+        std::scoped_lock lk{g_mu};
+        g_found.back().online_off = true;
+        return true;
+    };
     // fh2wheel (github.com/iamAzoDx/fh2wheel, racing wheels with force feedback) ships its own
     // d3dcompiler_47.dll, a loader that does nothing but forward to the system compiler and load
     // fh2wheel.dll from the Azimuth folder. Only one d3dcompiler_47.dll can sit next to azimuth.exe,
@@ -643,6 +706,7 @@ DWORD WINAPI load_mods(LPVOID) {
             }
             if (off.count(lower_w(wheel))) {
                 plog("fh2wheel.dll (next to azimuth.exe) is turned off on the MODS tab; not loaded");
+            } else if (stays_off_online(wheel)) {
             } else if (GetModuleHandleW(path.c_str())) {
                 plog("fh2wheel.dll is already loaded (by fh2wheel's own loader?)");
                 std::scoped_lock lk{g_mu};
@@ -676,6 +740,7 @@ DWORD WINAPI load_mods(LPVOID) {
             plog(narrow(f) + " is turned off on the MODS tab; not loaded");
             continue;
         }
+        if (stays_off_online(f)) continue;
         // ALTERED_SEARCH_PATH: a mod's own dependencies resolve from fh2-mods first.
         const auto path = (g_azimuth / "fh2-mods" / f).wstring();
         if (HMODULE h = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) {
@@ -732,6 +797,17 @@ DWORD WINAPI load_mods(LPVOID) {
         }
         DWORD code   = 0;
         const int rc = call_init(init, &g_api, &code);
+        {
+            // register_mod turned it away (offline-only, and the game is online): that's not a problem
+            std::scoped_lock lk{g_mu};
+            bool held = false;
+            for (const auto& f : g_found)
+                if (lower_w(f.file) == lower_w(l.file)) held = f.online_off;
+            if (held && !code) {
+                g_current_dll.clear();
+                continue;
+            }
+        }
         std::string problem;
         if (code) {
             char b[16];
@@ -792,9 +868,14 @@ DWORD WINAPI load_mods(LPVOID) {
 // loader skips them. fh2-mods\platform-mods.txt remembers each mod's name, version and
 // description from the last launch it was loaded, so a turned-off mod still shows by name.
 
+// fh2-mods\platform-online.txt (platform 2.8.0) holds the player's "Load when playing online" for
+// the mods they've set it on, as "<DLL><tab>1" or "0"; the others follow their author's
+// FH2ModInfo.offline_only, which platform-mods.txt remembers for the mods that aren't loaded.
+
 namespace {
 fs::path disabled_path() { return g_azimuth / "fh2-mods" / "platform-disabled.txt"; }
 fs::path known_path() { return g_azimuth / "fh2-mods" / "platform-mods.txt"; }
+fs::path online_path() { return g_azimuth / "fh2-mods" / "platform-online.txt"; }
 
 std::vector<std::wstring> read_lines(const fs::path& p) {
     std::vector<std::wstring> out;
@@ -830,7 +911,45 @@ std::vector<std::wstring> split_tabs(const std::wstring& l) {
         else out.back() += c;
     return out;
 }
+
+std::map<std::wstring, bool> online_choices() {
+    std::map<std::wstring, bool> out;
+    for (const auto& l : read_lines(online_path())) {
+        const auto f = split_tabs(l);
+        if (f.size() >= 2 && !f[0].empty()) out[lower_w(f[0])] = f[1] != L"0";
+    }
+    return out;
+}
+
+// platform-mods.txt's sixth column: 1 when the mod's author marked it offline-only
+bool remembered_offline_only(const std::wstring& dll) {
+    for (const auto& l : read_lines(known_path())) {
+        const auto f = split_tabs(l);
+        if (f.size() > 5 && lower_w(f[0]) == lower_w(dll)) return f[5] == L"1";
+    }
+    return false;
+}
 } // namespace
+
+bool playing_online() { return g_online; }
+
+bool fh2mp_installed() {
+    std::error_code ec;
+    return fs::is_regular_file(g_azimuth / "fh2-mods" / "FH2MP.dll", ec);
+}
+
+void set_mod_online(const std::wstring& dll, bool on) {
+    auto choices = online_choices();
+    choices[lower_w(dll)] = on;
+    std::vector<std::wstring> lines;
+    for (const auto& [d, v] : choices) lines.push_back(d + L"\t" + (v ? L"1" : L"0"));
+    write_lines(online_path(),
+                L"# The mods' \"Load when playing online\" on MODS > Installed mods: 1 loads it when the game is started from the "
+                L"FH2MP launcher, 0 doesn't.\n",
+                lines);
+    log_line("", narrow(dll) + (on ? " now loads" : " now stays off") +
+                     " when playing online (MODS tab); takes effect the next time the game starts from the FH2MP launcher");
+}
 
 std::set<std::wstring> disabled_mods() {
     std::set<std::wstring> out;
@@ -861,6 +980,7 @@ std::vector<ModEntry> mod_entries() {
     }
     std::vector<ModEntry> out;
     std::vector<std::wstring> remember;
+    const auto choices = online_choices();
     std::scoped_lock lk{g_mu};
     for (const auto& f : g_found) {
         ModEntry e;
@@ -868,30 +988,38 @@ std::vector<ModEntry> mod_entries() {
         e.enabled      = !f.disabled;
         e.problem      = f.problem;
         e.platform_mod = f.has_init;
-        for (const auto& m : g_mods)
-            if (lower_w(m->dll) == lower_w(f.file)) {
-                e.mod         = m.get();
-                e.name        = m->name;
-                e.version     = m->version;
-                e.description = m->description;
-                e.repo        = m->repo;
-                e.platform_mod = true;
-                break;
-            }
+        e.online_off   = f.online_off;
+        bool told      = false;   // registered this launch, so its offline_only is known
+        for (const auto* list : {&g_mods, &g_held})
+            for (const auto& m : *list)
+                if (!told && lower_w(m->dll) == lower_w(f.file)) {
+                    e.mod          = list == &g_mods ? m.get() : nullptr;   // a held mod isn't running
+                    e.name         = m->name;
+                    e.version      = m->version;
+                    e.description  = m->description;
+                    e.repo         = m->repo;
+                    e.offline_only = m->offline_only;
+                    e.platform_mod = true;
+                    told           = true;
+                }
         if (!e.mod && lower_w(f.file) == L"fh2wheel.dll") {
             e.name        = "fh2wheel";
             e.description = "Racing wheels with force feedback, by iamAzoDx. Loaded by the platform from next to azimuth.exe, "
                             "in place of fh2wheel's own d3dcompiler_47.dll.";
             e.repo        = "iamAzoDx/fh2wheel";
-        } else if (!e.mod) {
+        } else if (!told) {
             if (auto it = known.find(lower_w(f.file)); it != known.end()) {
                 e.name    = narrow(it->second[1]);
                 e.version = narrow(it->second[2]);
                 if (it->second.size() > 3) e.description = narrow(it->second[3]);
                 if (it->second.size() > 4) e.repo = narrow(it->second[4]);
+                if (it->second.size() > 5) e.offline_only = it->second[5] == L"1";
                 e.platform_mod = true;
             }
         }
+        if (const auto c = choices.find(lower_w(f.file)); c != choices.end()) e.loads_online = c->second;
+        else e.loads_online = !e.offline_only;
+        if (lower_w(f.file) == L"fh2mp.dll") e.loads_online = true;
         // nothing told us its name: its file's name, without .dll, cut short if it's long
         if (e.name.find_first_not_of(" \t") == std::string::npos) {
             std::wstring stem = f.file;
@@ -905,10 +1033,12 @@ std::vector<ModEntry> mod_entries() {
         }
         if (e.mod || e.platform_mod)
             remember.push_back(f.file + L"\t" + widen(e.name) + L"\t" + widen(e.version) + L"\t" + widen(e.description) + L"\t" +
-                               widen(e.repo));
+                               widen(e.repo) + L"\t" + (e.offline_only ? L"1" : L"0"));
         out.push_back(e);
     }
-    write_lines(known_path(), L"# What the MODS tab remembers about each mod (DLL, name, version, description, GitHub repo).\n", remember);
+    write_lines(known_path(),
+                L"# What the MODS tab remembers about each mod (DLL, name, version, description, GitHub repo, offline only).\n",
+                remember);
     return out;
 }
 
@@ -987,6 +1117,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.set_page_tile_colors = pages_set_tile_colors;
                 g_api.add_title_entry   = title_add;
                 g_api.title_started_by  = title_started_by;
+                g_api.playing_online    = api_playing_online;
                 return load_mods(nullptr);
             },
             nullptr, 0, nullptr))

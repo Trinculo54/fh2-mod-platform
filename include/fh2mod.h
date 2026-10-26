@@ -82,6 +82,14 @@ typedef struct FH2ModInfo {
     /* API 6 (platform 2.5.0): what your mod adds, in a sentence or two, for the MODS tab's
        Installed mods page. May be NULL. Leave it out (an older FH2ModInfo) on older platforms. */
     const char* description;
+    /* API 9 (platform 2.8.0): nonzero for a mod that shouldn't run in online play, because it
+       changes driving or what other players see (a nitro boost, say). When the game is started
+       from the FH2MP launcher, register_mod then returns NULL, so return from fh2mod_init
+       straight away (call register_mod first, before you do anything else); from the next
+       launch the platform doesn't load the DLL at all online. Players can still choose for
+       themselves on MODS > Installed mods ("Load when playing online"). Older platforms
+       ignore it. */
+    int offline_only;
 } FH2ModInfo;
 
 typedef struct FH2ModApi {
@@ -405,6 +413,15 @@ typedef struct FH2ModApi {
        title screen sets it back to NULL. Call it from any thread: from your
        hook on the world loading, say, to know whether this start is yours. */
     const char* (*title_started_by)(FH2Mod* mod);
+
+    /* ---- Online play -------------------------------------------------------
+       1 when the game was started from the FH2MP launcher (online play on the
+       FH2MP servers), 0 otherwise. It's decided once, before any mod loads,
+       and doesn't change during the session. Use it to turn off just the part
+       of your mod that shouldn't run online; for the whole mod, set
+       FH2ModInfo.offline_only instead. Call it from anywhere, fh2mod_init
+       included. */
+    int (*playing_online)(void);
 } FH2ModApi;
 
 /* Called on the game's UI thread when the player changes a row: keep it
@@ -416,6 +433,8 @@ typedef void (*FH2SliderChangedFn)(void* user, const char* key, float value);
 #define FH2_SETTING_ON_OFF 0
 #define FH2_SETTING_SLIDER 1
 #define FH2_SETTING_LINK   2   /* API 6 */
+#define FH2_SETTING_CHOICE 3   /* API 9 */
+#define FH2_SETTING_MAX_CHOICES 32
 
 /* One row on the Mods page (API 4; sliders API 5). */
 struct FH2Setting {
@@ -446,6 +465,16 @@ struct FH2Setting {
        ignored. On an older platform it would come out as an On/Off row, so
        only add one when api_version >= 6. ---- */
     const char* url;               /* "http://..." or "https://..." */
+
+    /* ---- API 9 (platform 2.8.0): choices. With kind = FH2_SETTING_CHOICE the
+       row shows one of `choices` by name, as the game's own option rows do
+       ("Speedometer: Analogue / Digital"), and left and right step through
+       them. `value` is the index of the one chosen (0 = the first), and
+       on_change, get_setting and set_setting use that index. The names are
+       copied. The slider fields are ignored. On an older platform it would
+       come out as an On/Off row, so only add one when api_version >= 9. ---- */
+    const char* const* choices;    /* UTF-8, shown as given: "LB", "RB", "A" ... */
+    uint32_t choice_count;         /* 2 to FH2_SETTING_MAX_CHOICES */
 };
 
 /* Pages (API 8). Every page callback runs on the game's UI thread: keep them

@@ -15,6 +15,7 @@ struct FH2Mod {
     std::string name, version, repo, platform_version, description;
     std::wstring wname, dll;
     bool check_updates = true;
+    bool offline_only  = false;      // FH2ModInfo.offline_only (API 9)
     // table (lower case) -> edits
     std::map<std::string, std::map<uint16_t, std::wstring>> set;
     std::map<std::string, std::map<std::wstring, std::wstring>> repl;
@@ -92,11 +93,20 @@ struct ModEntry {
     std::string problem;              // why it didn't load or start ("" if it did)
     bool platform_mod = false;        // has fh2mod_init (an old-style mod doesn't register)
     FH2Mod* mod = nullptr;            // when loaded and registered
+    bool offline_only = false;        // its author says it shouldn't run online (FH2ModInfo.offline_only)
+    bool loads_online = true;         // loaded when playing online (the player's choice, else !offline_only)
+    bool online_off = false;          // not running this time because the game is online (FH2MP)
 };
 std::vector<ModEntry> mod_entries();  // in load order, turned-off ones included
 // fh2-mods\platform-disabled.txt: the DLLs the MODS tab turned off (lower case).
 std::set<std::wstring> disabled_mods();
 void set_mod_enabled(const std::wstring& dll, bool on);
+// Online play (platform 2.8.0): the game was started from the FH2MP launcher. Decided once,
+// before the mods load.
+bool playing_online();
+bool fh2mp_installed();               // FH2MP.dll is in fh2-mods (turned on or not)
+// fh2-mods\platform-online.txt: the player's choice per DLL, "Load when playing online".
+void set_mod_online(const std::wstring& dll, bool on);
 // The latest release of a mod on GitHub, once checked ("" before that, or if unknown).
 std::string latest_known(const FH2Mod* m);
 
