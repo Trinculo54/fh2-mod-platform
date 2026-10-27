@@ -88,7 +88,7 @@ void apply_strings(FH2Mod* mod);
 
 Writes every table that changed since the last write. It's done for you once all mods have returned from `fh2mod_init`, so call it yourself only for edits you make later. The game reads its string tables once, at startup, so a later edit shows from the next launch.
 
-Edits are written to Extra Options' `mediaoverride` folder, as `mediaoverride\Stripped\StringTables\<language>\<table>`. Without Extra Options (or with `EnableMediaOverrides=0`), the files are still written but the game won't read them. The tables the platform wrote are listed in `fh2-mods\platform-tables.txt`, so that ones no longer needed get cleaned up.
+Edits are written to Extra Options' `mediaoverride` folder, as `mediaoverride\Stripped\StringTables\<language>\<table>`. Extra Options makes the game read that folder. When Extra Options isn't loaded, platform 2.7.3 and newer does it instead ([game-notes.md](game-notes.md#the-override-folder)). With Extra Options loaded and `EnableMediaOverrides=0`, the files are still written but the game won't read them. The tables the platform wrote are listed in `fh2-mods\platform-tables.txt`, so that ones no longer needed get cleaned up.
 
 ## set_notice
 
@@ -118,7 +118,7 @@ int set_file(FH2Mod* mod, const char* media_path, const void* data, size_t size)
 void clear_file(FH2Mod* mod, const char* media_path);
 ```
 
-`set_file` replaces a file the game reads from `game:\media`. Give the path relative to `media`, with forward or back slashes. For a file inside a zip, use the zip's name without `.zip` as a folder: `media\UI.zip\x.xml` is `"UI/x.xml"`. The file is written straight away to Extra Options' `mediaoverride` folder, which Extra Options mounts over `media`. If the file there already has the same content, it isn't rewritten.
+`set_file` replaces a file the game reads from `game:\media`. Give the path relative to `media`, with forward or back slashes. For a file inside a zip, use the zip's name without `.zip` as a folder: `media\UI.zip\x.xml` is `"UI/x.xml"`. The file is written straight away to the `mediaoverride` folder, which Extra Options mounts over `media`, or the platform from 2.7.3 when Extra Options isn't loaded. If the file there already has the same content, it isn't rewritten.
 
 Only one mod can replace a file. `set_file` returns 1 when the file is yours and written. It returns 0 if another mod already replaces it, if the path isn't a plain path under `media`, or if the write failed, and the log says which. String tables and the game database can't be replaced whole; use the functions for those. If someone had put a file at that spot by hand, it's kept next to it as `<name>.bak` the first time.
 

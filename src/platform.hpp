@@ -46,6 +46,9 @@ void clean_leftover_files(const std::vector<FH2Mod*>& mods);
 // Removes one override from an earlier launch now, if no mod replaces it this time.
 void remove_leftover_file(const char* media_path);
 
+// media_overrides.cpp: mounts mediaoverride and mediapc itself when Extra Options isn't loaded.
+void start_media_overrides();
+
 // database.cpp: SQL patches applied to a copy of the game database.
 void apply_database(const std::vector<FH2Mod*>& mods);
 

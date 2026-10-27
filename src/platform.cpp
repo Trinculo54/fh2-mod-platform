@@ -492,6 +492,7 @@ DWORD WINAPI load_mods(LPVOID) {
          ") in " + narrow(g_azimuth.wstring()));
     plog(g_game.empty() ? "couldn't find the game's Mount folder; game text, file and database changes are off"
                         : "game folder " + narrow(g_game.wstring()));
+    start_media_overrides();
 
     struct Loaded {
         std::wstring file;
