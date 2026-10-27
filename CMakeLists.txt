@@ -58,30 +58,40 @@ if(NOT FH2MOD_LOADER STREQUAL "d3dcompiler_47" AND NOT FH2MOD_LOADER STREQUAL "v
     message(FATAL_ERROR "FH2MOD_LOADER must be d3dcompiler_47 or version")
 endif()
 
-add_library(fh2mod_platform SHARED src/platform.cpp src/strings.cpp src/updates.cpp src/files.cpp
-            src/database.cpp src/media_overrides.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
-target_include_directories(fh2mod_platform PRIVATE third_party/minhook/include ${_minhook} third_party/sqlite)
-if(NOT MSVC)
-    # InterlockedCompareExchange128, for rewriting call sites atomically.
-    set_source_files_properties(src/hooks.cpp PROPERTIES COMPILE_OPTIONS -mcx16)
-endif()
-if(NOT MSVC)
-    target_sources(fh2mod_platform PRIVATE src/${FH2MOD_LOADER}.def)
-    target_link_options(fh2mod_platform PRIVATE "$<$<CONFIG:Release>:-Wl,--gc-sections;-s>" -static)
-endif()
-target_compile_options(fh2mod_platform PRIVATE ${_warn} "$<$<AND:$<NOT:$<BOOL:${MSVC}>>,$<CONFIG:Release>>:-O2;-ffunction-sections;-fdata-sections>")
-target_compile_definitions(fh2mod_platform PRIVATE _WIN32_WINNT=0x0A00 WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
-                           FH2MOD_PLATFORM_VERSION="${PROJECT_VERSION}")
-target_include_directories(fh2mod_platform PRIVATE include src ${CMAKE_CURRENT_BINARY_DIR}/generated)
-# Only kernel32/user32 (and the C runtime) at load time: azimuth.exe loads
-# this DLL very early, and an app-folder version.dll or winhttp.dll proxy
-# from some other mod must not get pulled in by us. WinHTTP is loaded from
-# System32 when the first update check runs.
-target_link_libraries(fh2mod_platform PRIVATE user32)
-set_target_properties(fh2mod_platform PROPERTIES OUTPUT_NAME ${FH2MOD_LOADER} PREFIX "")
-target_compile_definitions(fh2mod_platform PRIVATE FH2MOD_LOADER_NAME="${FH2MOD_LOADER}.dll")
-if(FH2MOD_LOADER STREQUAL "version")
-    target_compile_definitions(fh2mod_platform PRIVATE FH2MOD_LOADER_VERSION)
+# Defines one platform DLL: tgt is the CMake target, loader the system DLL it stands in for.
+function(fh2mod_define_platform tgt loader)
+    add_library(${tgt} SHARED src/platform.cpp src/strings.cpp src/updates.cpp src/files.cpp
+                src/database.cpp src/media_overrides.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
+    target_include_directories(${tgt} PRIVATE third_party/minhook/include ${_minhook} third_party/sqlite)
+    if(NOT MSVC)
+        # InterlockedCompareExchange128, for rewriting call sites atomically.
+        set_source_files_properties(src/hooks.cpp PROPERTIES COMPILE_OPTIONS -mcx16)
+    endif()
+    if(NOT MSVC)
+        target_sources(${tgt} PRIVATE src/${loader}.def)
+        target_link_options(${tgt} PRIVATE "$<$<CONFIG:Release>:-Wl,--gc-sections;-s>" -static)
+    endif()
+    target_compile_options(${tgt} PRIVATE ${_warn} "$<$<AND:$<NOT:$<BOOL:${MSVC}>>,$<CONFIG:Release>>:-O2;-ffunction-sections;-fdata-sections>")
+    target_compile_definitions(${tgt} PRIVATE _WIN32_WINNT=0x0A00 WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
+                               FH2MOD_PLATFORM_VERSION="${PROJECT_VERSION}")
+    target_include_directories(${tgt} PRIVATE include src ${CMAKE_CURRENT_BINARY_DIR}/generated)
+    # Only kernel32/user32 (and the C runtime) at load time: azimuth.exe loads
+    # this DLL very early, and an app-folder version.dll or winhttp.dll proxy
+    # from some other mod must not get pulled in by us. WinHTTP is loaded from
+    # System32 when the first update check runs.
+    target_link_libraries(${tgt} PRIVATE user32)
+    set_target_properties(${tgt} PROPERTIES OUTPUT_NAME ${loader} PREFIX "")
+    target_compile_definitions(${tgt} PRIVATE FH2MOD_LOADER_NAME="${loader}.dll")
+    if(loader STREQUAL "version")
+        target_compile_definitions(${tgt} PRIVATE FH2MOD_LOADER_VERSION)
+    endif()
+endfunction()
+
+fh2mod_define_platform(fh2mod_platform ${FH2MOD_LOADER})
+# A second build as the other loader, for a zip that has to work on every Azimuth.
+option(FH2MOD_ALSO_VERSION "Also build version.dll (fh2mod_platform_version), for Azimuth 1.0.3 and newer" OFF)
+if(FH2MOD_ALSO_VERSION AND NOT FH2MOD_LOADER STREQUAL "version")
+    fh2mod_define_platform(fh2mod_platform_version version)
 endif()
 
 # Only when this is the top-level project: the example mod and the tests.
