@@ -3,7 +3,9 @@
 // azimuth.exe statically imports d3dcompiler_47.dll (for D3DCompile) and
 // Windows looks next to the exe first, so this DLL gets loaded at startup
 // without touching any of Azimuth's own files, and without fighting Forza
-// Horizon 2 Extra Options (which owns winmm.dll). Every D3DCompiler export
+// Horizon 2 Extra Options (which owns winmm.dll). Azimuth 1.0.3 dropped that
+// import, so the same code can be built as a version.dll proxy instead
+// (-DFH2MOD_LOADER=version; version.def / msvc_exports_version.inc). Every D3DCompiler export
 // is a PE forwarder to the real System32 DLL (d3dcompiler_47.def for
 // llvm-mingw, msvc_exports.inc for MSVC), so shader compiles never touch it.
 //
@@ -21,13 +23,22 @@
 #include "updates.hpp"
 
 #ifdef _MSC_VER
+#ifdef FH2MOD_LOADER_VERSION
+#include "msvc_exports_version.inc"
+#else
 #include "msvc_exports.inc"
+#endif
+#endif
+
+#ifndef FH2MOD_LOADER_NAME
+#define FH2MOD_LOADER_NAME "d3dcompiler_47.dll"
 #endif
 
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdio>
+#include <cwchar>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -586,7 +597,7 @@ DWORD WINAPI load_mods(LPVOID) {
             const auto* base = reinterpret_cast<const char*>(self);
             const auto* nt   = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
                 base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
-            dlls.push_back({L"d3dcompiler_47.dll (FH2 Mod Platform)", base, nt->OptionalHeader.SizeOfImage});
+            dlls.push_back({L"" FH2MOD_LOADER_NAME L" (FH2 Mod Platform)", base, nt->OptionalHeader.SizeOfImage});
         }
     }
     install_crash_handler(dlls);
@@ -806,6 +817,15 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     for (DWORD i = 0; i < m; ++i)
         if (exe[i] == L'\\' || exe[i] == L'/') base = exe + i + 1;
     if (lstrcmpiW(base, L"azimuth.exe") && lstrcmpiW(base, L"forza_durango_release_final.exe")) return TRUE;
+
+    // The d3dcompiler_47.dll and version.dll builds can both end up next to
+    // azimuth.exe (an old mod's zip puts the first back); only one may start.
+    {
+        wchar_t once[64];
+        std::swprintf(once, 64, L"Local\\FH2ModPlatform-%lu", GetCurrentProcessId());
+        CreateMutexW(nullptr, FALSE, once);
+        if (GetLastError() == ERROR_ALREADY_EXISTS) return TRUE;
+    }
 
     HMODULE pinned = nullptr;
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,

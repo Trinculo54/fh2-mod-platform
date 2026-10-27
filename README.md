@@ -20,6 +20,8 @@ Everything the platform does is logged to `fh2-mods\platform.log`: which mods it
 
 **On Linux (Wine or Proton).** The platform works as it is, but Extra Options needs a DLL override (`WINEDLLOVERRIDES="winmm=n,b"`), database changes need platform 2.7.1 or newer, and a few mods have limits there. Without the override, platform 2.7.3 or newer still gets mods' text, file and database changes to the game. All of it is in [docs/linux.md](docs/linux.md).
 
+**Azimuth 1.0.3 and newer.** Azimuth 1.0.3 no longer imports `d3dcompiler_47.dll`, so nothing loads it. Build the platform as a `version.dll` proxy instead: `cmake -DFH2MOD_LOADER=version`. The output is `version.dll` (next to `azimuth.exe`, in place of `d3dcompiler_47.dll`), and it forwards to the real one in System32. If both files are present only the first one loaded starts the platform.
+
 To remove the platform, delete `d3dcompiler_47.dll` and the `fh2-mods` folder. That removes every mod built on it.
 
 ## For mod makers

@@ -50,6 +50,14 @@ set_source_files_properties(${_sqlite_src} PROPERTIES
     COMPILE_OPTIONS "$<IF:$<BOOL:${MSVC}>,/W0;/O1,-w;-Os>"
     COMPILE_DEFINITIONS "SQLITE_OMIT_LOAD_EXTENSION;SQLITE_DEFAULT_MEMSTATUS=0")
 
+# Which system DLL the platform stands in for. Azimuth up to 1.0.2 imports
+# d3dcompiler_47.dll; 1.0.3 doesn't, so use "version" there.
+set(FH2MOD_LOADER "d3dcompiler_47" CACHE STRING "System DLL the platform is built as: d3dcompiler_47 or version")
+set_property(CACHE FH2MOD_LOADER PROPERTY STRINGS d3dcompiler_47 version)
+if(NOT FH2MOD_LOADER STREQUAL "d3dcompiler_47" AND NOT FH2MOD_LOADER STREQUAL "version")
+    message(FATAL_ERROR "FH2MOD_LOADER must be d3dcompiler_47 or version")
+endif()
+
 add_library(fh2mod_platform SHARED src/platform.cpp src/strings.cpp src/updates.cpp src/files.cpp
             src/database.cpp src/media_overrides.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
 target_include_directories(fh2mod_platform PRIVATE third_party/minhook/include ${_minhook} third_party/sqlite)
@@ -58,7 +66,7 @@ if(NOT MSVC)
     set_source_files_properties(src/hooks.cpp PROPERTIES COMPILE_OPTIONS -mcx16)
 endif()
 if(NOT MSVC)
-    target_sources(fh2mod_platform PRIVATE src/d3dcompiler_47.def)
+    target_sources(fh2mod_platform PRIVATE src/${FH2MOD_LOADER}.def)
     target_link_options(fh2mod_platform PRIVATE "$<$<CONFIG:Release>:-Wl,--gc-sections;-s>" -static)
 endif()
 target_compile_options(fh2mod_platform PRIVATE ${_warn} "$<$<AND:$<NOT:$<BOOL:${MSVC}>>,$<CONFIG:Release>>:-O2;-ffunction-sections;-fdata-sections>")
@@ -70,7 +78,11 @@ target_include_directories(fh2mod_platform PRIVATE include src ${CMAKE_CURRENT_B
 # from some other mod must not get pulled in by us. WinHTTP is loaded from
 # System32 when the first update check runs.
 target_link_libraries(fh2mod_platform PRIVATE user32)
-set_target_properties(fh2mod_platform PROPERTIES OUTPUT_NAME d3dcompiler_47 PREFIX "")
+set_target_properties(fh2mod_platform PROPERTIES OUTPUT_NAME ${FH2MOD_LOADER} PREFIX "")
+target_compile_definitions(fh2mod_platform PRIVATE FH2MOD_LOADER_NAME="${FH2MOD_LOADER}.dll")
+if(FH2MOD_LOADER STREQUAL "version")
+    target_compile_definitions(fh2mod_platform PRIVATE FH2MOD_LOADER_VERSION)
+endif()
 
 # Only when this is the top-level project: the example mod and the tests.
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
