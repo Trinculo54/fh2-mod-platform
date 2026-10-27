@@ -110,11 +110,13 @@ bool readable(const void* p, std::size_t n) {
 }
 
 using MiniDumpWriteDumpFn = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, int, const void*, const void*, const void*);
+#pragma pack(push, 4)   // as dbghelp.h declares MINIDUMP_EXCEPTION_INFORMATION
 struct DumpExceptionInfo {
     DWORD ThreadId;
     EXCEPTION_POINTERS* ExceptionPointers;
     BOOL ClientPointers;
 };
+#pragma pack(pop)
 
 void write_dump(const wchar_t* path, EXCEPTION_POINTERS* ep) {
     HMODULE dbghelp = LoadLibraryExW(L"dbghelp.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);

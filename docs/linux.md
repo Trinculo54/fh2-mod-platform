@@ -14,7 +14,7 @@ WINEDLLOVERRIDES="winmm=n,b"
 - Lutris, Heroic or Bottles: add `winmm` as a DLL override, native then builtin, in the game's settings (or set the environment variable above there).
 - Wine on its own: start Azimuth with `WINEDLLOVERRIDES="winmm=n,b" wine azimuth.exe`, or add `winmm` (native, builtin) under Libraries in `winecfg`.
 
-Without it Extra Options doesn't run. The platform's text, file and database changes reach the game through Extra Options' `mediaoverride` folder, so none of them show up. From 2.7.1, `fh2-mods\platform.log` says so ("Extra Options isn't running: its winmm.dll is next to azimuth.exe, but Wine is using its own winmm.dll instead"); older versions said nothing, and waited 20 seconds for Extra Options before mods could hook the game.
+Without it Extra Options doesn't run. The platform's text, file and database changes reach the game through the `mediaoverride` folder: up to 2.7.2 only Extra Options made the game read it, so none of them showed up. From 2.7.3 the platform mounts the folder itself when Extra Options isn't loaded, so mods' changes still show up; Extra Options' own features (and the menus that come from it) still need the override. From 2.7.1, `fh2-mods\platform.log` says so ("Extra Options isn't running: its winmm.dll is next to azimuth.exe, but Wine is using its own winmm.dll instead"); older versions said nothing, and waited 20 seconds for Extra Options before mods could hook the game.
 
 **2. The platform loads as it is.** With Wine 9.0, the `d3dcompiler_47.dll` next to `azimuth.exe` is used without an override. If `fh2-mods\platform.log` never appears, your Wine or Proton build is using its own copy: add it to the override, `WINEDLLOVERRIDES="winmm,d3dcompiler_47=n,b"`.
 
@@ -33,7 +33,7 @@ Without it Extra Options doesn't run. The platform's text, file and database cha
 ## When something doesn't work
 
 - **There's no `fh2-mods\platform.log`.** The platform didn't load: add `d3dcompiler_47` to the override (step 2).
-- **`platform.log` is there, but there's no MODS tile and no changed text.** Extra Options isn't running: check the `winmm` override (step 1). From 2.7.1 `platform.log` says "Extra Options isn't running" when Wine is the reason. `FH2_ExtraOptions.log` next to `azimuth.exe` is rewritten every time Extra Options starts, so an old date on it means it didn't.
+- **`platform.log` is there, but there's no MODS tile and no changed text.** With platform 2.7.2 or older, Extra Options isn't running: check the `winmm` override (step 1), or update the platform. From 2.7.3 look for "media overrides:" lines in `platform.log`. From 2.7.1 `platform.log` says "Extra Options isn't running" when Wine is the reason. `FH2_ExtraOptions.log` next to `azimuth.exe` is rewritten every time Extra Options starts, so an old date on it means it didn't.
 - **`platform.log` says database changes are off.** The platform is older than 2.7.1 (step 3).
 - Crash reports go to `fh2-mods\crashes` as on Windows. Paths in logs start with `Z:\`, which is your Linux root, `/`.
 

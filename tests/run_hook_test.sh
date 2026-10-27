@@ -7,7 +7,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 b=$root/build-test
 exe=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 status=0
-for phase in plain eo wine-builtin crash; do
+for phase in plain eo wine-builtin changed-code crash; do
     dir=$(mktemp -d)
     mkdir -p "$dir/fh2-mods" "$dir/FH2/Mount/media/Stripped/StringTables"
     cp "$b/hook_test.exe" "$dir/azimuth.exe"

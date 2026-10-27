@@ -14,7 +14,7 @@ Mount\media\Stripped\StringTables\DEV.zip   developer English
 Mount\media\Stripped\StringTables\LOC.zip   placeholders ("Main:IDS_Press")
 ```
 
-Inside each zip are about 120 tables, one per area of the game: `Main.str`, `PauseMenu.str`, `LoadingMessages.str`, `AIPlayers.str` and so on. Don't edit the zips: `media\zipmanifest.xml` records where each zip's directory is, and the game relies on it. The platform writes edited copies to Extra Options' override folder instead, as `Mount\mediaoverride\Stripped\StringTables\<language>\<table>.str`, and Extra Options makes the game read those.
+Inside each zip are about 120 tables, one per area of the game: `Main.str`, `PauseMenu.str`, `LoadingMessages.str`, `AIPlayers.str` and so on. Don't edit the zips: `media\zipmanifest.xml` records where each zip's directory is, and the game relies on it. The platform writes edited copies to Extra Options' override folder instead, as `Mount\mediaoverride\Stripped\StringTables\<language>\<table>.str`, and Extra Options makes the game read those (or, when Extra Options isn't loaded, the platform from 2.7.3).
 
 The game reads its string tables once, early in startup. Edits made in `fh2mod_init` are always in time; anything later shows from the next launch.
 

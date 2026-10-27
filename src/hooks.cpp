@@ -401,7 +401,8 @@ void watch_for_code() {
         if (why == "no Extra Options" && extra_options_left_out_by_wine())
             plog("Extra Options isn't running: its winmm.dll is next to azimuth.exe, but Wine is using its own "
                  "winmm.dll instead. Set WINEDLLOVERRIDES=\"winmm=n,b\" for Azimuth (the FH2 Mod Platform's "
-                 "docs/linux.md); until then, text, file and database changes don't reach the game");
+                 "docs/linux.md). Until then Extra Options' own features are off; the platform mounts mediaoverride "
+                 "itself, so text, file and database changes still reach the game");
         wait_for_executable_code();
         plog("hooks: game code is ready (" + why + ")");
         g_code_ready.store(true, std::memory_order_release);

@@ -8,8 +8,15 @@
 // mapped (an old log from before this launch must not count). "wine-builtin":
 // the stand-in is next to azimuth.exe, but Wine loads its own winmm.dll (no
 // override), as for a Linux player who hasn't set one: no waiting for Extra
-// Options, and the log says how to fix it. "crash": a hooked function
+// Options, and the log says how to fix it. "changed-code": as "plain", but
+// one of the game functions the media overrides use has a changed byte, so
+// they must leave the game's file lookup alone. "crash": a hooked function
 // crashes, and the report has to list the hooks.
+//
+// Media overrides (2.7.3): without Extra Options the platform swaps the
+// game's file-lookup pointer (game+0x2E6EF28) for its own function; with
+// it, or with the game's code changed, the pointer stays the game's.
+// Mounting the folders runs game code, so only the live game shows that.
 #include <windows.h>
 
 #include <cstdio>
@@ -31,7 +38,7 @@ static bool has(const std::string& s, const char* x) { return s.find(x) != std::
 
 // Maps the exe the way Azimuth does, enough for its bytes and protections:
 // sections at their addresses, code read/execute, read-only data read-only.
-static char* map_game(const wchar_t* path) {
+static char* map_game(const wchar_t* path, bool change_volume_code) {
     std::ifstream in{path, std::ios::binary};
     std::vector<char> file((std::istreambuf_iterator<char>(in)), {});
     if (file.size() < 4096) return nullptr;
@@ -59,6 +66,11 @@ static char* map_game(const wchar_t* path) {
     VirtualProtect(base + 0x199FBE0, 1, PAGE_EXECUTE_READWRITE, &old);
     base[0x199FBE0] = static_cast<char>(0xCC);
     VirtualProtect(base + 0x199FBE0, 1, old, &old);
+    if (change_volume_code) { // the game's folder volume constructor, used by the media overrides
+        VirtualProtect(base + 0x11E05A0, 1, PAGE_EXECUTE_READWRITE, &old);
+        base[0x11E05A0] = static_cast<char>(0xCC);
+        VirtualProtect(base + 0x11E05A0, 1, old, &old);
+    }
     std::memcpy(base, file.data(), nt->OptionalHeader.SizeOfHeaders);
     VirtualProtect(base, nt->OptionalHeader.SizeOfHeaders, PAGE_READONLY, &old);
     return base;
@@ -83,7 +95,7 @@ static LONG WINAPI after_crash(EXCEPTION_POINTERS*) {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc < 3) {
-        std::printf("usage: azimuth.exe plain|eo|wine-builtin|crash <forza_durango_release_final.exe>\n");
+        std::printf("usage: azimuth.exe plain|eo|wine-builtin|changed-code|crash <forza_durango_release_final.exe>\n");
         return 2;
     }
     const std::wstring phase = argv[1];
@@ -98,7 +110,8 @@ int wmain(int argc, wchar_t** argv) {
     }
     CHECK(LoadLibraryW(L"d3dcompiler_47.dll") != nullptr);
     Sleep(500);
-    CHECK(map_game(argv[2]) != nullptr); // "press Play"
+    char* game = map_game(argv[2], phase == L"changed-code");
+    CHECK(game != nullptr); // "press Play"
     if (phase == L"eo") {
         Sleep(3000);
         std::ofstream{"FH2_ExtraOptions.log", std::ios::app} << "AZIMUTH: winmm proxy initialized; original TLS helper retained.\r\n";
@@ -117,7 +130,7 @@ int wmain(int argc, wchar_t** argv) {
     Sleep(200);
     log = slurp(L"fh2-mods\\platform.log");
     std::printf("---- platform.log\n%s----\n", log.c_str());
-    CHECK(has(log, "FH2 Mod Platform 2.7.2 (API 8)"));
+    CHECK(has(log, "FH2 Mod Platform 2.7.3 (API 8)"));
     CHECK(has(log, "(ivictim mov)") && has(log, "(mark b) (shared with HookA, HookB)"));
     CHECK(has(log, "(prolog): it's in the function's prolog"));
     CHECK(has(log, "(mid-instruction): it isn't the start of an instruction"));
@@ -146,6 +159,22 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(waited < 2000);
     }
     CHECK(has(log, "WINEDLLOVERRIDES=\"winmm=n,b\"") == (phase == L"wine-builtin"));
+    // The game's file lookup: the platform's own function only without Extra Options.
+    void* lookup = game ? *reinterpret_cast<void**>(game + 0x2E6EF28) : nullptr;
+    MEMORY_BASIC_INFORMATION mbi{};
+    const bool platforms = lookup && VirtualQuery(lookup, &mbi, sizeof mbi) == sizeof mbi &&
+                           mbi.AllocationBase == GetModuleHandleW(L"d3dcompiler_47.dll");
+    if (phase == L"eo") {
+        CHECK(has(log, "media overrides: Extra Options is here, so mediaoverride is left to it"));
+        CHECK(lookup == game + 0x11F49B0);
+    } else if (phase == L"changed-code") {
+        CHECK(has(log, "media overrides: the game's code isn't what this build expects; left alone"));
+        CHECK(lookup == game + 0x11F49B0);
+    } else {
+        CHECK(has(log, "media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride"));
+        CHECK(has(log, "media overrides: hooked the game's file lookup"));
+        CHECK(platforms);
+    }
     std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
     std::fflush(stdout);
     TerminateProcess(GetCurrentProcess(), fails);
