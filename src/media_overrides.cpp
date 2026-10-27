@@ -33,6 +33,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -185,6 +186,22 @@ bool same_as_disk(const Disk& d, uint32_t rva, DWORD n) {
     return std::memcmp(disk, mem, n) == 0;
 }
 
+// The folder vtable holds absolute pointers, so when the image isn't at its preferred base (Azimuth 1.0.1 under
+// Wine maps it elsewhere and relocates it) they differ from the file by the relocation delta.
+bool same_pointers_as_disk(const Disk& d, uint32_t rva, int count) {
+    uint64_t disk[2], mem[2];
+    if (count > 2 || !disk_bytes(d, rva, disk, count * 8)) return false;
+    __try {
+        std::memcpy(mem, g_base + rva, count * 8);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    const uint64_t delta = reinterpret_cast<uint64_t>(g_base) - kPreferredBase;
+    for (int i = 0; i < count; ++i)
+        if (mem[i] - delta != disk[i]) return false;
+    return true;
+}
+
 bool header_is_game(const char* base) {
     __try {
         const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
@@ -252,11 +269,15 @@ void watch() {
         if (disk.file != INVALID_HANDLE_VALUE) CloseHandle(disk.file);
         return;
     }
-    const bool ok = same_as_disk(disk, RVA_RESOLVE, 16) && same_as_disk(disk, RVA_ALLOCATE, 16) &&
-                    same_as_disk(disk, RVA_CONSTRUCT, 16) && same_as_disk(disk, RVA_FOLDER_VT + 8, 16);
+    const char* differs = !same_as_disk(disk, RVA_RESOLVE, 16)          ? "game+0x11F49B0 (resolver)"
+                          : !same_as_disk(disk, RVA_ALLOCATE, 16)         ? "game+0x3229C0 (allocator)"
+                          : !same_as_disk(disk, RVA_CONSTRUCT, 16)        ? "game+0x11E05A0 (folder volume constructor)"
+                          : !same_pointers_as_disk(disk, RVA_FOLDER_VT + 8, 2) ? "game+0x2EAB918 (folder volume vtable)"
+                                                                          : nullptr;
     CloseHandle(disk.file);
-    if (!ok) {
+    if (differs) {
         plog("media overrides: the game's code isn't what this build expects; left alone");
+        plog(std::string("media overrides: ") + differs + " differs from the exe on disk");
         return;
     }
 
@@ -280,11 +301,58 @@ void watch() {
          (code_was_running ? "already executable" : "not executable yet"));
 }
 
+// Extra Options' winmm.dll next to azimuth.exe loads on Windows (the app folder comes first); under Wine only when
+// WINEDLLOVERRIDES puts native winmm first ("winmm=n,b", "winmm,dxgi=n,b", ...); otherwise Wine's builtin loads.
+bool extra_options_will_load() {
+    HANDLE f = CreateFileW((azimuth_dir() / L"winmm.dll").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    std::string data(4 * 1024 * 1024, '\0');
+    DWORD got = 0;
+    if (!ReadFile(f, data.data(), static_cast<DWORD>(data.size()), &got, nullptr)) got = 0;
+    CloseHandle(f);
+    data.resize(got);
+    if (data.find("Fh2TweaksStatus") == std::string::npos) return false;
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll || !GetProcAddress(ntdll, "wine_get_version")) return true;
+    char env[1024];
+    const DWORD n = GetEnvironmentVariableA("WINEDLLOVERRIDES", env, sizeof env);
+    if (!n || n >= sizeof env) return false;
+    // Entries are "name[,name...]=modes", separated by ';'; native first means the modes start with 'n'.
+    std::string all(env, n);
+    for (char& c : all) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (size_t at = 0; at <= all.size();) {
+        size_t end = all.find(';', at);
+        if (end == std::string::npos) end = all.size();
+        const std::string entry = all.substr(at, end - at);
+        at = end + 1;
+        const size_t eq = entry.find('=');
+        if (eq == std::string::npos || eq + 1 >= entry.size() || entry[eq + 1] != 'n') continue;
+        const std::string names = "," + entry.substr(0, eq) + ",";
+        if (names.find(",winmm,") != std::string::npos || names.find(",winmm.dll,") != std::string::npos) return true;
+    }
+    return false;
+}
+
 } // namespace
 
 void start_media_overrides() {
     if (!extra_options_dir().empty()) {
         plog("media overrides: Extra Options is here, so mediaoverride is left to it");
+        return;
+    }
+    if (extra_options_will_load()) {
+        // Its winmm.dll can load after this DLL (seen under Proton). Swapping the resolver first makes Extra Options
+        // refuse every patch ("unexpected loaded bytes at media_override_native_resolver"), so leave it to it.
+        plog("media overrides: Extra Options' winmm.dll is next to azimuth.exe and will load; waiting for it");
+        std::thread([] {
+            for (int i = 0; i < 300; ++i, Sleep(100))
+                if (!extra_options_dir().empty()) {
+                    plog("media overrides: Extra Options loaded, so mediaoverride is left to it");
+                    return;
+                }
+            plog("media overrides: Extra Options' winmm.dll didn't load within 30 s; mediaoverride isn't mounted");
+        }).detach();
         return;
     }
     plog("media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride and mediapc itself");
