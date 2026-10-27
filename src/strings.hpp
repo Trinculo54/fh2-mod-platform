@@ -24,7 +24,8 @@ std::vector<char> edit_lsb2(const std::vector<char>& table,
 
 // <game Mount folder>, from Azimuth's data\azimuth.ini ([title-1a96545b]
 // folder=...), falling back to FH2\Mount. Empty if not found.
-std::filesystem::path find_game_mount(const std::filesystem::path& azimuth_dir);
+std::filesystem::path find_game_mount(const std::filesystem::path& azimuth_dir,
+                                      const std::filesystem::path& command_line_folder = {});
 
 // Writes `file` from every language zip, edited, to
 // <mount>\mediaoverride\Stripped\StringTables\<lang>\<file>. With `remove`

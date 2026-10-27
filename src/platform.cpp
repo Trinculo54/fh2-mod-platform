@@ -356,6 +356,7 @@ bool is_game(const char* base) {
 void* find_game() {
     static void* found = nullptr;
     if (found) return found;
+    if (launched_game() == Launched::other) return nullptr; // not FH2: no point searching
     SYSTEM_INFO si{};
     GetSystemInfo(&si);
     auto addr       = reinterpret_cast<uintptr_t>(si.lpMinimumApplicationAddress);
@@ -528,7 +529,7 @@ void* api_wait_for_game(uint32_t timeout_ms) {
     const ULONGLONG until = timeout_ms == 0xFFFFFFFFu ? ~0ull : GetTickCount64() + timeout_ms;
     for (;;) {
         if (void* b = find_game()) return b;
-        if (GetTickCount64() >= until) return nullptr;
+        if (GetTickCount64() >= until || launched_game() == Launched::other) return nullptr;
         Sleep(100);
     }
 }
@@ -647,6 +648,58 @@ bool loads_online(const std::wstring& dll, const std::map<std::wstring, bool>& c
     return !remembered_offline_only(dll);
 }
 
+// Whether a DLL exports fh2mod_init, read from the file without loading it: 1 yes, 0 no, -1
+// can't tell (then it's loaded as before).
+int exports_init_in(const char* file, std::size_t size) {
+    __try {
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(file);
+        if (size < 0x400 || dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 64 ||
+            static_cast<std::size_t>(dos->e_lfanew) + sizeof(IMAGE_NT_HEADERS64) > size)
+            return -1;
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(file + dos->e_lfanew);
+        if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) return -1;
+        const auto* sec    = IMAGE_FIRST_SECTION(nt);
+        const unsigned n   = nt->FileHeader.NumberOfSections;
+        auto at = [&](uint32_t rva) -> const char* { // the file offset of an RVA
+            for (unsigned i = 0; i < n; ++i)
+                if (rva >= sec[i].VirtualAddress && rva < sec[i].VirtualAddress + sec[i].SizeOfRawData &&
+                    sec[i].PointerToRawData + (rva - sec[i].VirtualAddress) < size)
+                    return file + sec[i].PointerToRawData + (rva - sec[i].VirtualAddress);
+            return nullptr;
+        };
+        const auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+        if (!dir.VirtualAddress) return 0;
+        const auto* ed = reinterpret_cast<const IMAGE_EXPORT_DIRECTORY*>(at(dir.VirtualAddress));
+        const auto* names = ed ? reinterpret_cast<const uint32_t*>(at(ed->AddressOfNames)) : nullptr;
+        if (!names) return ed ? 0 : -1;
+        for (DWORD i = 0; i < ed->NumberOfNames && i < 100000; ++i) {
+            const char* name = at(names[i]);
+            if (name && file + size - name > 12 && std::memcmp(name, "fh2mod_init", 12) == 0) return 1;
+        }
+        return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+
+int exports_init(const fs::path& dll) {
+    HANDLE f = CreateFileW(dll.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+    if (f == INVALID_HANDLE_VALUE) return -1;
+    LARGE_INTEGER size{};
+    int found = -1;
+    if (GetFileSizeEx(f, &size) && size.QuadPart > 0 && size.QuadPart < (1ll << 31))
+        if (HANDLE map = CreateFileMappingW(f, nullptr, PAGE_READONLY, 0, 0, nullptr)) {
+            if (const void* view = MapViewOfFile(map, FILE_MAP_READ, 0, 0, 0)) {
+                found = exports_init_in(static_cast<const char*>(view), static_cast<std::size_t>(size.QuadPart));
+                UnmapViewOfFile(view);
+            }
+            CloseHandle(map);
+        }
+    CloseHandle(f);
+    return found;
+}
+
 int call_init(FH2ModInitFn init, const FH2ModApi* api, DWORD* code) {
     __try {
         return init(api);
@@ -666,6 +719,14 @@ DWORD WINAPI load_mods(LPVOID) {
     plog("loaded as " + narrow(g_self_name) + (g_copies.empty() ? "" : "; " + g_copies));
     plog(g_game.empty() ? "couldn't find the game's Mount folder; game text, file and database changes are off"
                         : "game folder " + narrow(g_game.wstring()));
+    // Azimuth 1.0.1 runs other Forza games too. Told to start one of those straight away, the
+    // platform does nothing at all.
+    if (const std::string other = other_game_on_command_line(); !other.empty()) {
+        plog("Azimuth was started for " + other + ", not Forza Horizon 2: no mods are loaded, and the platform "
+             "leaves the game alone");
+        SetEvent(g_mods_ready);
+        return 0;
+    }
     start_media_overrides();
 
     struct Loaded {
@@ -673,6 +734,7 @@ DWORD WINAPI load_mods(LPVOID) {
         HMODULE mod;
     };
     std::vector<Loaded> loaded;
+    std::vector<std::wstring> legacy; // mods from before the platform, loaded once the game is FH2
     std::vector<std::wstring> files;
     for (const auto& e : fs::directory_iterator(g_azimuth / "fh2-mods", ec))
         if (e.is_regular_file(ec) && lower(narrow(e.path().extension().wstring())) == ".dll")
@@ -743,6 +805,16 @@ DWORD WINAPI load_mods(LPVOID) {
         if (stays_off_online(f)) continue;
         // ALTERED_SEARCH_PATH: a mod's own dependencies resolve from fh2-mods first.
         const auto path = (g_azimuth / "fh2-mods" / f).wstring();
+        // A mod from before the platform changes the game by itself, so it waits until the game
+        // Azimuth starts is known to be FH2 (Azimuth 1.0.1 runs other Forza games too).
+        if (exports_init(path) == 0) {
+            plog(narrow(f) + " has no fh2mod_init (a mod from before the platform); it runs on its own, and "
+                 "loads once the game Azimuth starts is known to be Forza Horizon 2");
+            legacy.push_back(f);
+            std::scoped_lock lk{g_mu};
+            g_found.back().loaded = true; // as far as the MODS tab goes, which only FH2 shows
+            continue;
+        }
         if (HMODULE h = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) {
             loaded.push_back({f, h});
             {
@@ -777,6 +849,31 @@ DWORD WINAPI load_mods(LPVOID) {
         }
     }
     install_crash_handler(dlls);
+    watch_launched_game(
+        [legacy] {
+            for (const auto& f : legacy) {
+                const auto path = (g_azimuth / "fh2-mods" / f).wstring();
+                if (HMODULE h = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) {
+                    const auto* base = reinterpret_cast<const char*>(h);
+                    const auto* nt   = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
+                        base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
+                    add_crash_dll({f, base, nt->OptionalHeader.SizeOfImage});
+                    const auto v = version_string(h);
+                    plog("loaded " + narrow(f) + (v.empty() ? "" : " " + v) + " (a mod from before the platform)");
+                } else {
+                    const DWORD err = GetLastError();
+                    plog("FAILED to load " + narrow(f) + " (error " + std::to_string(err) + ")");
+                    std::scoped_lock lk{g_mu};
+                    for (auto& e : g_found)
+                        if (e.file == f) e.problem = "Windows couldn't load it (error " + std::to_string(err) + ").";
+                }
+            }
+        },
+        [legacy] {
+            for (const auto& f : legacy)
+                plog(narrow(f) + " isn't loaded: it's a mod from before the platform, which changes the game by "
+                     "itself");
+        });
     std::thread([] {
         // Azimuth sets up more of itself when Play is pressed.
         if (api_wait_for_game(0xFFFFFFFFu)) {
@@ -1075,7 +1172,9 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
             [](LPVOID) -> DWORD {
                 // Another copy of the platform may be loaded too (Azimuth 1.0.1 imports both names).
                 if (!this_copy_runs()) return 0;
-                g_game         = find_game_mount(g_azimuth);
+                // azimuth.exe --game=DIR starts the game in DIR, when that's FH2.
+                const fs::path started = command_line_game_folder();
+                g_game         = find_game_mount(g_azimuth, holds_fh2_exe(started) ? started : fs::path{});
                 g_azimuth_str  = g_azimuth.wstring();
                 g_game_str     = g_game.wstring();
                 g_api.size     = sizeof(FH2ModApi);

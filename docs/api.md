@@ -17,7 +17,7 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api);
 
 Export this from your DLL. The platform loads every DLL in `fh2-mods` in alphabetical order, then calls each one's `fh2mod_init` in the same order, on its own thread and outside the loader lock. Return 0 on success. Any other value, or a crash inside the call, is logged; the crash is caught, so it won't take the game down. Once every mod's `fh2mod_init` has returned, the platform writes all string-table edits and notices.
 
-DLLs without `fh2mod_init` still load, and are logged as mods from before the platform.
+DLLs without `fh2mod_init` still load, and are logged as mods from before the platform. From platform 2.8.0 they load once the game Azimuth starts is known to be FH2, and not at all for another game ([game_base](#game_base-and-wait_for_game)), since they change the game by themselves.
 
 ## FH2ModApi fields
 
@@ -112,6 +112,8 @@ void* wait_for_game(uint32_t timeout_ms);
 `game_base` returns the base address of `forza_durango_release_final.exe` once Azimuth has mapped it into the process, or null before that. Azimuth maps it when the player presses Play. `wait_for_game` waits until it's mapped, or until `timeout_ms` runs out (`0xFFFFFFFF` waits forever), and returns the base or null. It checks every 100 ms. Call it from your own thread, never from `fh2mod_init`, which would hold up every mod loaded after you.
 
 The game is recognised by its PE header: the 24 November 2015 build, timestamp `0x565501ED` and image size `0x03A18000`. Azimuth maps it at its preferred base, `0x140000000`, but use the returned address anyway.
+
+**Other games.** Azimuth 1.0.1 runs other Forza games from the same launcher (Forza Motorsport 5 and 6, for instance), and the platform and your mod load before the player picks one. Their exes have the same name, `forza_durango_release_final.exe`, and are mapped at the same address. From platform 2.8.0, once Azimuth has mapped one of those, or an FH2 exe of another build, `game_base` returns null for the rest of the session, and `wait_for_game` and `wait_for_code` return null straight away instead of at their timeout. So treat null as "there's no FH2 to change" and stop there, as for a timeout. Anything you did in `fh2mod_init` (text, files, the database) only ever goes to FH2's own folder, so it can stay. The log says which game was started: `game: Azimuth started Forza Motorsport 5 (title 7b35d917), not Forza Horizon 2. ...`, with the name from `data\azimuth.ini`. When Azimuth's command line already says it's another game (`--skip-launcher` with another title in `[launcher] game=`, or `--game=DIR`), no mods are loaded at all. Older platforms keep waiting, and a mod that finds the game by itself has to check the exe's timestamp and size, as above.
 
 ## set_file and clear_file (API 2)
 
@@ -210,6 +212,8 @@ Each call returns a hook that is switched off, or null with the reason in the lo
 **Game code that was already changed.** Before hooking game code, the platform compares the bytes it would change (or, for a function, the bytes MinHook copies) with `forza_durango_release_final.exe` in the game folder. If they differ, something outside the platform already patched them (Extra Options, or a mod patching the game by itself), and the hook is refused rather than layered on top. Pointers are only compared when the exe has an address in the image there, such as a vtable slot. Imports and tables the game fills in at runtime can't be checked this way, so they're allowed. Extra Options changes around 130 places in the game, listed in its `patches.json`. If you need one of those, talk to its author.
 
 **wait_for_code.** Hooks in game code can't be made until `wait_for_code` has returned. It waits like `wait_for_game` and then, if Extra Options is installed, also until Extra Options has finished patching. Extra Options checks every place it patches before it changes any of them, and if a single one isn't as it expects, it patches nothing at all, so a mod hooking early could quietly switch Extra Options off. The platform knows Extra Options is done when its log (`FH2_ExtraOptions.log`, written this launch) says so. That's the status line it writes once it's done (`OK:`, `REFUSED:` or `DISABLED:`), or its `AZIMUTH: winmm proxy initialized` line. If it hasn't said so 20 seconds after the game was mapped, the platform goes ahead anyway and logs that. Hooks outside the game (in Azimuth or a Windows DLL) don't have to wait.
+
+**Other games.** When Azimuth 1.0.1 has started another game (see [game_base](#game_base-and-wait_for_game)), `wait_for_code` returns null, and from platform 2.8.0 every hook or patch into that game's exe is refused, whatever address you pass: `can't hook function 0x140001000 (...): it's in Forza Motorsport 5 (title 7b35d917), which the platform leaves alone`.
 
 ```cpp
 using SerializeFn = char (*)(void* self, void* archive);
@@ -623,4 +627,4 @@ if (!g_mod) return 0;    // online (or a bad info): nothing to do
 
 ## Crash reports
 
-These need no code from you. If the game crashes, the platform writes `fh2-mods\crashes\crash-<date>-<time>.txt` and a minidump (`.dmp`) beside it, and adds the summary to `platform.log`. The report has the exception, the call stack as module+offset (`game+0x...`, `YourMod.dll+0x...`), the mod the crash came from, if any, and every hook in place (see above). The ten newest reports are kept. Open the minidump in Visual Studio or WinDbg with your mod's debug symbols to see the exact line.
+These need no code from you. If the game crashes, the platform writes `fh2-mods\crashes\crash-<date>-<time>.txt` and a minidump (`.dmp`) beside it, and adds the summary to `platform.log`. The report has the exception, the call stack as module+offset (`game+0x...`, `YourMod.dll+0x...`), the mod the crash came from, if any, and every hook in place (see above). When Azimuth 1.0.1 was running another game, it says which, so a crash there isn't taken for a mod's. The ten newest reports are kept. Open the minidump in Visual Studio or WinDbg with your mod's debug symbols to see the exact line.

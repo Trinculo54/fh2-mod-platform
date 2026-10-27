@@ -145,7 +145,9 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride"));
         CHECK(log.find("loaded HelloMod.dll") != std::string::npos);
         CHECK(log.find("Legacy.dll has no fh2mod_init") != std::string::npos);
-        CHECK(fs::exists("legacy_ran.txt"));
+        // A mod from before the platform loads once the game is known to be FH2 (platform 2.8.0).
+        CHECK(fs::exists("legacy_ran.txt") == (argc > 2));
+        CHECK(has(log, "game: Azimuth started Forza Horizon 2 (the 24 Nov 2015 exe") == (argc > 2));
         CHECK(log.find("[TestMod] built for FH2 Mod Platform 9.9.9") != std::string::npos);
         CHECK(log.find("overrides another mod's string") != std::string::npos);
         // TestMod loads after HelloMod, so its edit of the same key wins.

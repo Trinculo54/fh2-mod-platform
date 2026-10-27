@@ -6,11 +6,25 @@ What's been worked out about Forza Horizon 2 on PC while building the mods so fa
 
 Everyone plays the Xbox One release `forza_durango_release_final.exe`, built on 24 November 2015. Its PE header has timestamp `0x565501ED` and image size `0x03A18000`, which is how the platform recognises it in memory. Azimuth doesn't start it as a process. It maps the exe into `azimuth.exe` itself, at the preferred base `0x140000000`, when the player presses Play, and translates the Xbox APIs underneath it. So your mod, the game and Azimuth all share one process.
 
-Azimuth's settings are in `data\azimuth.ini`, a UTF-16 file. The `[launcher]` section holds the player's name (`player_name`) and graphics settings, and `[title-1a96545b] folder=` names the game folder (usually `FH2`). That folder's `Mount` subfolder is what the game sees as `game:\`. `1A96545B` is FH2's title ID, and Fast & Furious is `5A9771A4`. Saves are under `data\titles\1A96545B\saves\player-1\User_...\revisions\<n>\data\`. Azimuth checks those files' hashes, and Extra Options can turn that check off, but mods should never need to touch saves.
+Azimuth's settings are in `data\azimuth.ini`, a UTF-16 file (see [below](#several-games-azimuth-101) for Azimuth 1.0.1, which runs other Forza games too). The `[launcher]` section holds the player's name (`player_name`) and graphics settings, and `[title-1a96545b] folder=` names the game folder (usually `FH2`). That folder's `Mount` subfolder is what the game sees as `game:\`. `1A96545B` is FH2's title ID, and Fast & Furious is `5A9771A4`. Saves are under `data\titles\1A96545B\saves\player-1\User_...\revisions\<n>\data\`. Azimuth checks those files' hashes, and Extra Options can turn that check off, but mods should never need to touch saves.
 
 ## Files and Extra Options
 
 The game reads its data from `game:\media`. Most of it is in zips, whose directories are listed in `media\zipmanifest.xml`; the game relies on those offsets, so don't edit the zips. [Extra Options](https://github.com/RokkuDayo/forzahorizon2_extraoptions) adds an override folder: a file at `media\X.zip\path\file` can be replaced by `mediaoverride\X\path\file`, and a loose file at `media\path\file` by `mediaoverride\path\file`. The priority is `mediaoverride`, then `mediapc`, then the original. Extra Options loads through `winmm.dll`, and its settings are in `FH2_ExtraOptions.ini` next to `azimuth.exe`. `Gamerpic.png` in the same folder is the player's avatar when `CustomGamerpic=1`.
+
+### Several games (Azimuth 1.0.1)
+
+Azimuth 1.0.1 runs several Forza games from one launcher, inside one `azimuth.exe` process: Forza Horizon 2, Forza Motorsport 5 and 6, and others. Each has a `[title-<id>]` section in `azimuth.ini` with its `folder=` and `name=`, and `[launcher] game=` is the one picked last. Every game keeps its own `data\titles\<ID>\`. The launcher is part of the process, so `d3dcompiler_47.dll`, and with it the platform and every mod, loads when `azimuth.exe` starts, before the player picks a game; the game is only mapped when they press Play. The process ends with the game ("session ended: the game window was closed"), so it's one game per launch.
+
+All of them ship an exe called `forza_durango_release_final.exe`, with the same preferred base, `0x140000000`, where Azimuth maps it by hand (it isn't a loaded module). Only the PE header tells them apart:
+
+| Game | Title | TimeDateStamp | SizeOfImage |
+|---|---|---|---|
+| Forza Horizon 2 | `1a96545b` | `0x565501ED` (24 Nov 2015) | `0x03A18000` |
+| Forza Motorsport 5 | `7b35d917` | `0x53D8D1F2` (30 Jul 2014) | `0x0279D000` |
+| Forza Motorsport 6 | `64f9397e` | `0x58AFB1CD` (24 Feb 2017) | `0x01FC8000` |
+
+`azimuth.exe` 1.0.1 itself also has `0x140000000` as its preferred base, but it's relocated, so the game gets that address. From 2.8.0 the platform watches that address, and once a game is mapped there that isn't FH2's 24 Nov 2015 exe, it names it from `azimuth.ini` (by comparing the header with each title's exe on disk) and leaves it alone: nothing is hooked or patched in it, `game_base`, `wait_for_game` and `wait_for_code` return null, mods from before the platform aren't loaded, and the platform stops searching memory for FH2. A header has to stay the same for 50 ms before it counts, so a read while Azimuth is still copying it in can't. Azimuth can also be told which game to start: `--skip-launcher` starts the one `[launcher] game=` names, and `--game=DIR` (a scripted run) the one in `DIR`. When that isn't FH2, the platform loads no mods at all; when `DIR` holds FH2's exe, that's the folder the platform writes `mediaoverride` to.
 
 ### The override folder
 

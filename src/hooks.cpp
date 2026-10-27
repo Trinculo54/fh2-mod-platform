@@ -387,7 +387,10 @@ void wait_for_executable_code() {
 // Watches for the game being mapped, then for Extra Options to finish.
 void watch_for_code() {
     std::thread([] {
-        while (!find_game()) Sleep(50);
+        while (!find_game()) {
+            if (launched_game() == Launched::other) return; // never ready: wait_for_code returns NULL
+            Sleep(50);
+        }
         const ULONGLONG seen = GetTickCount64();
         std::string why;
         while ((why = extra_options_state()).empty()) {
@@ -582,6 +585,11 @@ bool common_checks(FH2Mod* m, const char* what, void* at, void* detour, void** o
     if (!m) return false;
     if (!at || !detour || !original) {
         log_line(m->name, std::string("can't hook ") + what + ": null address, detour or original");
+        return false;
+    }
+    if (const std::string other = other_game_at(at); !other.empty()) {
+        log_line(m->name, std::string("can't hook ") + what + ": it's in " + other +
+                              ", which the platform leaves alone (it only changes Forza Horizon 2's 24 Nov 2015 exe)");
         return false;
     }
     if (in_game(at) && !code_ready()) {
@@ -1042,6 +1050,11 @@ FH2Hook* api_patch_bytes(FH2Mod* m, const char* name, void* at, const void* expe
     if (!m) return nullptr;
     if (!at || !bytes || size == 0 || size > 32) {
         log_line(m->name, "can't make " + what + ": it needs an address, 1 to 32 bytes and the bytes themselves");
+        return nullptr;
+    }
+    if (const std::string other = other_game_at(at); !other.empty()) {
+        log_line(m->name, "can't make " + what + ": it's in " + other +
+                              ", which the platform leaves alone (it only changes Forza Horizon 2's 24 Nov 2015 exe)");
         return nullptr;
     }
     if (in_game(at) && !code_ready()) {
@@ -1574,7 +1587,7 @@ void* api_wait_for_code(uint32_t timeout_ms) {
     const ULONGLONG until = timeout_ms == 0xFFFFFFFFu ? ~0ull : GetTickCount64() + timeout_ms;
     for (;;) {
         if (code_ready()) return find_game();
-        if (GetTickCount64() >= until) return nullptr;
+        if (GetTickCount64() >= until || launched_game() == Launched::other) return nullptr;
         Sleep(50);
     }
 }

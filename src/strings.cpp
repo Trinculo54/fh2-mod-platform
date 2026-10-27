@@ -316,12 +316,16 @@ std::vector<char> edit_lsb2(const std::vector<char>& t,
     return out;
 }
 
-fs::path find_game_mount(const fs::path& azimuth_dir) {
+fs::path find_game_mount(const fs::path& azimuth_dir, const fs::path& command_line_folder) {
     std::error_code ec;
     const auto ini = (azimuth_dir / "data" / "azimuth.ini").wstring();
     wchar_t folder[MAX_PATH]{};
     GetPrivateProfileStringW(L"title-1a96545b", L"folder", L"", folder, MAX_PATH, ini.c_str());
     std::vector<fs::path> candidates;
+    if (!command_line_folder.empty()) { // azimuth.exe --game=DIR: that's the game it starts
+        candidates.push_back(command_line_folder / "Mount");
+        candidates.push_back(command_line_folder);
+    }
     if (folder[0]) {
         fs::path f{folder};
         if (f.is_relative()) f = azimuth_dir / f;

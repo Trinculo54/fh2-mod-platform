@@ -158,6 +158,9 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS* ep) {
     where(er.ExceptionAddress, at, sizeof at);
     o.put("CRASH: %s (0x%08lX) at %s, thread %lu", exception_name(er.ExceptionCode), er.ExceptionCode, at,
           GetCurrentThreadId());
+    if (launched_game() == Launched::other)
+        o.put("game: %s, not the Forza Horizon 2 the platform and its mods are made for; they left it alone",
+              launched_game_name());
     if ((er.ExceptionCode == EXCEPTION_ACCESS_VIOLATION || er.ExceptionCode == EXCEPTION_IN_PAGE_ERROR) &&
         er.NumberParameters >= 2)
         o.put("  %s address 0x%llX",
@@ -247,6 +250,16 @@ void install_crash_handler(const std::vector<LoadedDll>& mods) {
     for (std::size_t i = 0; i + 20 < old.size(); ++i) std::filesystem::remove(old[i], ec);
     g_prev = SetUnhandledExceptionFilter(on_crash);
     if (g_prev == on_crash) g_prev = nullptr;
+}
+
+void add_crash_dll(const LoadedDll& m) {
+    if (g_ndlls == kMaxDlls) return;
+    Dll& d = g_dlls[g_ndlls];
+    lstrcpynW(d.name, m.name.c_str(), static_cast<int>(sizeof d.name / sizeof *d.name));
+    d.base = m.base;
+    d.size = m.size;
+    std::atomic_thread_fence(std::memory_order_release);
+    ++g_ndlls; // only once it's filled in: a crash can read the list at any time
 }
 
 // Azimuth may install its own filter after we did; put ours back in front,

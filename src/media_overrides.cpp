@@ -222,6 +222,7 @@ void watch() {
     // millisecond, a full search now and then.
     char* base = nullptr;
     for (unsigned i = 0; !base; ++i) {
+        if (launched_game() == Launched::other) return; // not FH2: its files are left to it
         const auto* pref = reinterpret_cast<const char*>(kPreferredBase);
         if (committed(pref) && header_is_game(pref)) base = const_cast<char*>(pref);
         else if (i % 50 == 49) base = static_cast<char*>(find_game());

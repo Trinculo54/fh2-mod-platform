@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
@@ -32,9 +33,27 @@ namespace fh2platform {
 void log_line(const std::string& who, const std::string& text);
 inline void plog(const std::string& text) { log_line("", text); }
 
-// Base of the mapped game exe, or nullptr.
+// Base of the mapped game exe, or nullptr (always, once Azimuth has started another game).
 void* find_game();
 constexpr uint32_t kGameSizeOfImage = 0x03A18000u;
+
+// titles.cpp: which game Azimuth started. Azimuth 1.0.1 runs several Forza games, all from a
+// forza_durango_release_final.exe mapped at 0x140000000 (platform 2.8.0).
+enum class Launched { not_yet, fh2, other };
+Launched launched_game();
+const char* launched_game_name(); // the other game, for a log line or crash report ("" until then)
+// A game other than FH2 that Azimuth's command line starts straight away (--skip-launcher, or
+// --game=DIR), with how it was told, for the log; "" for FH2, or when the launcher shows first.
+// When it's another game, launched_game() says so from then on.
+std::string other_game_on_command_line();
+std::filesystem::path command_line_game_folder(); // --game=DIR, else empty
+bool holds_fh2_exe(const std::filesystem::path& folder); // in its Mount folder, or itself
+// The other game's name when `p` is in a game exe mapped at 0x140000000 that isn't FH2's
+// 24 Nov 2015 one, else "". Nothing is hooked or patched there.
+std::string other_game_at(const void* p);
+// Watches for Azimuth mapping the game, says in platform.log which one it is, and then calls
+// `fh2` or `other` on its own thread.
+void watch_launched_game(std::function<void()> fh2, std::function<void()> other);
 
 std::filesystem::path azimuth_dir();
 std::filesystem::path game_mount(); // empty if not found
@@ -117,6 +136,7 @@ struct LoadedDll {
     std::size_t size;
 };
 void install_crash_handler(const std::vector<LoadedDll>& mods);
+void add_crash_dll(const LoadedDll& dll); // one loaded later (a mod from before the platform)
 void recheck_crash_handler();
 
 } // namespace fh2platform
