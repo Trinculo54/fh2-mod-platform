@@ -3416,12 +3416,16 @@ void hook_hud_shown(FH2Mod* m) {
 // the five state storyboards), and our +0x578 runs its on_press while the state is 0;
 // FH2_TITLE_START then presses A through the original, so OnStart's own checks and the
 // sign-in run as ever. An entry with a list shows the message box (show_list) over Splash
-// instead, and the pick does the same through on_choose.
+// instead, and the pick does the same through on_choose. A list longer than one box holds
+// (kTitleListFits, as up to 2.8.0's FH2_TITLE_MAX_CHOICES) goes in pages of kTitlePageSize, with
+// Previous and Next items that show the box again with the page before or after.
 constexpr uintptr_t RVA_SPLASH_BUTTON_SLOT = 0x2E53940;   // Splash vtable +0x578 (holds RVA_PAGE_BUTTON)
 constexpr uintptr_t RVA_SPLASH_ON_START    = 0x0EA0D40;   // Splash::OnStart (A)
 constexpr uintptr_t RVA_SPLASH_A_HANDLER   = 0x0E8F9A5;   // Splash shown: registers A (key 18)
 constexpr std::size_t kSplashState         = 0x448;       // int, see above
 constexpr std::size_t kMaxTitleLabel       = 32;          // bytes; the panel is 326 px wide (about 24 characters)
+constexpr std::size_t kTitleListFits       = 10;          // choices one box shows, with Back
+constexpr std::size_t kTitlePageSize       = 8;           // choices on a page of a longer list, with Previous, Next and Back
 const char* const kTitleFile               = "UI/Scenes/Anthem/A_Splash.xaml";
 struct TitleEntry {
     FH2Mod* mod;
@@ -3434,10 +3438,20 @@ struct TitleEntry {
     std::wstring list_title, list_message;
     std::vector<std::wstring> wchoices;
     std::vector<FakeLocString*> loc;         // title, message, the choices, Back (made once it's in g_titles)
+    std::vector<std::wstring> page_titles;   // a list in pages: the title with "2/5" after it, per page
+    std::vector<FakeLocString*> page_loc;
 };
 std::deque<TitleEntry> g_titles;             // guarded by g_mu (entries are never removed or moved)
 std::atomic<int> g_title_started{-1};        // the entry whose on_press started the game, -1 for none
 std::atomic<int> g_title_list{-1};           // the entry whose list is up, -1 for none
+// What each item of the list that's up is (UI thread only): a choice's position in the whole
+// list, or one of these.
+constexpr int kItemBack = -1, kItemPrevious = -2, kItemNext = -3;
+std::vector<int> g_title_items;
+int g_title_list_page = 0;
+FakeLocString* g_loc_previous = nullptr;   // made with the first list in pages
+FakeLocString* g_loc_next     = nullptr;
+bool show_title_list(void* page, int j, int p);
 bool g_title_page = false;                   // A_Splash.xaml is written with the entries
 bool g_title_handled[7] = {};                // per FH2_BUTTON_: the press was an entry's (UI thread only)
 const int kTitleButtons[] = {FH2_BUTTON_Y, FH2_BUTTON_X, FH2_BUTTON_RB, FH2_BUTTON_LB};
@@ -3594,11 +3608,7 @@ bool d_splash_button(void* page, int button, bool pressed) {
     if (splash_state(page) != 0) return o_splash_button(page, button, pressed);   // already signing in
     g_title_handled[code] = true;
     if (!loc.empty()) {   // the list (the message box plays its own sound)
-        g_title_list = j;
-        if (!g_popup_ok || !show_list(page, loc[0], loc[1], loc.data() + 2, static_cast<int>(loc.size()) - 2, g_title_fn_vt)) {
-            g_title_list = -1;
-            log_line(mod->name, "couldn't show the list for title entry " + key);
-        }
+        if (!show_title_list(page, j, 0)) log_line(mod->name, "couldn't show the list for title entry " + key);
         return true;
     }
     play_sound(kSoundSelect);
@@ -3615,11 +3625,67 @@ bool d_splash_button(void* page, int button, bool pressed) {
     return true;
 }
 
+// Shows page `p` of entry `j`'s list (UI thread): a list that fits in one box as it is, a longer
+// one as kTitlePageSize choices with Previous before them (after the first page) and Next after
+// them (before the last), each page titled with its number. Back is always the last item.
+bool show_title_list(void* page, int j, int p) {
+    std::vector<FakeLocString*> labels;
+    std::vector<int> items;
+    FakeLocString *title = nullptr, *message = nullptr;
+    {
+        std::scoped_lock lk{g_mu};
+        if (j < 0 || j >= static_cast<int>(g_titles.size()) || g_titles[j].loc.size() < 3) return false;
+        const TitleEntry& e = g_titles[j];
+        const int n         = static_cast<int>(e.choices.size());
+        title               = e.loc[0];
+        message             = e.loc[1];
+        int from = 0, to = n;
+        if (n > static_cast<int>(kTitleListFits)) {
+            const int pages = static_cast<int>(e.page_loc.size());
+            p               = p < 0 ? 0 : p >= pages ? pages - 1 : p;
+            from            = p * static_cast<int>(kTitlePageSize);
+            to              = std::min(n, from + static_cast<int>(kTitlePageSize));
+            title           = e.page_loc[p];
+            if (p > 0) {
+                labels.push_back(g_loc_previous);
+                items.push_back(kItemPrevious);
+            }
+        }
+        for (int i = from; i < to; ++i) {
+            labels.push_back(e.loc[2 + i]);
+            items.push_back(i);
+        }
+        if (to < n) {
+            labels.push_back(g_loc_next);
+            items.push_back(kItemNext);
+        }
+        labels.push_back(e.loc[2 + n]);   // Back
+        items.push_back(kItemBack);
+    }
+    g_title_items     = std::move(items);
+    g_title_list_page = p;
+    g_title_list      = j;
+    if (g_popup_ok && show_list(page, title, message, labels.data(), static_cast<int>(labels.size()), g_title_fn_vt)) return true;
+    g_title_list = -1;
+    return false;
+}
+
 // A pick from a title entry's list (the message box's chosen-item handler, on the UI thread).
-// The box closes by itself; Back, the last item, does nothing else.
+// The box closes by itself; Back does nothing else, and Previous or Next show the box again with
+// the page before or after.
 void handle_title_choice(PopupFn* self) {
-    const int j      = g_title_list.exchange(-1);
-    const int choice = chosen_item(self->popup);
+    const int j    = g_title_list.exchange(-1);
+    const int item = chosen_item(self->popup);
+    const int what = item >= 0 && item < static_cast<int>(g_title_items.size()) ? g_title_items[item] : kItemBack;
+    if (what == kItemPrevious || what == kItemNext) {
+        if (!show_title_list(self->page, j, g_title_list_page + (what == kItemNext ? 1 : -1))) {
+            std::scoped_lock lk{g_mu};
+            if (j >= 0 && j < static_cast<int>(g_titles.size()))
+                log_line(g_titles[j].mod->name, "couldn't show the next page of the list for title entry " + g_titles[j].key);
+        }
+        return;
+    }
+    const int choice    = what;
     FH2Mod* mod         = nullptr;
     FH2TitleChooseFn fn = nullptr;
     void* user          = nullptr;
@@ -4216,9 +4282,24 @@ int title_add(FH2Mod* m, const FH2TitleEntry* e) {
         t.loc.push_back(loc_string(t.list_title.c_str()));
         t.loc.push_back(loc_string(t.list_message.c_str()));
         for (const std::wstring& c : t.wchoices) t.loc.push_back(loc_string(c.c_str()));
+        if (t.choices.size() > kTitleListFits) {
+            const std::size_t pages = (t.choices.size() + kTitlePageSize - 1) / kTitlePageSize;
+            for (std::size_t p = 0; p < pages; ++p)
+                t.page_titles.push_back(t.list_title + L"  " + std::to_wstring(p + 1) + L"/" + std::to_wstring(pages));
+            for (const std::wstring& pt : t.page_titles) t.page_loc.push_back(loc_string(pt.c_str()));
+            if (!g_loc_previous) {
+                g_loc_previous = loc_string(L"Previous");
+                g_loc_next     = loc_string(L"Next");
+            }
+        }
     }
-    log_line(m->name, std::string("title-screen entry: (") + button_letters(button) + ") " + ascii_upper(label) +
-                          (has_list ? " (a list of " + std::to_string(t.choices.size()) + ")" : ""));
+    std::string list;
+    if (has_list) {
+        list = " (a list of " + std::to_string(t.choices.size());
+        if (!t.page_loc.empty()) list += ", in " + std::to_string(t.page_loc.size()) + " pages of " + std::to_string(kTitlePageSize);
+        list += ")";
+    }
+    log_line(m->name, std::string("title-screen entry: (") + button_letters(button) + ") " + ascii_upper(label) + list);
     return 1;
 }
 

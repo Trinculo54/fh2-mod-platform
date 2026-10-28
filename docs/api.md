@@ -557,7 +557,7 @@ typedef struct FH2TitleEntry {
     void* user;
     int button;                    /* FH2_BUTTON_Y, _X, _RB or _LB; 0 = the next free one */
     const char* const* choices;    /* a list instead: its choices (UTF-8), or NULL */
-    uint32_t choice_count;         /* 1 to FH2_TITLE_MAX_CHOICES (10) */
+    uint32_t choice_count;         /* 1 to FH2_TITLE_MAX_CHOICES (100) */
     FH2TitleChooseFn on_choose;    /* int (*)(void* user, const char* key, uint32_t choice) */
     const char* list_title;        /* the box's title; NULL = the label */
     const char* list_message;      /* text over the choices; may be NULL */
@@ -570,7 +570,7 @@ An entry is a line of your own on the title screen, under "PRESS (A) TO START" a
 - **When.** Add entries from `fh2mod_init`. The title screen is written once every mod's `fh2mod_init` has returned, so an entry added later only shows from the next launch.
 - **The label.** UTF-8, shown in capitals in the game's small title-screen text. About 24 characters fit beside the button; anything past 32 bytes is cut, and the log says so.
 - **`on_press`** runs on the game's UI thread when the player presses the entry's button while the title screen waits for A. Keep it short: set a flag, or start a thread of your own. Return `FH2_TITLE_HANDLED` to stay on the title screen, or `FH2_TITLE_START` for the platform to press A for the player straight after. The game then signs in, loads the save and loads the world as it always does. A press while the game is already signing in goes to the game, not to you.
-- **Lists.** Give `choices` (and `choice_count`, `on_choose`) and the press shows the game's message box over the title screen instead, titled `list_title` (or the label), with `list_message` over the choices and a Back under them. Picking a choice calls `on_choose` with its position from 0, on the UI thread, with the same return values as `on_press`; Back just closes the box. `on_press` isn't called for a list and can be `NULL`. The choices are copied when you add the entry, so they're fixed until the next launch. Up to 10 fit on screen, and about 30 characters of each.
+- **Lists.** Give `choices` (and `choice_count`, `on_choose`) and the press shows the game's message box over the title screen instead, titled `list_title` (or the label), with `list_message` over the choices and a Back under them. Picking a choice calls `on_choose` with its position from 0, on the UI thread, with the same return values as `on_press`; Back just closes the box. `on_press` isn't called for a list and can be `NULL`. The choices are copied when you add the entry, so they're fixed until the next launch. Up to 10 fit in the box at once, and about 30 characters of each. A longer list (up to 100) comes in pages of 8, with Previous above them and Next below, and the box's title says which page it is ("PICK A TRACK  2/5"). `on_choose` still gets the choice's position in the whole list.
 - **`title_started_by`** returns the key of your entry that started the game, or `NULL` if the player pressed A, another mod's entry started it, or it hasn't started yet. Pressing A on the title screen later (after going back to it) sets it back to `NULL`. Call it from any thread, typically from a hook on the world or save loading, to know whether this start is yours.
 
 ```cpp

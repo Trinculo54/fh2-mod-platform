@@ -4,6 +4,8 @@
 #include "fh2mod.h"
 #include <windows.h>
 
+#include <string>
+
 static const FH2ModApi* g_api;
 static FH2Mod* g_mod;
 
@@ -76,13 +78,18 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     te.on_press = [](void*, const char*) { return FH2_TITLE_START; };
     api->add_title_entry(g_mod, &te);
     api->add_title_entry(g_mod, &te);                     // refused: already there
-    static const char* const many[] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"};
+    static std::string names[101];
+    static const char* many[101];
+    for (int i = 0; i < 101; ++i) {
+        names[i] = "Track " + std::to_string(i + 1);
+        many[i]  = names[i].c_str();
+    }
     static const char* const blank[] = {"Fine", ""};
     static const char* const two[]   = {"Track one", "Track two"};
     te.key = "Second"; te.label = "Second entry"; te.button = FH2_BUTTON_X; te.on_press = nullptr;
     te.on_choose = [](void*, const char*, uint32_t choice) { return choice == 1 ? FH2_TITLE_START : FH2_TITLE_HANDLED; };
-    te.choices = many; te.choice_count = 11;
-    api->add_title_entry(g_mod, &te);                     // refused: 1 to 10
+    te.choices = many; te.choice_count = 101;
+    api->add_title_entry(g_mod, &te);                     // refused: 1 to 100
     te.choices = blank; te.choice_count = 2;
     api->add_title_entry(g_mod, &te);                     // refused: a choice without a label
     te.choices = two; te.on_choose = nullptr;
@@ -95,7 +102,10 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     te.key = "Third"; te.label = "Third entry with a label that is far too long"; te.button = FH2_BUTTON_Y;
     api->add_title_entry(g_mod, &te);
     te.key = "Fourth"; te.label = "Fourth & <last>"; te.button = 0;
+    te.choices = many; te.choice_count = 20;              // a list in pages: 3 of 8
+    te.on_choose = [](void*, const char*, uint32_t) { return FH2_TITLE_HANDLED; };
     api->add_title_entry(g_mod, &te);
+    te.choices = nullptr; te.choice_count = 0; te.on_choose = nullptr;
     te.key = "Fifth"; te.label = "No room";
     api->add_title_entry(g_mod, &te);                     // refused: four at most
     te.key = "bad key";

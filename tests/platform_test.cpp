@@ -199,13 +199,13 @@ int wmain(int argc, wchar_t** argv) {
         // title-screen entries (API 9)
         CHECK(has(log, "[TestMod] title-screen entry: (Y) DRIVE THE TEST GARAGE") &&
               has(log, "[TestMod] title-screen entry: (X) SECOND ENTRY (a list of 2)"));
-        CHECK(has(log, "[TestMod] add_title_entry: Second can have 1 to 10 choices, not 11"));
+        CHECK(has(log, "[TestMod] add_title_entry: Second can have 1 to 100 choices, not 101"));
         CHECK(has(log, "[TestMod] add_title_entry: Second's choice 1 has no label"));
         CHECK(has(log, "[TestMod] add_title_entry: Second has choices but no on_choose"));
         CHECK(has(log, "[TestMod] add_title_entry: there's already an entry called Garage"));
         CHECK(has(log, "[TestMod] add_title_entry: Y is TestMod's Garage; Third gets RB"));
         CHECK(has(log, "[TestMod] add_title_entry: Third's label is cut to \"Third entry with a label that is\""));
-        CHECK(has(log, "[TestMod] title-screen entry: (LB) FOURTH & <LAST>"));
+        CHECK(has(log, "[TestMod] title-screen entry: (LB) FOURTH & <LAST> (a list of 20, in 3 pages of 8)"));
         CHECK(has(log, "[TestMod] add_title_entry: no button left for Fifth (four entries at most, from every mod)"));
         CHECK(has(log, "[TestMod] add_title_entry: \"bad key\" isn't a usable key (letters, digits, _)"));
         CHECK(has(log, "[TestMod] no title start yet"));

@@ -398,7 +398,8 @@ typedef struct FH2ModApi {
        (the game's code isn't as expected), they don't show at all and the
        log says why. An entry can be a list instead (FH2TitleEntry.choices):
        its press shows the game's message box over the title screen with the
-       choices and a Back, and the pick calls on_choose.
+       choices and a Back, and the pick calls on_choose. A list of more than
+       10 is shown 8 choices at a time, with Previous and Next.
 
        Add entries from fh2mod_init: the title screen is written when every
        mod's fh2mod_init has returned, so one added later only shows from the
@@ -537,7 +538,7 @@ typedef int (*FH2TitleChooseFn)(void* user, const char* key, uint32_t choice);
 
 #define FH2_TITLE_HANDLED 0
 #define FH2_TITLE_START   1
-#define FH2_TITLE_MAX_CHOICES 10
+#define FH2_TITLE_MAX_CHOICES 100
 
 /* One title-screen entry (API 9). */
 struct FH2TitleEntry {
@@ -551,7 +552,7 @@ struct FH2TitleEntry {
        over the title screen with these choices and a Back, and picking one
        calls on_choose. The choices are copied. */
     const char* const* choices;    /* UTF-8, shown as given; NULL = no list */
-    uint32_t choice_count;         /* 1 to FH2_TITLE_MAX_CHOICES */
+    uint32_t choice_count;         /* 1 to FH2_TITLE_MAX_CHOICES; over 10, shown in pages */
     FH2TitleChooseFn on_choose;
     const char* list_title;        /* the box's title (shown in capitals); NULL = the label */
     const char* list_message;      /* text over the choices; may be NULL */
