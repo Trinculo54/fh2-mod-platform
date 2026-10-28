@@ -1,5 +1,6 @@
-; Forward every export of d3dcompiler_47.dll to the real system DLL.
-; azimuth.exe imports D3DCompile from it; nothing else here is ours.
+; Forward every export of d3dcompiler_47.dll and DWrite.dll to the real system DLLs.
+; Azimuth up to 1.0.1 imports D3DCompile, and 1.0.1 and later import DWriteCreateFactory:
+; the same DLL ships under both names. Only the last two exports are ours.
 LIBRARY d3dcompiler_47
 EXPORTS
     D3DAssemble                       = C:\Windows\System32\d3dcompiler_47.D3DAssemble
@@ -31,5 +32,8 @@ EXPORTS
     D3DStripShader                    = C:\Windows\System32\d3dcompiler_47.D3DStripShader
     D3DWriteBlobToFile                = C:\Windows\System32\d3dcompiler_47.D3DWriteBlobToFile
     DebugSetMute                      = C:\Windows\System32\d3dcompiler_47.DebugSetMute
+    DWriteCreateFactory               = C:\Windows\System32\DWrite.DWriteCreateFactory
     ; ours: rundll32 d3dcompiler_47.dll,RestartHelper (settings.cpp)
     RestartHelper
+    ; ours: which copy of the platform runs when Azimuth loads two (platform.cpp)
+    fh2mod_platform_version

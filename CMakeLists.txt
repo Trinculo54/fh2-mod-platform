@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 # Bump VERSION before tagging a release (the tag build checks they match).
-project(fh2_mod_platform VERSION 2.7.3 LANGUAGES C CXX RC)
+project(fh2_mod_platform VERSION 2.7.4 LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -71,6 +71,11 @@ target_include_directories(fh2mod_platform PRIVATE include src ${CMAKE_CURRENT_B
 # System32 when the first update check runs.
 target_link_libraries(fh2mod_platform PRIVATE user32)
 set_target_properties(fh2mod_platform PROPERTIES OUTPUT_NAME d3dcompiler_47 PREFIX "")
+# Azimuth 1.0.3 no longer imports d3dcompiler_47.dll, while 1.0.1 and later import DWrite.dll.
+# The DLL forwards both, so the build leaves a copy of it under that name too.
+add_custom_command(TARGET fh2mod_platform POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:fh2mod_platform>
+            $<TARGET_FILE_DIR:fh2mod_platform>/DWrite.dll)
 
 # Only when this is the top-level project: the example mod and the tests.
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
