@@ -52,6 +52,7 @@ typedef struct FH2Page FH2Page;
 typedef struct FH2PageRow FH2PageRow;
 /* A title-screen entry (API 9), defined below FH2ModApi. */
 typedef struct FH2TitleEntry FH2TitleEntry;
+typedef struct FH2Hotkey FH2Hotkey;
 
 /* The CPU's registers at an instruction hook (API 7): see hook_instruction.
    rsp is what it was at the hooked instruction; changing it has no effect. */
@@ -71,6 +72,13 @@ typedef struct FH2Context {
     FH2Xmm xmm[16];
 } FH2Context;
 typedef void (*FH2InstructionFn)(FH2Context* ctx, void* user);
+
+/* A command (API 9, add_command): runs on the platform's command thread,
+   not the game's, with the rest of the request's line in `args`. Write
+   the answer into `reply` (UTF-8, at most reply_size bytes with its NUL;
+   the platform cuts anything longer). Start it with "error: " for a
+   failure, which fh2mod.exe exits 1 on. */
+typedef void (*FH2CommandFn)(void* user, const char* name, const char* args, char* reply, size_t reply_size);
 
 typedef struct FH2ModInfo {
     uint32_t size;                /* sizeof(FH2ModInfo) */
@@ -456,6 +464,46 @@ typedef struct FH2ModApi {
        the saves' hashes). Returns 1 if a copy will be made, 0 if there's no
        saves folder or the call came after fh2mod_init (the log says why). */
     int (*request_save_snapshot)(FH2Mod* mod, const char* reason, uint32_t keep);
+
+    /* ---- Crash dumps -------------------------------------------------------
+       The minidump the platform writes with every crash report has the
+       writable data (globals) of the DLLs it loaded, yours included. Memory
+       behind your globals, on the heap (your tables, the state your hooks
+       keep), only goes in if you add it here: `n` bytes at `p`, 1 byte to
+       64 MB, in every dump from now on. Keep it to what you'd want to see
+       after a crash; 64 ranges at most, from every mod together. The memory
+       must stay allocated (or the range is skipped at the crash). Any
+       thread. */
+    void (*add_dump_memory)(FH2Mod* mod, const void* p, size_t n);
+
+    /* ---- Hotkeys -----------------------------------------------------------
+       A keyboard key (with FH2_KEY_ modifiers) and a controller chord that
+       call your on_press, for a "mark this spot" key or a live switch while
+       testing. Keys are only watched while the game's window is in front, and
+       the game still gets every key and button: pick ones that do nothing
+       harmful in game (F-keys; LB+RB with a face button). Each hotkey gets two
+       rows on the Mods page, under your mod's: its key (Off, F1 to F12,
+       Ctrl+F1 to F12, or yours if it's none of those) and its controller chord
+       (Off, or LB+RB with Y, X, B, A or a d-pad direction). A change there
+       takes effect straight away and calls on_rebind, so you can save it:
+       the platform doesn't keep bindings, so pass the saved ones in next time.
+       Add hotkeys from fh2mod_init, so their rows show. Returns 1 if added, 0
+       if not (the log says why). See FH2Hotkey below. */
+    int (*add_hotkey)(FH2Mod* mod, const FH2Hotkey* hotkey);
+
+    /* ---- Commands ----------------------------------------------------------
+       A command other programs can run while the game does, to flip a
+       setting, ask for numbers or mark a spot without touching the game:
+       `fh2mod MyMod shadows off` with fh2mod.exe (in the platform's zip), or
+       one line of UTF-8, "<mod> <command> [args]", on the named pipe
+       \\.\pipe\fh2mod-<process id> (platform-session.json has its name).
+       "list" lists every mod's commands with their help. The pipe only
+       starts once a mod adds a command, and only programs this Windows user
+       runs on this PC can connect. `name` is letters, digits and '_', unique
+       within your mod; `help` is a line for "list" (may be NULL). Commands
+       run one at a time, on the platform's command thread (see
+       FH2CommandFn). Returns 1 if added, 0 if not (the log says why). */
+    int (*add_command)(FH2Mod* mod, const char* name, const char* help, FH2CommandFn fn, void* user);
 } FH2ModApi;
 
 /* Called on the game's UI thread when the player changes a row: keep it
@@ -589,6 +637,47 @@ struct FH2TitleEntry {
     FH2TitleChooseFn on_choose;
     const char* list_title;        /* the box's title (shown in capitals); NULL = the label */
     const char* list_message;      /* text over the choices; may be NULL */
+};
+
+/* Hotkeys (API 9). Modifiers for FH2Hotkey.modifiers: */
+#define FH2_KEY_CTRL  1
+#define FH2_KEY_SHIFT 2
+#define FH2_KEY_ALT   4
+/* Controller buttons for FH2Hotkey.pad_chord (XInput's bits): all of them held. */
+#define FH2_PAD_DPAD_UP    0x0001
+#define FH2_PAD_DPAD_DOWN  0x0002
+#define FH2_PAD_DPAD_LEFT  0x0004
+#define FH2_PAD_DPAD_RIGHT 0x0008
+#define FH2_PAD_START      0x0010
+#define FH2_PAD_BACK       0x0020
+#define FH2_PAD_LTHUMB     0x0040
+#define FH2_PAD_RTHUMB     0x0080
+#define FH2_PAD_LB         0x0100
+#define FH2_PAD_RB         0x0200
+#define FH2_PAD_A          0x1000
+#define FH2_PAD_B          0x2000
+#define FH2_PAD_X          0x4000
+#define FH2_PAD_Y          0x8000
+
+/* Called on a platform thread (not the game's) when the key or chord is
+   pressed, once per press. Keep it short, and hand game work to a hook. */
+typedef void (*FH2HotkeyFn)(void* user, const char* key);
+/* The player picked another binding on the Mods page: save it, and pass it
+   in next time (`vk` 0 = no key, `pad_chord` 0 = no chord). On the UI
+   thread. */
+typedef void (*FH2HotkeyRebindFn)(void* user, const char* key, uint32_t vk, uint32_t modifiers, uint32_t pad_chord);
+
+/* One hotkey (API 9). */
+struct FH2Hotkey {
+    uint32_t size;                 /* sizeof(FH2Hotkey) */
+    const char* key;               /* unique within your mod: letters, digits and '_', like "Mark" */
+    const char* label;             /* UTF-8, for its rows on the Mods page: "Mark this spot" */
+    uint32_t vk;                   /* the key, a Windows virtual-key code (VK_F9, 'M'); 0 = none */
+    uint32_t modifiers;            /* FH2_KEY_CTRL | FH2_KEY_SHIFT | FH2_KEY_ALT, held with it */
+    uint32_t pad_chord;            /* FH2_PAD_ bits, held together; 0 = none */
+    FH2HotkeyFn on_press;
+    FH2HotkeyRebindFn on_rebind;   /* may be NULL */
+    void* user;                    /* passed to both */
 };
 
 #define FH2_ROW_NORMAL  0

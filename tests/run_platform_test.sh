@@ -15,7 +15,7 @@ dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
 mkdir -p "$dir/fh2-mods" "$dir/FH2/Mount/media/Stripped/StringTables" "$dir/FH2/Mount/mediaoverride/UI"
 cp "$b/platform_test.exe" "$dir/azimuth.exe"
-cp "$b/d3dcompiler_47.dll" "$b/database_test.exe" "$b/DbMod.dll" "$dir/"
+cp "$b/d3dcompiler_47.dll" "$b/database_test.exe" "$b/DbMod.dll" "$b/fh2mod.exe" "$dir/"
 cp "$b/AaaMod.dll" "$b/HelloMod.dll" "$b/TestMod.dll" "$b/Legacy.dll" "$dir/fh2-mods/"
 cp "$1" "$dir/FH2/Mount/media/Stripped/StringTables/EN.zip"
 cp "$2" "$dir/FH2/Mount/media/Stripped/gamedbRC.slt"

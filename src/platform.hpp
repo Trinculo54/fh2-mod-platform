@@ -155,5 +155,12 @@ struct LoadedDll {
 void install_crash_handler(const std::vector<LoadedDll>& mods);
 void add_crash_dll(const LoadedDll& dll); // one loaded later (a mod from before the platform)
 void recheck_crash_handler();
+void add_dump_memory(FH2Mod* mod, const void* p, std::size_t n); // memory a mod wants in every dump (API 9)
+
+// hotkeys.cpp: keys and controller chords that call mods back, with rows on the Mods page (API 9).
+int hotkey_add(FH2Mod* mod, const FH2Hotkey* hotkey);
+
+// commands.cpp: mods' commands, run through a named pipe (API 9).
+int command_add(FH2Mod* mod, const char* name, const char* help, FH2CommandFn fn, void* user);
 
 } // namespace fh2platform

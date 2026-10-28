@@ -1231,6 +1231,9 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.session_id        = session_id;
                 g_api.session_log_path  = session_log_path;
                 g_api.request_save_snapshot = request_save_snapshot;
+                g_api.add_dump_memory   = add_dump_memory;
+                g_api.add_hotkey        = hotkey_add;
+                g_api.add_command       = command_add;
                 return load_mods(nullptr);
             },
             nullptr, 0, nullptr))

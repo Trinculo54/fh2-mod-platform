@@ -666,6 +666,82 @@ Before an experimental session, the safe thing is a copy of the saves. Ask the p
 
 The platform only ever reads the saves. To go back to a snapshot, close the game and copy the whole snapshot over the saves folder: Azimuth checks the saves' hashes, so don't mix files from different copies. It returns 1 if a copy will be made, 0 if there's no saves folder or the call came after `fh2mod_init` (the log says which).
 
+## Hotkeys (API 9)
+
+```c
+int add_hotkey(FH2Mod* mod, const FH2Hotkey* hotkey);
+
+typedef struct FH2Hotkey {
+    uint32_t size;                 /* sizeof(FH2Hotkey) */
+    const char* key;               /* unique within your mod: "Mark" */
+    const char* label;             /* "Mark this spot", for its rows on the Mods page */
+    uint32_t vk;                   /* a Windows virtual-key code (VK_F9, 'M'); 0 = none */
+    uint32_t modifiers;            /* FH2_KEY_CTRL | FH2_KEY_SHIFT | FH2_KEY_ALT */
+    uint32_t pad_chord;            /* FH2_PAD_LB | FH2_PAD_RB | FH2_PAD_Y ...; 0 = none */
+    FH2HotkeyFn on_press;          /* void (*)(void* user, const char* key) */
+    FH2HotkeyRebindFn on_rebind;   /* void (*)(void* user, const char* key, uint32_t vk, uint32_t modifiers, uint32_t pad_chord) */
+    void* user;
+} FH2Hotkey;
+```
+
+A key on the keyboard, a chord on the controller or both, that call `on_press` once per press: a key that writes "the problem is here" to your log, or a live switch while you test something.
+
+- **Only while the game is in front.** The platform polls the keyboard (`GetAsyncKeyState`) and the controllers (XInput, from System32) every 15 ms while Azimuth's window has the focus. It never takes a key from other programs (no `RegisterHotKey`), and the game still gets every key and button, so pick ones that do nothing harmful in game: an F-key, or LB+RB with a face button. The modifiers have to match exactly, so Ctrl+F5 doesn't set off a hotkey on F5.
+- **`on_press`** runs on the platform's hotkey thread, not the game's. Keep it short, and hand anything that touches the game to a hook. If it crashes, the log says so and the next press calls it again.
+- **The Mods page.** Each hotkey gets two choice rows in your mod's part of Pause > Settings > MODS: "<label>: key" (Off, F1 to F12, Ctrl+F1 to F12, or your own binding if it's none of those) and "<label>: controller" (Off, or LB+RB with Y, X, B, A or a d-pad direction, or your own chord). A change there takes effect straight away and calls `on_rebind` with the new binding. The platform doesn't keep bindings: save them in your settings and pass them in next time, as with your rows.
+- **When.** Add hotkeys from `fh2mod_init`, so their rows show (rows added later only show from the next launch). It returns 1 if the hotkey was added, 0 if not, and the log says why.
+
+```cpp
+FH2Hotkey mark{sizeof mark};
+mark.key       = "Mark";
+mark.label     = "Mark this spot";
+mark.vk        = saved_vk ? saved_vk : VK_F9;
+mark.pad_chord = FH2_PAD_LB | FH2_PAD_RB | FH2_PAD_Y;
+mark.on_press  = [](void*, const char*) { g_mark_now = true; };   // the frame hook writes the position
+mark.on_rebind = [](void*, const char*, uint32_t vk, uint32_t mods, uint32_t chord) { save_binding(vk, mods, chord); };
+api->add_hotkey(g_mod, &mark);
+```
+
+## Commands (API 9)
+
+```c
+int add_command(FH2Mod* mod, const char* name, const char* help, FH2CommandFn fn, void* user);
+typedef void (*FH2CommandFn)(void* user, const char* name, const char* args, char* reply, size_t reply_size);
+```
+
+A command is something another program can ask your mod to do while the game runs: flip a setting for an A/B test without restarting, print some numbers, mark a spot. Run them with `fh2mod.exe`, in the `tools` folder of the platform's zip:
+
+```
+fh2mod list
+fh2mod MyMod shadows off
+fh2mod --pid 1234 MyMod stats
+```
+
+- **`add_command`** registers `name` (letters, digits and `_`, unique within your mod, matched in any case) with a line of `help` for `fh2mod list` (or `NULL`). Add commands whenever you like; it returns 1 if added, 0 if not, and the log says why.
+- **`fn`** runs on the platform's command thread, not the game's, one command at a time, with the rest of the line in `args`. Write your answer into `reply` (UTF-8, `reply_size` bytes with the NUL: 16 KB). Start it with `error: ` for a failure: `fh2mod.exe` prints it and exits with 1. Hand anything that touches the game to a hook or your own thread. If `fn` crashes, the request gets an error and the log says so.
+- **The pipe.** It starts when the first command is added: `\\.\pipe\fh2mod-<process id>`, also in `fh2-mods\platform-session.json`. It refuses remote clients, and its DACL lets in only the Windows user the game runs as, so only that user's programs on that PC can connect. A request is one line of UTF-8: `list`, or `<mod> <command> [args]`, with a mod name that has spaces in double quotes. The reply is text, and the connection then closes. Any tool can use it the way `fh2mod.exe` does (`tools/fh2mod.cpp`).
+- **Which game.** Without `--pid`, `fh2mod.exe` finds the one running game with a command pipe; when there are more (the game started twice, or two installs), it lists their process ids for `--pid`.
+- **On Linux** the pipe is inside the game's Wine prefix, so run `fh2mod.exe` with the same prefix (`wine`, or `protontricks -c`).
+
+```cpp
+api->add_command(g_mod, "debris", "debris clear: removes every broken piece now",
+                 [](void*, const char*, const char* args, char* reply, size_t size) {
+                     if (strcmp(args, "clear") != 0) { snprintf(reply, size, "error: debris clear"); return; }
+                     g_clear_debris = true;   // the game's update hook does it
+                     snprintf(reply, size, "clearing");
+                 }, nullptr);
+```
+
 ## Crash reports
 
 These need no code from you. If the game crashes, the platform writes `fh2-mods\crashes\crash-<date>-<time>.txt` and a minidump (`.dmp`) beside it, and adds the summary to `platform.log`. The report has the exception, the call stack as module+offset (`game+0x...`, `YourMod.dll+0x...`), the mod the crash came from, if any, and every hook in place (see above). When Azimuth 1.0.1 was running another game, it says which, so a crash there isn't taken for a mod's. The ten newest reports are kept. Open the minidump in Visual Studio or WinDbg with your mod's debug symbols to see the exact line.
+
+From platform 2.8.0:
+
+- **Your mod's state is in the dump.** The minidump has the writable data (the globals) of every DLL the platform loaded: the mods, fh2wheel and the platform itself. Other modules' data stays out, so the dump stays small. `platform.log` says how many DLLs' data and how many added ranges went in.
+- **`add_dump_memory(mod, p, n)`** (API 9) adds memory of your own to every dump from then on, for state that lives on the heap behind your globals: your tables, what your hooks keep track of. 1 byte to 64 MB a range, 64 ranges at most from every mod together. The memory has to stay allocated; a range that can't be read at the crash is skipped.
+- **A full-memory dump** while you chase a crash: put `full` in `fh2-mods\platform-dump.txt`. The next dump then has the whole process, which under Azimuth is several GB, so it's named `crash-<date>-<time>-full.dmp` and only the newest one is kept. Delete the file (or the word) to go back to small dumps.
+- **Symbols.** The report lists the PDB (name, GUID and age) of each loaded DLL that has a CodeView record, which is what a debugger needs to load the right symbols. Release builds with llvm-mingw are stripped and have none; build with `-gcodeview -Wl,--pdb=` and keep the PDB if you want them.
+- **`fh2-mods\platform-session.json`** says `crashed`, with the report's name (see Sessions).
+
+Wine's dbghelp writes the dumps too; whether it honours the mods' data and added ranges there hasn't been checked yet.

@@ -68,6 +68,36 @@ static int db_xp(int id) {
 
 static bool has(const std::string& log, const char* s) { return log.find(s) != std::string::npos; }
 
+// fh2mod.exe with these arguments: its exit code and what it printed (platform 2.8.0's commands).
+static int run_cli(const std::wstring& args, std::string& out) {
+    SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
+    HANDLE r = nullptr, w = nullptr;
+    if (!CreatePipe(&r, &w, &sa, 0)) return -1;
+    SetHandleInformation(r, HANDLE_FLAG_INHERIT, 0);
+    STARTUPINFOW si{sizeof si};
+    si.dwFlags    = STARTF_USESTDHANDLES;
+    si.hStdOutput = w;
+    si.hStdError  = w;
+    PROCESS_INFORMATION pi{};
+    std::wstring cmd = L"fh2mod.exe " + args;
+    if (!CreateProcessW(L"fh2mod.exe", cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        CloseHandle(r);
+        CloseHandle(w);
+        return -1;
+    }
+    CloseHandle(w);
+    char buf[4096];
+    DWORD n = 0;
+    while (ReadFile(r, buf, sizeof buf, &n, nullptr) && n) out.append(buf, n);
+    CloseHandle(r);
+    WaitForSingleObject(pi.hProcess, 10000);
+    DWORD code = 0;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return static_cast<int>(code);
+}
+
 static LONG WINAPI after_crash(EXCEPTION_POINTERS*) {
     // Runs after the platform's crash handler, which passes crashes on.
     std::string report;
@@ -81,6 +111,12 @@ static LONG WINAPI after_crash(EXCEPTION_POINTERS*) {
     CHECK(has(report, "writing address 0x0"));
     CHECK(has(report, "the crash came from AaaMod.dll"));
     CHECK(dump);
+    // the dump has the mods' data and the range AaaMod added (platform 2.8.0)
+    const std::string plog_text = slurp("fh2-mods\\platform.log");
+    CHECK(has(plog_text, "[AaaMod] add_dump_memory: 4096 bytes go in crash dumps") &&
+          has(plog_text, "[AaaMod] add_dump_memory: needs memory of 1 byte to 64 MB; not added"));
+    CHECK(has(plog_text, "with a small minidump (the data of ") && has(plog_text, "and 1 range(s) mods added)") &&
+          !has(plog_text, "the data of 0 of the mods' DLLs"));
     // the session's status says so, with the report's name (platform 2.8.0)
     const std::string status = slurp("fh2-mods\\platform-session.json");
     CHECK(has(status, "\"state\": \"crashed\"") && has(status, "\"crash_report\": \"crashes\\\\crash-") &&
@@ -224,6 +260,36 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] add_setting: One is a choice row but needs 2 to 32 choices"));
         CHECK(has(log, "[TestMod] add_setting: Lots is a choice row but needs 2 to 32 choices"));
         CHECK(has(log, "[TestMod] playing offline") && !has(log, "started from the FH2MP launcher"));
+        // commands (API 9): through fh2mod.exe, as a tool would
+        {
+            const std::wstring pid = L"--pid " + std::to_wstring(GetCurrentProcessId()) + L" ";
+            std::string out;
+            CHECK(run_cli(pid + L"TestMod echo hello world", out) == 0 && out == "hello world\n");
+            out.clear();
+            CHECK(run_cli(pid + L"list", out) == 0 && has(out, "TestMod echo  echo <text>: answers with the text\n") &&
+                  has(out, "TestMod fail\n"));
+            out.clear();
+            CHECK(run_cli(pid + L"testmod ECHO case", out) == 0 && out == "case\n");   // names in any case
+            out.clear();
+            CHECK(run_cli(pid + L"TestMod fail", out) == 1 && out == "error: as asked\n");
+            out.clear();
+            CHECK(run_cli(pid + L"Nobody here", out) == 1 && has(out, "error: no mod called \"Nobody\" has commands"));
+            out.clear();
+            CHECK(run_cli(pid + L"TestMod nothing", out) == 1 && has(out, "error: TestMod has no command called \"nothing\""));
+            const std::string pipe = "\\\\.\\pipe\\fh2mod-" + std::to_string(GetCurrentProcessId());
+            log = slurp(L"fh2-mods\\platform.log");
+            CHECK(has(log, ("commands: other programs on this PC (this Windows user's) can run mods' commands through " + pipe).c_str()));
+            CHECK(has(log, "[TestMod] command: echo (echo <text>: answers with the text)") && has(log, "[TestMod] command: echo hello world"));
+            CHECK(has(log, "[TestMod] add_command: \"bad name\" isn't a usable name (letters, digits, _)") &&
+                  has(log, "[TestMod] add_command: there's already a command called Echo"));
+            CHECK(has(slurp("fh2-mods\\platform-session.json"), "\"pipe\": \"\\\\\\\\.\\\\pipe\\\\fh2mod-"));
+        }
+        // hotkeys (API 9): bindings named, rows on the Mods page, the refusals
+        CHECK(has(log, "[TestMod] hotkey Mark (Mark this spot): F9, controller LB+RB+Y"));
+        CHECK(has(log, "[TestMod] hotkey Toggle (Toggle the test): Ctrl+Shift+M, controller Off"));
+        CHECK(has(log, "[TestMod] add_hotkey: there's already a hotkey called Mark") &&
+              has(log, "[TestMod] add_hotkey: Broken needs a label and an on_press"));
+        CHECK(has(log, "[TestMod] Mods page row: Mark this spot: key") && has(log, "[TestMod] Mods page row: Toggle the test: controller"));
         // sessions (API 9): the id in the log, the log's copy, our own log, the status file
         {
             const std::size_t at = log.find("[TestMod] session id ");

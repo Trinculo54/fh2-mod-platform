@@ -51,7 +51,7 @@ set_source_files_properties(${_sqlite_src} PROPERTIES
     COMPILE_DEFINITIONS "SQLITE_OMIT_LOAD_EXTENSION;SQLITE_DEFAULT_MEMSTATUS=0")
 
 add_library(fh2mod_platform SHARED src/platform.cpp src/strings.cpp src/updates.cpp src/files.cpp
-            src/database.cpp src/media_overrides.cpp src/titles.cpp src/session.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
+            src/database.cpp src/media_overrides.cpp src/titles.cpp src/session.cpp src/hotkeys.cpp src/commands.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
 target_include_directories(fh2mod_platform PRIVATE third_party/minhook/include ${_minhook} third_party/sqlite)
 if(NOT MSVC)
     # InterlockedCompareExchange128, for rewriting call sites atomically.
@@ -86,6 +86,15 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         target_link_options(hello_mod PRIVATE -static)
     endif()
     set_target_properties(hello_mod PROPERTIES OUTPUT_NAME HelloMod PREFIX "")
+
+    # fh2mod.exe: runs mods' commands in the running game (docs/api.md, Commands).
+    add_executable(fh2mod_cli tools/fh2mod.cpp)
+    target_compile_definitions(fh2mod_cli PRIVATE UNICODE _UNICODE)
+    target_compile_options(fh2mod_cli PRIVATE ${_warn})
+    if(NOT MSVC)
+        target_link_options(fh2mod_cli PRIVATE -municode -static)
+    endif()
+    set_target_properties(fh2mod_cli PROPERTIES OUTPUT_NAME fh2mod)
 
     option(FH2MOD_TESTS "Build the offline test" OFF)
     if(FH2MOD_TESTS)

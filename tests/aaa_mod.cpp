@@ -23,6 +23,13 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->set_file(g_mod, "drivatarglobalcache/DefaultCache.bin", data, sizeof data - 1);
     api->add_sql(g_mod, "UPDATE NoSuchTable SET x = 1");
     if (api->wait_for_mods(0) == 0) api->log(g_mod, "wait_for_mods from init returned 0");
+    // State on the heap, in every crash dump (API 9); a range that's too big is refused.
+    if (api->api_version >= 9) {
+        auto* state = static_cast<char*>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 4096));
+        lstrcpyA(state, "AaaMod's state");
+        api->add_dump_memory(g_mod, state, 4096);
+        api->add_dump_memory(g_mod, state, (64u << 20) + 1);
+    }
     CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
         if (!g_api->wait_for_mods(20000)) return 0;
         char line[160];

@@ -141,6 +141,27 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
         }
     }
     if (!api->session_log_path(g_mod, L"..\\Elsewhere", 3)) api->log(g_mod, "bad log folder refused");
+    // Hotkeys: F9 and LB+RB+Y; a key of its own (Ctrl+Shift+M, offered as a choice besides the
+    // F-keys); a repeated key; no on_press.
+    FH2Hotkey hk{sizeof hk};
+    hk.key = "Mark"; hk.label = "Mark this spot"; hk.vk = 0x78; /* VK_F9 */ hk.pad_chord = FH2_PAD_LB | FH2_PAD_RB | FH2_PAD_Y;
+    hk.on_press = [](void*, const char*) {};
+    hk.on_rebind = [](void*, const char*, uint32_t, uint32_t, uint32_t) {};
+    api->add_hotkey(g_mod, &hk);
+    api->add_hotkey(g_mod, &hk);                          // refused: already there
+    hk.key = "Toggle"; hk.label = "Toggle the test"; hk.vk = 'M'; hk.modifiers = FH2_KEY_CTRL | FH2_KEY_SHIFT; hk.pad_chord = 0;
+    api->add_hotkey(g_mod, &hk);
+    hk.key = "Broken"; hk.on_press = nullptr;
+    api->add_hotkey(g_mod, &hk);                          // refused: no on_press
+    // Commands: echo (answers with its arguments), fail (an error), a bad name, a repeat.
+    api->add_command(g_mod, "echo", "echo <text>: answers with the text",
+                     [](void*, const char*, const char* args, char* reply, size_t size) { std::snprintf(reply, size, "%s", args); },
+                     nullptr);
+    api->add_command(g_mod, "fail", nullptr,
+                     [](void*, const char*, const char*, char* reply, size_t size) { std::snprintf(reply, size, "error: as asked"); },
+                     nullptr);
+    api->add_command(g_mod, "bad name", nullptr, [](void*, const char*, const char*, char*, size_t) {}, nullptr);   // refused
+    api->add_command(g_mod, "Echo", nullptr, [](void*, const char*, const char*, char*, size_t) {}, nullptr);       // refused: echo
     // A copy of the saves, if the test made a saves folder (the full phase does).
     if (api->request_save_snapshot(g_mod, "the platform test", 2)) api->log(g_mod, "save snapshot asked for");
 
