@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -128,6 +129,22 @@ bool fh2mp_installed();               // FH2MP.dll is in fh2-mods (turned on or 
 void set_mod_online(const std::wstring& dll, bool on);
 // The latest release of a mod on GitHub, once checked ("" before that, or if unknown).
 std::string latest_known(const FH2Mod* m);
+
+// session.cpp: this run of the game (API 9). start_session makes the id and opens the copy of
+// platform.log that fh2-mods\platform-logs keeps; session_line is platform.log's line about it.
+FILE* start_session();
+std::string session_line();
+const char* session_id();
+const wchar_t* session_log_path(FH2Mod* mod, const wchar_t* folder, uint32_t keep);
+// fh2-mods\platform-session.json: rewritten as the mods load and the command pipe starts, and
+// marked crashed (with the report's name, relative to fh2-mods) by the crash handler.
+void write_session_status();
+void set_session_pipe(const std::string& name);
+void write_session_crashed(const wchar_t* fh2mods_dir, const char* report);
+// Copies of the saves folder that mods ask for from fh2mod_init (API 9), made once they've all
+// returned (start_save_snapshot).
+int request_save_snapshot(FH2Mod* mod, const char* reason, uint32_t keep);
+void start_save_snapshot();
 
 // crash.cpp
 struct LoadedDll {

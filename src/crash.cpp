@@ -225,6 +225,10 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS* ep) {
     std::swprintf(path, sizeof path / sizeof *path, L"%ls.dmp", base);
     write_dump(path, ep);
     log_line("", "crash report saved in fh2-mods\\crashes");
+    char report[64];
+    std::snprintf(report, sizeof report, "crashes\\\\crash-%04u%02u%02u-%02u%02u%02u.txt", t.wYear, t.wMonth, t.wDay, t.wHour,
+                  t.wMinute, t.wSecond);
+    write_session_crashed(g_dir, report);
 
     return g_prev ? g_prev(ep) : EXCEPTION_CONTINUE_SEARCH;
 }

@@ -74,6 +74,7 @@ bool g_online = false;                            // started from the FH2MP laun
 
 std::mutex g_log_mu;
 FILE* g_log = nullptr;
+FILE* g_log_copy = nullptr; // fh2-mods\platform-logs\platform-<session id>.log
 
 FH2ModApi g_api{};
 
@@ -89,12 +90,14 @@ void log_line(const std::string& who, const std::string& text) {
     SYSTEMTIME t;
     GetLocalTime(&t);
     std::scoped_lock lk{g_log_mu};
-    if (!g_log) return;
-    std::fprintf(g_log, "%02u:%02u:%02u.%03u %s%s%s", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds,
-                 who.empty() ? "" : "[", who.c_str(), who.empty() ? "" : "] ");
-    std::fputs(text.c_str(), g_log);
-    std::fputc('\n', g_log);
-    std::fflush(g_log);
+    for (FILE* f : {g_log, g_log_copy}) {
+        if (!f) continue;
+        std::fprintf(f, "%02u:%02u:%02u.%03u %s%s%s", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds,
+                     who.empty() ? "" : "[", who.c_str(), who.empty() ? "" : "] ");
+        std::fputs(text.c_str(), f);
+        std::fputc('\n', f);
+        std::fflush(f);
+    }
 }
 fs::path azimuth_dir() { return g_azimuth; }
 fs::path game_mount() { return g_game; }
@@ -714,9 +717,15 @@ DWORD WINAPI load_mods(LPVOID) {
     std::error_code ec;
     fs::create_directories(g_azimuth / "fh2-mods", ec);
     g_log = _wfopen((g_azimuth / "fh2-mods" / "platform.log").c_str(), L"w");
+    {
+        FILE* copy = start_session();
+        std::scoped_lock lk{g_log_mu};
+        g_log_copy = copy;
+    }
     plog(std::string("FH2 Mod Platform ") + FH2MOD_PLATFORM_VERSION + " (API " + std::to_string(FH2MOD_API_VERSION) +
          ") in " + narrow(g_azimuth.wstring()));
     plog("loaded as " + narrow(g_self_name) + (g_copies.empty() ? "" : "; " + g_copies));
+    plog(session_line());
     plog(g_game.empty() ? "couldn't find the game's Mount folder; game text, file and database changes are off"
                         : "game folder " + narrow(g_game.wstring()));
     // Azimuth 1.0.1 runs other Forza games too. Told to start one of those straight away, the
@@ -932,6 +941,8 @@ DWORD WINAPI load_mods(LPVOID) {
     build_database();
     settings_start(&g_api);
     plog(std::to_string(loaded.size()) + " mod(s) loaded");
+    start_save_snapshot();
+    write_session_status();
     SetEvent(g_mods_ready);
 
     // Tables written last time that no mod has edited by now are leftovers
@@ -1217,6 +1228,9 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.add_title_entry   = title_add;
                 g_api.title_started_by  = title_started_by;
                 g_api.playing_online    = api_playing_online;
+                g_api.session_id        = session_id;
+                g_api.session_log_path  = session_log_path;
+                g_api.request_save_snapshot = request_save_snapshot;
                 return load_mods(nullptr);
             },
             nullptr, 0, nullptr))

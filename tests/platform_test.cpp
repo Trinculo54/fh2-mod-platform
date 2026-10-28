@@ -81,6 +81,10 @@ static LONG WINAPI after_crash(EXCEPTION_POINTERS*) {
     CHECK(has(report, "writing address 0x0"));
     CHECK(has(report, "the crash came from AaaMod.dll"));
     CHECK(dump);
+    // the session's status says so, with the report's name (platform 2.8.0)
+    const std::string status = slurp("fh2-mods\\platform-session.json");
+    CHECK(has(status, "\"state\": \"crashed\"") && has(status, "\"crash_report\": \"crashes\\\\crash-") &&
+          has(status, "\"AaaMod\": \"0.5.0\""));
     std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
     std::fflush(stdout);
     TerminateProcess(GetCurrentProcess(), fails);
@@ -116,6 +120,10 @@ int wmain(int argc, wchar_t** argv) {
         std::ofstream{"crash.txt"} << "1";
         SetUnhandledExceptionFilter(after_crash); // Windows' (or Azimuth's) handler, to the platform
     }
+    if (phase == L"full") {   // a saves folder, for the snapshot TestMod asks for (platform 2.8.0)
+        fs::create_directories(L"data\\titles\\1A96545B\\saves\\1A96545B");
+        std::ofstream{"data\\titles\\1A96545B\\saves\\1A96545B\\test.sav", std::ios::binary} << "save data";
+    }
     HMODULE p = LoadLibraryW(L"d3dcompiler_47.dll"); // what azimuth.exe does at startup
     CHECK(p != nullptr);
     if (argc > 2) map_image(argv[2]); // "press Play"
@@ -127,7 +135,7 @@ int wmain(int argc, wchar_t** argv) {
         log = slurp(L"fh2-mods\\platform.log");
         if (online_phase ? has(log, "mod(s) loaded")
                          : has(log, "mod(s) loaded") && has(log, "TestMod version") &&
-                               (phase == L"full" ? has(log, "late edit applied")
+                               (phase == L"full" ? has(log, "late edit applied") && has(log, "save snapshot:")
                                                  : has(log, "removed AIPlayers.str") && has(log, "keep.xml override")))
             break;
     }
@@ -216,6 +224,29 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] add_setting: One is a choice row but needs 2 to 32 choices"));
         CHECK(has(log, "[TestMod] add_setting: Lots is a choice row but needs 2 to 32 choices"));
         CHECK(has(log, "[TestMod] playing offline") && !has(log, "started from the FH2MP launcher"));
+        // sessions (API 9): the id in the log, the log's copy, our own log, the status file
+        {
+            const std::size_t at = log.find("[TestMod] session id ");
+            const std::string id = at == std::string::npos ? "" : log.substr(at + 21, log.find('\n', at) - at - 21);
+            CHECK(id.size() >= 17 && id[8] == '-' && id[15] == '-' && id.substr(16) == std::to_string(GetCurrentProcessId()));
+            CHECK(has(log, ("session " + id + ": started ").c_str()));
+            const std::string copy = slurp(fs::path(L"fh2-mods\\platform-logs") / ("platform-" + id + ".log"));
+            CHECK(has(copy, "FH2 Mod Platform 2.8.0 (API 9)") && has(copy, "[TestMod] session id "));
+            CHECK(slurp(fs::path(L"TestModData\\logs") / (id + ".log")) == "test mod's own log\n");
+            CHECK(has(log, ("[TestMod] session log: TestModData\\logs\\" + id + ".log (the newest 3 kept)").c_str()));
+            CHECK(has(log, "[TestMod] bad log folder refused") &&
+                  has(log, "[TestMod] session_log_path: \"..\\Elsewhere\" isn't a folder name"));
+            const std::string status = slurp("fh2-mods\\platform-session.json");
+            // save snapshots (API 9): one copy, and the saves left as they were
+            CHECK(has(log, "[TestMod] asked for a copy of the saves before the game reads them: the platform test") &&
+                  has(log, "[TestMod] save snapshot asked for"));
+            CHECK(has(log, ("save snapshot: 1 file(s), 0 MB, copied to fh2-mods\\save-snapshots\\" + id +
+                            " (the newest 2 kept), for TestMod (the platform test)").c_str()));
+            CHECK(slurp(fs::path(L"fh2-mods\\save-snapshots") / id / L"1A96545B" / L"test.sav") == "save data");
+            CHECK(slurp(L"data\\titles\\1A96545B\\saves\\1A96545B\\test.sav") == "save data");
+            CHECK(has(status, ("\"session\": \"" + id + "\"").c_str()) && has(status, "\"state\": \"running\"") &&
+                  has(status, "\"platform\": \"2.8.0\"") && has(status, "\"TestMod\": \"1.0.0\""));
+        }
         // The game's menus were given: the pages are written. (Not with the game mapped: this
         // test's copy of it doesn't pass the menus' code checks, so the platform takes them out.)
         if (fs::exists(L"FH2\\Mount\\media\\UI.zip") && argc <= 2) {

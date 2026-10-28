@@ -625,6 +625,47 @@ g_mod = api->register_mod(&info);
 if (!g_mod) return 0;    // online (or a bad info): nothing to do
 ```
 
+## Sessions (API 9)
+
+```c
+const char* session_id(void);
+const wchar_t* session_log_path(FH2Mod* mod, const wchar_t* folder, uint32_t keep);
+```
+
+Each run of the game is a session, with an id like `20261021-203224-1234`: the time the platform started, and the process id. The game can start twice in one launch, and the MODS page's Restart now starts a new process, so "the newest log" isn't always the one you want; the id says which run a file belongs to.
+
+- **`platform.log`** is still rewritten every time the game starts, and its third line names the session ("session 20261021-203224-1234: started 2026-10-21 20:32:24, process 1234; ..."). The platform also keeps a copy of each session's log in `fh2-mods\platform-logs\platform-<id>.log`, the newest 20.
+- **`session_id`** returns the id. Call it from anywhere, `fh2mod_init` included.
+- **`session_log_path`** makes `<azimuth_dir>\<folder>\logs\` and returns `<folder>\logs\<id>.log` in it, for your own log: give your mod's own folder next to `azimuth.exe` (`L"MyMod"`), and how many logs to keep there, counting this one. Older `*.log` files in that `logs` folder are deleted. Open the file yourself (the platform doesn't create it); the path stays valid for the session. It returns `NULL`, and the log says why, if `folder` isn't a plain folder name or can't be made.
+- **`fh2-mods\platform-session.json`** says what's running, for tools such as a test runner or a log collector. It's written to a `.tmp` and moved over, so a reader never sees half of it, once the mods have started and again when something in it changes:
+
+  ```json
+  {
+    "session": "20261021-203224-1234",
+    "pid": 1234,
+    "started": "2026-10-21 20:32:24",
+    "platform": "2.8.0",
+    "azimuth": "D:\\Games\\Azimuth",
+    "mods": {
+      "WreckingBall": "1.3.2"
+    },
+    "pipe": "\\\\.\\pipe\\fh2mod-1234",
+    "state": "running"
+  }
+  ```
+
+  `mods` has every mod that registered. `pipe` is the command pipe (see Commands), or `""` while it isn't up. `state` is `running`, or `crashed` after a crash, with `"crash_report": "crashes\\crash-....txt"` (relative to `fh2-mods`). Azimuth ends the game with `TerminateProcess`, so nothing can write `ended`: a tool should take a `running` whose `pid` isn't alive any more (or whose process started at another time than `started`) as a session that's over.
+
+## Save snapshots (API 9)
+
+```c
+int request_save_snapshot(FH2Mod* mod, const char* reason, uint32_t keep);
+```
+
+Before an experimental session, the safe thing is a copy of the saves. Ask the platform for one from `fh2mod_init` (a mod being tested, or one that changes what gets saved), and once every mod's `fh2mod_init` has returned it copies `<azimuth_dir>\data\titles\1A96545B\saves` to `fh2-mods\save-snapshots\<session id>\`: once, however many mods ask, keeping the newest `keep` copies (the most any mod asked for). `platform.log` says how much it copied and for which mods and reasons. The game only reads the saves when A is pressed on the title screen, long after.
+
+The platform only ever reads the saves. To go back to a snapshot, close the game and copy the whole snapshot over the saves folder: Azimuth checks the saves' hashes, so don't mix files from different copies. It returns 1 if a copy will be made, 0 if there's no saves folder or the call came after `fh2mod_init` (the log says which).
+
 ## Crash reports
 
 These need no code from you. If the game crashes, the platform writes `fh2-mods\crashes\crash-<date>-<time>.txt` and a minidump (`.dmp`) beside it, and adds the summary to `platform.log`. The report has the exception, the call stack as module+offset (`game+0x...`, `YourMod.dll+0x...`), the mod the crash came from, if any, and every hook in place (see above). When Azimuth 1.0.1 was running another game, it says which, so a crash there isn't taken for a mod's. The ten newest reports are kept. Open the minidump in Visual Studio or WinDbg with your mod's debug symbols to see the exact line.

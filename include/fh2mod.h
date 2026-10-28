@@ -423,6 +423,39 @@ typedef struct FH2ModApi {
        FH2ModInfo.offline_only instead. Call it from anywhere, fh2mod_init
        included. */
     int (*playing_online)(void);
+
+    /* ---- Sessions ----------------------------------------------------------
+       This run of the game's id, "20261021-203224-1234": when the platform
+       started, and the process id (the game can start twice in one launch,
+       and Restart now starts a new process). The same id is in
+       platform.log's third line, in the copy of it the platform keeps
+       (fh2-mods\platform-logs\platform-<id>.log, the newest 20 sessions'),
+       and in fh2-mods\platform-session.json, which says for tools what's
+       running (docs/api.md). Name your own logs with it, or let
+       session_log_path do that. Call it from anywhere. */
+    const char* (*session_id)(void);
+    /* <azimuth_dir>\<folder>\logs\<session id>.log, with the folder made,
+       where `folder` is your mod's own folder next to azimuth.exe (L"MyMod").
+       The newest `keep` logs there are kept, counting this one (at least 1),
+       and older *.log files in it are deleted. Open the file yourself; the
+       path stays valid for the session. NULL if `folder` isn't a plain folder
+       name or can't be made (the log says why). */
+    const wchar_t* (*session_log_path)(FH2Mod* mod, const wchar_t* folder, uint32_t keep);
+
+    /* ---- Save snapshots ----------------------------------------------------
+       A copy of the saves folder (<azimuth_dir>\data\titles\1A96545B\saves)
+       this session, before the game reads it: for a mod being tested, or one
+       that changes what gets saved. Call it from fh2mod_init. Once every mod's
+       fh2mod_init has returned, the platform copies the folder (once, however
+       many mods ask) to fh2-mods\save-snapshots\<session id>\, keeps the
+       newest `keep` copies (the most any mod asked for, at least 1), and says
+       in the log which mods asked and why. The game reads the saves when A is
+       pressed on the title screen, long after. The platform only reads the
+       saves, never writes to them; to go back, copy a snapshot's contents
+       over the saves folder with the game closed (all of it: Azimuth checks
+       the saves' hashes). Returns 1 if a copy will be made, 0 if there's no
+       saves folder or the call came after fh2mod_init (the log says why). */
+    int (*request_save_snapshot)(FH2Mod* mod, const char* reason, uint32_t keep);
 } FH2ModApi;
 
 /* Called on the game's UI thread when the player changes a row: keep it
