@@ -45,6 +45,40 @@ static std::string slurp(const fs::path& f) {
 }
 static bool has(const std::string& s, const char* x) { return s.find(x) != std::string::npos; }
 
+#include "../include/fh2game.h"
+
+// include/fh2game.h: what the game's exe has on disk at every entry with bytes (platform 2.8.0).
+static void check_fh2game(const wchar_t* exe) {
+    const std::string file = slurp(exe);
+    if (file.size() < 4096) return;
+    const auto* nt  = reinterpret_cast<const IMAGE_NT_HEADERS64*>(file.data() + reinterpret_cast<const IMAGE_DOS_HEADER*>(file.data())->e_lfanew);
+    const auto* sec = IMAGE_FIRST_SECTION(nt);
+    auto at = [&](uint32_t rva) -> const char* {
+        for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i)
+            if (rva >= sec[i].VirtualAddress && rva < sec[i].VirtualAddress + sec[i].SizeOfRawData)
+                return file.data() + sec[i].PointerToRawData + (rva - sec[i].VirtualAddress);
+        return nullptr;
+    };
+    struct Named {
+        const char* name;
+        uint32_t at;
+        const char* bytes;
+        std::size_t n;
+    };
+    static const Named named[] = {
+#include "fh2game_checks.inc"
+    };
+    int bad = 0;
+    for (const Named& e : named) {
+        const char* p = at(e.at);
+        if (!p || std::memcmp(p, e.bytes, e.n) != 0) {
+            std::printf("FAIL fh2game.h: FH2_GAME_%s isn't what the game has there\n", e.name);
+            ++bad;
+        }
+    }
+    CHECK(bad == 0 && sizeof named / sizeof *named >= 40);
+}
+
 // Maps the exe the way Azimuth does, enough for its bytes and protections:
 // sections at their addresses, code read/execute, read-only data read-only.
 static char* map_game(const wchar_t* path, bool change_volume_code, bool other_game = false) {
@@ -126,6 +160,7 @@ int wmain(int argc, wchar_t** argv) {
     Sleep(500);
     char* game = map_game(argv[2], phase == L"changed-code", other_game);
     CHECK(game != nullptr); // "press Play"
+    if (phase == L"plain") check_fh2game(argv[2]);
     if (phase == L"eo") {
         Sleep(3000);
         std::ofstream{"FH2_ExtraOptions.log", std::ios::app} << "AZIMUTH: winmm proxy initialized; original TLS helper retained.\r\n";

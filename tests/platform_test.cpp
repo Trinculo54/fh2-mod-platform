@@ -227,7 +227,8 @@ int wmain(int argc, wchar_t** argv) {
         // sessions (API 9): the id in the log, the log's copy, our own log, the status file
         {
             const std::size_t at = log.find("[TestMod] session id ");
-            const std::string id = at == std::string::npos ? "" : log.substr(at + 21, log.find('\n', at) - at - 21);
+            std::string id       = at == std::string::npos ? "" : log.substr(at + 21, log.find('\n', at) - at - 21);
+            while (!id.empty() && (id.back() == '\r' || id.back() == ' ')) id.pop_back();
             CHECK(id.size() >= 17 && id[8] == '-' && id[15] == '-' && id.substr(16) == std::to_string(GetCurrentProcessId()));
             CHECK(has(log, ("session " + id + ": started ").c_str()));
             const std::string copy = slurp(fs::path(L"fh2-mods\\platform-logs") / ("platform-" + id + ".log"));

@@ -135,7 +135,7 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     // Sessions: the id, and a log of our own named after it (three kept); a bad folder name.
     api->log(g_mod, (std::string("session id ") + api->session_id()).c_str());
     if (const wchar_t* p = api->session_log_path(g_mod, L"TestModData", 3)) {
-        if (FILE* f = _wfopen(p, L"w")) {
+        if (FILE* f = _wfopen(p, L"wb")) {
             std::fputs("test mod's own log\n", f);
             std::fclose(f);
         }
