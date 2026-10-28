@@ -35,7 +35,7 @@ if(NOT MSVC)
 endif()
 ```
 
-`fh2mod_api` adds the include path for `fh2mod.h` and defines `FH2MOD_PLATFORM_VERSION` as the platform version in the submodule. Building gives you `MyMod.dll` and the platform's `d3dcompiler_47.dll`.
+`fh2mod_api` adds the include path for `fh2mod.h` and defines `FH2MOD_PLATFORM_VERSION` as the platform version in the submodule. Building gives you `MyMod.dll` and the platform's `d3dcompiler_47.dll`, plus, from platform 2.7.4, a copy of it named `DWrite.dll`.
 
 ## The entry point
 
@@ -135,11 +135,12 @@ A release zip, extracted into the Azimuth folder, should end up like this:
 
 ```
 d3dcompiler_47.dll        the platform, from your build
+DWrite.dll                the same file, from your build (platform 2.7.4 and later)
 fh2-mods\MyMod.dll
 MyMod\...                 your data, if any
 ```
 
-Always include the platform. Since 2.2 the platform has MinHook built in, which is under the BSD 2-Clause license, so include `LICENSE-MinHook.txt` from the platform's `dist` folder in your zip too. A player who only installs your mod needs it, and the version checks take care of an older copy getting put back. A short `README.txt` that says where things go and where your log is will save you a lot of questions.
+Always include the platform, under both names: Azimuth 1.0.3 only loads `DWrite.dll`, and Azimuth before 1.0.1 only `d3dcompiler_47.dll`. Since 2.2 the platform has MinHook built in, which is under the BSD 2-Clause license, so include `LICENSE-MinHook.txt` from the platform's `dist` folder in your zip too. A player who only installs your mod needs it, and the version checks take care of an older copy getting put back. A short `README.txt` that says where things go and where your log is will save you a lot of questions.
 
 Before releasing, start the game with only your mod and check `fh2-mods\platform.log`. It should show your DLL loaded with its version, your `registered` line, and the tables, files and database changes you made. Then try it next to the other mods.
 
@@ -149,7 +150,7 @@ Put a version in your DLL's file properties (a `VERSIONINFO` resource) as well. 
 
 A few things keep mods from tripping over each other:
 
-- **Don't proxy DLLs yourself.** `d3dcompiler_47.dll` is the platform's and `winmm.dll` is Extra Options'. If you need to load early, the platform is already as early as it gets.
+- **Don't proxy DLLs yourself.** `d3dcompiler_47.dll` and `DWrite.dll` are the platform's and `winmm.dll` is Extra Options'. If you need to load early, the platform is already as early as it gets.
 - **Hook through the platform.** Your own copy of MinHook, or your own byte patches, can't see other mods' hooks, and the platform can't warn about clashes with them.
 - **Don't write into the game's own files.** Use the string-table, file and database functions, so that removing your mod puts everything back.
 - **Make your features switchable.** Give each one a setting, and when it's off, undo what you did, for example with `clear_strings`.

@@ -1,11 +1,13 @@
-// FH2 Mod Platform -- d3dcompiler_47.dll proxy for Azimuth.
+// FH2 Mod Platform -- d3dcompiler_47.dll and DWrite.dll proxy for Azimuth.
 //
-// azimuth.exe statically imports d3dcompiler_47.dll (for D3DCompile) and
-// Windows looks next to the exe first, so this DLL gets loaded at startup
-// without touching any of Azimuth's own files, and without fighting Forza
-// Horizon 2 Extra Options (which owns winmm.dll). Every D3DCompiler export
-// is a PE forwarder to the real System32 DLL (d3dcompiler_47.def for
-// llvm-mingw, msvc_exports.inc for MSVC), so shader compiles never touch it.
+// azimuth.exe statically imports d3dcompiler_47.dll (for D3DCompile, up to
+// Azimuth 1.0.1) and DWrite.dll (for DWriteCreateFactory, from 1.0.1 on), and
+// Windows looks next to the exe first, so this DLL, under either name, gets
+// loaded at startup without touching any of Azimuth's own files, and without
+// fighting Forza Horizon 2 Extra Options (which owns winmm.dll). Every
+// D3DCompiler and DirectWrite export is a PE forwarder to the real System32
+// DLL (d3dcompiler_47.def for llvm-mingw, msvc_exports.inc for MSVC), so
+// shader compiles and text never touch it.
 //
 // On a thread of its own (outside the loader lock), it loads every DLL in
 // fh2-mods and calls each one's fh2mod_init with the API in fh2mod.h:
@@ -15,8 +17,10 @@
 // Everything is logged to fh2-mods\platform.log.
 
 #include <windows.h>
+#include <psapi.h>
 
 #include "platform.hpp"
+#include "platform_version.h"
 #include "strings.hpp"
 #include "updates.hpp"
 
@@ -27,6 +31,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -68,6 +73,10 @@ std::mutex g_log_mu;
 FILE* g_log = nullptr;
 
 FH2ModApi g_api{};
+
+HMODULE g_self = nullptr; // this copy of the platform
+std::wstring g_self_name; // its file name: d3dcompiler_47.dll or DWrite.dll
+std::string g_copies;     // the other copies in this process, for platform.log
 
 } // namespace
 
@@ -117,6 +126,118 @@ std::string version_string(HMODULE mod) {
                    "." + std::to_string(HIWORD(fi.dwFileVersionLS));
     }
     return {};
+}
+
+// ---- one platform per process --------------------------------------------------
+
+// Azimuth 1.0.3 no longer imports d3dcompiler_47.dll, so the platform also ships as DWrite.dll,
+// which Azimuth imports from 1.0.1 on. Azimuth 1.0.1 imports both, so two copies can start in one
+// process, or one copy and an older d3dcompiler_47.dll from another mod's zip, and only one may
+// load the mods. Every platform since 2.3.0 exports RestartHelper; copies that take part in this
+// also export fh2mod_platform_version. An older copy runs whatever happens, so then the newer
+// ones stand down; otherwise the newest copy runs, DWrite.dll on a tie. Each copy decides on its
+// own thread, which only starts once the loader has started every DLL Azimuth imports, under a
+// mutex; the copy that runs leaves an event behind, so a copy loaded later stands down too.
+
+uint32_t packed_version() { return PLATFORM_V1 << 16 | PLATFORM_V2 << 8 | PLATFORM_V3; }
+
+struct Copy {
+    HMODULE mod;
+    std::wstring file; // file name
+    uint32_t version;  // packed; 0 for a copy from before fh2mod_platform_version
+};
+
+std::string describe(const Copy& c) {
+    const std::string v = version_string(c.mod);
+    return narrow(c.file) + " (FH2 Mod Platform" + (v.empty() ? "" : " " + v) + ")";
+}
+
+bool is_dwrite(const Copy& c) { return lower_w(c.file) == L"dwrite.dll"; }
+
+// The two names the platform ships under, spelt as shipped. Windows names a DLL loaded as an
+// import the way the importer spells it, and Azimuth asks for D3DCOMPILER_47.dll.
+std::wstring shipped_name(const std::wstring& file) {
+    const std::wstring l = lower_w(file);
+    if (l == L"d3dcompiler_47.dll") return L"d3dcompiler_47.dll";
+    if (l == L"dwrite.dll") return L"DWrite.dll";
+    return file;
+}
+
+// Every copy of the platform loaded from Azimuth's folder, this one included.
+std::vector<Copy> platform_copies() {
+    std::vector<Copy> out;
+    HMODULE mods[1024];
+    DWORD need = 0;
+    if (!K32EnumProcessModules(GetCurrentProcess(), mods, sizeof mods, &need)) return out;
+    const DWORD count = std::min<DWORD>(need / sizeof(HMODULE), 1024);
+    for (DWORD i = 0; i < count; ++i) {
+        if (!GetProcAddress(mods[i], "RestartHelper")) continue;
+        wchar_t path[MAX_PATH];
+        const DWORD n = GetModuleFileNameW(mods[i], path, MAX_PATH);
+        if (!n || n >= MAX_PATH) continue;
+        const fs::path p{path};
+        if (lower_w(p.parent_path().wstring()) != lower_w(g_azimuth.wstring())) continue;
+        const auto version = reinterpret_cast<uint32_t (*)()>(GetProcAddress(mods[i], "fh2mod_platform_version"));
+        out.push_back({mods[i], shipped_name(p.filename().wstring()), version ? version() : 0});
+    }
+    return out;
+}
+
+// fh2-mods\platform-standby.log, for when an older copy runs instead: it owns platform.log and
+// knows nothing of this one. The first copy to stand down in a launch starts the file afresh.
+void note_standing_down(const std::wstring& tag, const std::string& line) {
+    HANDLE once      = CreateEventW(nullptr, TRUE, FALSE, (tag + L".standby").c_str()); // open for the launch
+    const bool fresh = once && GetLastError() != ERROR_ALREADY_EXISTS;
+    std::error_code ec;
+    fs::create_directories(g_azimuth / "fh2-mods", ec);
+    if (FILE* f = _wfopen((g_azimuth / "fh2-mods" / "platform-standby.log").c_str(), fresh ? L"w" : L"a")) {
+        std::fputs(line.c_str(), f);
+        std::fputc('\n', f);
+        std::fclose(f);
+    }
+}
+
+// Whether this copy loads the mods. When it does, g_copies names the copies that stood down.
+bool this_copy_runs() {
+    const std::wstring tag = L"Local\\FH2ModPlatform." + std::to_wstring(GetCurrentProcessId());
+    HANDLE mu              = CreateMutexW(nullptr, FALSE, tag.c_str());
+    if (mu) WaitForSingleObject(mu, 10000);
+    bool run = true;
+    if (HANDLE e = OpenEventW(SYNCHRONIZE, FALSE, (tag + L".running").c_str())) {
+        CloseHandle(e);
+        run = false; // another copy runs already
+    } else {
+        const auto copies = platform_copies();
+        const Copy* best  = nullptr;
+        const Copy* older = nullptr;
+        for (const auto& c : copies) {
+            if (!c.version) {
+                if (!older) older = &c;
+            } else if (!best || c.version > best->version ||
+                       (c.version == best->version &&
+                        (is_dwrite(c) > is_dwrite(*best) || (is_dwrite(c) == is_dwrite(*best) && c.mod < best->mod)))) {
+                best = &c;
+            }
+        }
+        if (older) {
+            run = false;
+            note_standing_down(tag, "FH2 Mod Platform " FH2MOD_PLATFORM_VERSION " (" + narrow(g_self_name) +
+                                        ") stood down: " + describe(*older) +
+                                        " is older and can't stand down itself, so it loads the mods. Replace it "
+                                        "with a copy of " + narrow(g_self_name) + ", or delete it.");
+        } else if (best && best->mod != g_self) {
+            run = false; // the copy that runs names this one in platform.log
+        } else {
+            for (const auto& c : copies)
+                if (c.mod != g_self) g_copies += (g_copies.empty() ? "" : "; ") + describe(c) + " stood down";
+            CreateEventW(nullptr, TRUE, TRUE, (tag + L".running").c_str()); // open for the launch
+        }
+    }
+    if (mu) {
+        ReleaseMutex(mu);
+        CloseHandle(mu);
+    }
+    return run;
 }
 
 // ---- string tables -------------------------------------------------------------
@@ -490,6 +611,7 @@ DWORD WINAPI load_mods(LPVOID) {
     g_log = _wfopen((g_azimuth / "fh2-mods" / "platform.log").c_str(), L"w");
     plog(std::string("FH2 Mod Platform ") + FH2MOD_PLATFORM_VERSION + " (API " + std::to_string(FH2MOD_API_VERSION) +
          ") in " + narrow(g_azimuth.wstring()));
+    plog("loaded as " + narrow(g_self_name) + (g_copies.empty() ? "" : "; " + g_copies));
     plog(g_game.empty() ? "couldn't find the game's Mount folder; game text, file and database changes are off"
                         : "game folder " + narrow(g_game.wstring()));
     start_media_overrides();
@@ -586,7 +708,7 @@ DWORD WINAPI load_mods(LPVOID) {
             const auto* base = reinterpret_cast<const char*>(self);
             const auto* nt   = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
                 base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
-            dlls.push_back({L"d3dcompiler_47.dll (FH2 Mod Platform)", base, nt->OptionalHeader.SizeOfImage});
+            dlls.push_back({g_self_name + L" (FH2 Mod Platform)", base, nt->OptionalHeader.SizeOfImage});
         }
     }
     install_crash_handler(dlls);
@@ -792,6 +914,9 @@ std::vector<ModEntry> mod_entries() {
 
 } // namespace fh2platform
 
+// Which copy of the platform runs when Azimuth loads two: see this_copy_runs.
+extern "C" __declspec(dllexport) uint32_t fh2mod_platform_version() { return fh2platform::packed_version(); }
+
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     using namespace fh2platform;
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
@@ -800,7 +925,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     const DWORD n = GetModuleFileNameW(instance, self, MAX_PATH);
     if (!n || n >= MAX_PATH) return TRUE;
     // Only act inside Azimuth (or Mezcal's game exe), never in other programs
-    // that happen to load d3dcompiler_47.dll from this folder.
+    // that happen to load this DLL from this folder.
     const DWORD m       = GetModuleFileNameW(nullptr, exe, MAX_PATH);
     const wchar_t* base = exe;
     for (DWORD i = 0; i < m; ++i)
@@ -810,12 +935,16 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     HMODULE pinned = nullptr;
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                        reinterpret_cast<LPCWSTR>(&DllMain), &pinned);
-    g_azimuth = fs::path{self}.parent_path();
+    g_azimuth   = fs::path{self}.parent_path();
+    g_self      = instance;
+    g_self_name = shipped_name(fs::path{self}.filename().wstring());
     // Nothing below may load DLLs or touch the file system much: still
     // under the loader lock. The rest happens on the thread.
     if (HANDLE t = CreateThread(
             nullptr, 0,
             [](LPVOID) -> DWORD {
+                // Another copy of the platform may be loaded too (Azimuth 1.0.1 imports both names).
+                if (!this_copy_runs()) return 0;
                 g_game         = find_game_mount(g_azimuth);
                 g_azimuth_str  = g_azimuth.wstring();
                 g_game_str     = g_game.wstring();

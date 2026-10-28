@@ -27,3 +27,4 @@
 #pragma comment(linker, "/export:D3DStripShader=C:\\Windows\\System32\\d3dcompiler_47.D3DStripShader")
 #pragma comment(linker, "/export:D3DWriteBlobToFile=C:\\Windows\\System32\\d3dcompiler_47.D3DWriteBlobToFile")
 #pragma comment(linker, "/export:DebugSetMute=C:\\Windows\\System32\\d3dcompiler_47.DebugSetMute")
+#pragma comment(linker, "/export:DWriteCreateFactory=C:\\Windows\\System32\\DWrite.DWriteCreateFactory")
