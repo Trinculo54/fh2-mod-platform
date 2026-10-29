@@ -1,7 +1,11 @@
 // A mod for the platform test: notices, conflicting edits, a late edit,
-// file overrides, database changes, an interface for AaaMod, pages (API 8).
+// file overrides, database changes, an interface for AaaMod, pages (API 8),
+// title-screen entries (API 9).
 #include "fh2mod.h"
 #include <windows.h>
+
+#include <cstdio>
+#include <string>
 
 static const FH2ModApi* g_api;
 static FH2Mod* g_mod;
@@ -66,6 +70,100 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
         !api->set_page_tile_text(g_mod, "Missing", "x") && api->set_page_tile_colors(g_mod, "Stats", 0xFF3667DB, 0xFFFEFEFE) &&
         !api->set_page_tile_colors(g_mod, "Other", 0, 0))
         api->log(g_mod, "tile text ok");
+
+    // Title-screen entries: Y by default, X asked for (a list), Y asked for again (taken: the next
+    // free one, RB), LB, then none left; a repeated key, a bad one, a long label cut to 32 bytes,
+    // lists with too many choices, an empty choice or no on_choose.
+    FH2TitleEntry te{sizeof te};
+    te.key = "Garage"; te.label = "Drive the test garage";
+    te.on_press = [](void*, const char*) { return FH2_TITLE_START; };
+    api->add_title_entry(g_mod, &te);
+    api->add_title_entry(g_mod, &te);                     // refused: already there
+    static std::string names[101];
+    static const char* many[101];
+    for (int i = 0; i < 101; ++i) {
+        names[i] = "Track " + std::to_string(i + 1);
+        many[i]  = names[i].c_str();
+    }
+    static const char* const blank[] = {"Fine", ""};
+    static const char* const two[]   = {"Track one", "Track two"};
+    te.key = "Second"; te.label = "Second entry"; te.button = FH2_BUTTON_X; te.on_press = nullptr;
+    te.on_choose = [](void*, const char*, uint32_t choice) { return choice == 1 ? FH2_TITLE_START : FH2_TITLE_HANDLED; };
+    te.choices = many; te.choice_count = 101;
+    api->add_title_entry(g_mod, &te);                     // refused: 1 to 100
+    te.choices = blank; te.choice_count = 2;
+    api->add_title_entry(g_mod, &te);                     // refused: a choice without a label
+    te.choices = two; te.on_choose = nullptr;
+    api->add_title_entry(g_mod, &te);                     // refused: no on_choose
+    te.on_choose = [](void*, const char*, uint32_t choice) { return choice == 1 ? FH2_TITLE_START : FH2_TITLE_HANDLED; };
+    te.list_title = "Pick a track"; te.list_message = "Both are test tracks.";
+    api->add_title_entry(g_mod, &te);
+    te.choices = nullptr; te.choice_count = 0; te.on_choose = nullptr; te.list_title = nullptr; te.list_message = nullptr;
+    te.on_press = [](void*, const char*) { return FH2_TITLE_START; };
+    te.key = "Third"; te.label = "Third entry with a label that is far too long"; te.button = FH2_BUTTON_Y;
+    api->add_title_entry(g_mod, &te);
+    te.key = "Fourth"; te.label = "Fourth & <last>"; te.button = 0;
+    te.choices = many; te.choice_count = 20;              // a list in pages: 3 of 8
+    te.on_choose = [](void*, const char*, uint32_t) { return FH2_TITLE_HANDLED; };
+    api->add_title_entry(g_mod, &te);
+    te.choices = nullptr; te.choice_count = 0; te.on_choose = nullptr;
+    te.key = "Fifth"; te.label = "No room";
+    api->add_title_entry(g_mod, &te);                     // refused: four at most
+    te.key = "bad key";
+    api->add_title_entry(g_mod, &te);                     // refused: not a key
+    if (!api->title_started_by(g_mod)) api->log(g_mod, "no title start yet");
+
+    // A choice row (API 9), its index through get_setting and set_setting (kept in range), and
+    // two refused: one choice, and more than FH2_SETTING_MAX_CHOICES.
+    static const char* const buttons[] = {"LB", "RB", "A & <B>"};
+    static const char* const lots[FH2_SETTING_MAX_CHOICES + 1] = {"x", "x"};
+    FH2Setting ch{sizeof ch};
+    ch.key = "Button"; ch.label = "Test button"; ch.description = "Which button.";
+    ch.kind = FH2_SETTING_CHOICE; ch.choices = buttons; ch.choice_count = 3; ch.value = 1;
+    ch.on_change = [](void*, const char*, int) {};
+    if (api->add_setting(g_mod, &ch) && api->get_setting(g_mod, "Button") == 1) {
+        api->set_setting(g_mod, "Button", 7);
+        if (api->get_setting(g_mod, "Button") == 2) api->log(g_mod, "choice row ok");
+        api->set_setting(g_mod, "Button", 1);
+    }
+    ch.key = "One"; ch.choice_count = 1;
+    api->add_setting(g_mod, &ch);                         // refused: one choice
+    ch.key = "Lots"; ch.choices = lots; ch.choice_count = FH2_SETTING_MAX_CHOICES + 1;
+    api->add_setting(g_mod, &ch);                         // refused: too many
+    api->log(g_mod, api->playing_online() ? "playing online" : "playing offline");
+
+    // Sessions: the id, and a log of our own named after it (three kept); a bad folder name.
+    api->log(g_mod, (std::string("session id ") + api->session_id()).c_str());
+    if (const wchar_t* p = api->session_log_path(g_mod, L"TestModData", 3)) {
+        if (FILE* f = _wfopen(p, L"wb")) {
+            std::fputs("test mod's own log\n", f);
+            std::fclose(f);
+        }
+    }
+    if (!api->session_log_path(g_mod, L"..\\Elsewhere", 3)) api->log(g_mod, "bad log folder refused");
+    // Hotkeys: F9 and LB+RB+Y; a key of its own (Ctrl+Shift+M, offered as a choice besides the
+    // F-keys); a repeated key; no on_press.
+    FH2Hotkey hk{sizeof hk};
+    hk.key = "Mark"; hk.label = "Mark this spot"; hk.vk = 0x78; /* VK_F9 */ hk.pad_chord = FH2_PAD_LB | FH2_PAD_RB | FH2_PAD_Y;
+    hk.on_press = [](void*, const char*) {};
+    hk.on_rebind = [](void*, const char*, uint32_t, uint32_t, uint32_t) {};
+    api->add_hotkey(g_mod, &hk);
+    api->add_hotkey(g_mod, &hk);                          // refused: already there
+    hk.key = "Toggle"; hk.label = "Toggle the test"; hk.vk = 'M'; hk.modifiers = FH2_KEY_CTRL | FH2_KEY_SHIFT; hk.pad_chord = 0;
+    api->add_hotkey(g_mod, &hk);
+    hk.key = "Broken"; hk.on_press = nullptr;
+    api->add_hotkey(g_mod, &hk);                          // refused: no on_press
+    // Commands: echo (answers with its arguments), fail (an error), a bad name, a repeat.
+    api->add_command(g_mod, "echo", "echo <text>: answers with the text",
+                     [](void*, const char*, const char* args, char* reply, size_t size) { std::snprintf(reply, size, "%s", args); },
+                     nullptr);
+    api->add_command(g_mod, "fail", nullptr,
+                     [](void*, const char*, const char*, char* reply, size_t size) { std::snprintf(reply, size, "error: as asked"); },
+                     nullptr);
+    api->add_command(g_mod, "bad name", nullptr, [](void*, const char*, const char*, char*, size_t) {}, nullptr);   // refused
+    api->add_command(g_mod, "Echo", nullptr, [](void*, const char*, const char*, char*, size_t) {}, nullptr);       // refused: echo
+    // A copy of the saves, if the test made a saves folder (the full phase does).
+    if (api->request_save_snapshot(g_mod, "the platform test", 2)) api->log(g_mod, "save snapshot asked for");
 
     CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
         Sleep(300);

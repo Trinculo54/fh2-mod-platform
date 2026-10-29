@@ -458,6 +458,27 @@ static DWORD WINAPI tests(LPVOID) {
     CHECK(g_api->hook_call(g_a, "not a call", reinterpret_cast<void*>(&victim), reinterpret_cast<void*>(&detour_a),
                            &orig_dummy) == nullptr);
 
+    // Another game (Azimuth 1.0.1 runs more than FH2): told straight away, and nothing goes into it.
+    if (GetFileAttributesW(L"other_game.txt") != INVALID_FILE_ATTRIBUTES) {
+        const ULONGLONG t0 = GetTickCount64();
+        CHECK(g_api->wait_for_game(30000) == nullptr);
+        CHECK(g_api->wait_for_code(60000) == nullptr);
+        CHECK(GetTickCount64() - t0 < 5000);
+        CHECK(g_api->game_base() == nullptr);
+        char* other = reinterpret_cast<char*>(0x140000000);
+        CHECK(g_api->hook_function(g_a, "other game's code", other + 0x1000, reinterpret_cast<void*>(&dummy_detour),
+                                   &orig_dummy) == nullptr);
+        CHECK(g_api->hook_pointer(g_a, "other game's pointer", reinterpret_cast<void**>(other + 0x2000),
+                                  reinterpret_cast<void*>(&dummy_detour), &orig_dummy) == nullptr);
+        static const unsigned char nop = 0x90;
+        CHECK(g_api->patch_bytes(g_a, "other game's bytes", other + 0x1000, nullptr, &nop, 1) == nullptr);
+        CHECK(g_api->hook_instruction(g_a, "other game's instruction", other + 0x1000, &mark_a, nullptr) == nullptr);
+        char done[64];
+        std::snprintf(done, sizeof done, "hook tests done, %d failed", g_fails);
+        g_api->log(g_a, done);
+        return 0;
+    }
+
     // The game. Too early first, if it isn't ready yet.
     char* base = static_cast<char*>(g_api->wait_for_game(30000));
     CHECK(base == reinterpret_cast<char*>(0x140000000));

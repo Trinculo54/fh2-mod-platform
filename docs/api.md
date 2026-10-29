@@ -1,6 +1,6 @@
 # API reference
 
-Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5, 7 with 2.6 and 8 with 2.7. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 the Mods page, version 5 its sliders, version 6 mod descriptions and link rows for the MODS tab, version 7 byte patches and instruction hooks, and version 8 pages of your own; the sections for those say so.
+Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5, 7 with 2.6, 8 with 2.7 and 9 with 2.8. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 the Mods page, version 5 its sliders, version 6 mod descriptions and link rows for the MODS tab, version 7 byte patches and instruction hooks, version 8 pages of your own, and version 9 title-screen entries, choice rows and online play (FH2MP); the sections for those say so.
 
 ## Rules that apply everywhere
 
@@ -17,7 +17,7 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api);
 
 Export this from your DLL. The platform loads every DLL in `fh2-mods` in alphabetical order, then calls each one's `fh2mod_init` in the same order, on its own thread and outside the loader lock. Return 0 on success. Any other value, or a crash inside the call, is logged; the crash is caught, so it won't take the game down. Once every mod's `fh2mod_init` has returned, the platform writes all string-table edits and notices.
 
-DLLs without `fh2mod_init` still load, and are logged as mods from before the platform.
+DLLs without `fh2mod_init` still load, and are logged as mods from before the platform. From platform 2.8.0 they load once the game Azimuth starts is known to be FH2, and not at all for another game ([game_base](#game_base-and-wait_for_game)), since they change the game by themselves.
 
 ## FH2ModApi fields
 
@@ -45,6 +45,8 @@ Call once, from `fh2mod_init`. It returns your handle, or null if `info` is miss
 | `github_repo` | `"Owner/Repo"`, or null. When set (and `check_updates` is 1), the platform checks your latest release on GitHub, at most every six hours, and shows "Name x.y.z is available" on the title screen when it's newer than `version`. The six hours start over when a different `version` is installed, and a remembered release older than `version` is never trusted, so installing an older or newer build checks again straight away. |
 | `platform_version` | The platform version you ship with. Pass `FH2MOD_PLATFORM_VERSION`. If the installed platform is older, players get "Old FH2 Mod Platform: reinstall Name". |
 | `check_updates` | 0 to never go online for your mod. Give players a setting for it. |
+| `description` | API 6: a sentence or two for the MODS tab's Installed mods page, or null. |
+| `offline_only` | API 9: nonzero if your mod shouldn't run in online play. See [Online play](#online-play-api-9). |
 
 The update check runs in the background. If GitHub can't be reached, the last answer is used.
 
@@ -110,6 +112,8 @@ void* wait_for_game(uint32_t timeout_ms);
 `game_base` returns the base address of `forza_durango_release_final.exe` once Azimuth has mapped it into the process, or null before that. Azimuth maps it when the player presses Play. `wait_for_game` waits until it's mapped, or until `timeout_ms` runs out (`0xFFFFFFFF` waits forever), and returns the base or null. It checks every 100 ms. Call it from your own thread, never from `fh2mod_init`, which would hold up every mod loaded after you.
 
 The game is recognised by its PE header: the 24 November 2015 build, timestamp `0x565501ED` and image size `0x03A18000`. Azimuth maps it at its preferred base, `0x140000000`, but use the returned address anyway.
+
+**Other games.** Azimuth 1.0.1 runs other Forza games from the same launcher (Forza Motorsport 5 and 6, for instance), and the platform and your mod load before the player picks one. Their exes have the same name, `forza_durango_release_final.exe`, and are mapped at the same address. From platform 2.8.0, once Azimuth has mapped one of those, or an FH2 exe of another build, `game_base` returns null for the rest of the session, and `wait_for_game` and `wait_for_code` return null straight away instead of at their timeout. So treat null as "there's no FH2 to change" and stop there, as for a timeout. Anything you did in `fh2mod_init` (text, files, the database) only ever goes to FH2's own folder, so it can stay. The log says which game was started: `game: Azimuth started Forza Motorsport 5 (title 7b35d917), not Forza Horizon 2. ...`, with the name from `data\azimuth.ini`. When Azimuth's command line already says it's another game (`--skip-launcher` with another title in `[launcher] game=`, or `--game=DIR`), no mods are loaded at all. Older platforms keep waiting, and a mod that finds the game by itself has to check the exe's timestamp and size, as above.
 
 ## set_file and clear_file (API 2)
 
@@ -209,6 +213,8 @@ Each call returns a hook that is switched off, or null with the reason in the lo
 
 **wait_for_code.** Hooks in game code can't be made until `wait_for_code` has returned. It waits like `wait_for_game` and then, if Extra Options is installed, also until Extra Options has finished patching. Extra Options checks every place it patches before it changes any of them, and if a single one isn't as it expects, it patches nothing at all, so a mod hooking early could quietly switch Extra Options off. The platform knows Extra Options is done when its log (`FH2_ExtraOptions.log`, written this launch) says so. That's the status line it writes once it's done (`OK:`, `REFUSED:` or `DISABLED:`), or its `AZIMUTH: winmm proxy initialized` line. If it hasn't said so 20 seconds after the game was mapped, the platform goes ahead anyway and logs that. Hooks outside the game (in Azimuth or a Windows DLL) don't have to wait.
 
+**Other games.** When Azimuth 1.0.1 has started another game (see [game_base](#game_base-and-wait_for_game)), `wait_for_code` returns null, and from platform 2.8.0 every hook or patch into that game's exe is refused, whatever address you pass: `can't hook function 0x140001000 (...): it's in Forza Motorsport 5 (title 7b35d917), which the platform leaves alone`.
+
 ```cpp
 using SerializeFn = char (*)(void* self, void* archive);
 static SerializeFn g_serialize;
@@ -304,13 +310,18 @@ typedef struct FH2Setting {
     FH2SettingChangedFn on_change; /* void (*)(void* user, const char* key, int value); may be NULL */
     void* user;
     /* API 5: sliders. Zeroed, the row is On/Off. */
-    int kind;                      /* FH2_SETTING_ON_OFF or FH2_SETTING_SLIDER */
+    int kind;                      /* FH2_SETTING_ON_OFF, _SLIDER, _LINK (API 6) or _CHOICE (API 9) */
     float min, max;                /* the slider's range */
     float step;                    /* one press of left or right; 0 = a hundredth of the range */
     float slider_value;            /* its current value */
     float display_scale;           /* the number shown is value * this (100 shows 0.12 as 12); 0 = 1 */
     int decimals;                  /* digits after the decimal point, 0 to 3 */
     FH2SliderChangedFn on_slide;   /* void (*)(void* user, const char* key, float value); may be NULL */
+    /* API 6: links */
+    const char* url;               /* with kind = FH2_SETTING_LINK */
+    /* API 9: choices */
+    const char* const* choices;    /* with kind = FH2_SETTING_CHOICE: the names, UTF-8 */
+    uint32_t choice_count;         /* 2 to FH2_SETTING_MAX_CHOICES (32) */
 } FH2Setting;
 ```
 
@@ -352,6 +363,20 @@ if (api->api_version >= 5) {
     s.key = "SparkAmount"; s.label = "Spark amount"; s.description = "How many sparks fly, in percent.";
     s.kind = FH2_SETTING_SLIDER; s.min = 0; s.max = 2; s.step = 0.05f;
     s.slider_value = g_spark_amount; s.display_scale = 100; s.on_slide = slid;
+    api->add_setting(mod, &s);
+}
+```
+
+**Choices (API 9, platform 2.8.0).** Set `kind = FH2_SETTING_CHOICE` and give `choices` and `choice_count`, and the row shows one of them by name, between the same left and right arrows as the game's own option rows ("Speedometer: Analogue / Digital"). Left and right step through them, stopping at the ends. `value` is the index of the one chosen, from 0, and `on_change`, `get_setting` and `set_setting` use that index (`set_setting` keeps it in range). The names are copied when you add the row; there can be 2 to 32 of them, and a dozen or so characters of each fit. `needs_restart` works as for a switch. Use it wherever a number would otherwise stand for something with a name, like a button or a mode. An older platform would show it as an On/Off row, so only add one when `api_version >= 9`:
+
+```cpp
+static const char* const kButtons[] = {"LB", "RB", "A", "B", "X", "Y"};
+
+if (api->api_version >= 9) {
+    FH2Setting s{sizeof s};
+    s.key = "Button"; s.label = "Nitro button"; s.description = "The button that burns nitro.";
+    s.kind = FH2_SETTING_CHOICE; s.choices = kButtons; s.choice_count = 6;
+    s.value = g_button; s.on_change = changed;   // changed() gets the index: 0 for LB, 1 for RB...
     api->add_setting(mod, &s);
 }
 ```
@@ -518,6 +543,205 @@ static int page_button(void*, const char* key, int button) {
 
 The game's XAML reader isn't forgiving: a page it can't read can take the game down when it opens. Base your XAML on the game's own pages, change a little at a time, and check every `StaticResource` you use exists. The Achievements mod's page (`src/ui.cpp` in its repo) is a complete example.
 
+## Title-screen entries (API 9)
+
+```c
+int add_title_entry(FH2Mod* mod, const FH2TitleEntry* entry);
+const char* title_started_by(FH2Mod* mod);
+
+typedef struct FH2TitleEntry {
+    uint32_t size;                 /* sizeof(FH2TitleEntry) */
+    const char* key;               /* unique within your mod: "Storm" */
+    const char* label;             /* "Start on Storm Island" (shown in capitals) */
+    FH2TitlePressFn on_press;      /* int (*)(void* user, const char* key); NULL for a list */
+    void* user;
+    int button;                    /* FH2_BUTTON_Y, _X, _RB or _LB; 0 = the next free one */
+    const char* const* choices;    /* a list instead: its choices (UTF-8), or NULL */
+    uint32_t choice_count;         /* 1 to FH2_TITLE_MAX_CHOICES (100) */
+    FH2TitleChooseFn on_choose;    /* int (*)(void* user, const char* key, uint32_t choice) */
+    const char* list_title;        /* the box's title; NULL = the label */
+    const char* list_message;      /* text over the choices; may be NULL */
+} FH2TitleEntry;
+```
+
+An entry is a line of your own on the title screen, under "PRESS (A) TO START" and the notices, with a button that runs your code: "(Y) START ON STORM ISLAND". Use it for something the player chooses before the game loads, like starting somewhere other than where the save left off.
+
+- **Buttons.** Each entry has its own: Y, X, RB, then LB, in the order mods add them. Ask for one with `button` and you get it if it's free; if it's taken, you get the next free one and the log says so. There are four at most, from every mod together, so add one entry, not one per option.
+- **When.** Add entries from `fh2mod_init`. The title screen is written once every mod's `fh2mod_init` has returned, so an entry added later only shows from the next launch.
+- **The label.** UTF-8, shown in capitals in the game's small title-screen text. About 24 characters fit beside the button; anything past 32 bytes is cut, and the log says so.
+- **`on_press`** runs on the game's UI thread when the player presses the entry's button while the title screen waits for A. Keep it short: set a flag, or start a thread of your own. Return `FH2_TITLE_HANDLED` to stay on the title screen, or `FH2_TITLE_START` for the platform to press A for the player straight after. The game then signs in, loads the save and loads the world as it always does. A press while the game is already signing in goes to the game, not to you.
+- **Lists.** Give `choices` (and `choice_count`, `on_choose`) and the press shows the game's message box over the title screen instead, titled `list_title` (or the label), with `list_message` over the choices and a Back under them. Picking a choice calls `on_choose` with its position from 0, on the UI thread, with the same return values as `on_press`; Back just closes the box. `on_press` isn't called for a list and can be `NULL`. The choices are copied when you add the entry, so they're fixed until the next launch. Up to 10 fit in the box at once, and about 30 characters of each. A longer list (up to 100) comes in pages of 8, with Previous above them and Next below, and the box's title says which page it is ("PICK A TRACK  2/5"). `on_choose` still gets the choice's position in the whole list.
+- **`title_started_by`** returns the key of your entry that started the game, or `NULL` if the player pressed A, another mod's entry started it, or it hasn't started yet. Pressing A on the title screen later (after going back to it) sets it back to `NULL`. Call it from any thread, typically from a hook on the world or save loading, to know whether this start is yours.
+
+```cpp
+static int on_storm(void*, const char*) { return FH2_TITLE_START; }
+
+// in fh2mod_init
+if (api->api_version >= 9) {
+    FH2TitleEntry e{sizeof e, "Storm", "Start on Storm Island", on_storm, nullptr, FH2_BUTTON_Y};
+    api->add_title_entry(mod, &e);
+}
+
+// later, where your mod picks the world to load
+const char* by = api->api_version >= 9 ? api->title_started_by(mod) : nullptr;
+if (by && std::strcmp(by, "Storm") == 0) { /* this start is Storm Island's */ }
+```
+
+A list, with the title and Back added by the game's message box:
+
+```cpp
+static const char* const kWorlds[] = {"Mainland", "Storm Island"};
+static int on_world(void*, const char*, uint32_t choice) { g_world = choice; return FH2_TITLE_START; }
+
+FH2TitleEntry e{};
+e.size = sizeof e; e.key = "World"; e.label = "Choose where to start"; e.button = FH2_BUTTON_Y;
+e.choices = kWorlds; e.choice_count = 2; e.on_choose = on_world;
+api->add_title_entry(mod, &e);
+```
+
+The lines are part of the platform's own copy of `UI/Scenes/Anthem/A_Splash.xaml`, hidden until its hook on the title screen's buttons is in place, so if the game's code doesn't look as expected they never show and `platform.log` says why. [`game-notes.md`](game-notes.md#menus) has how the title screen works.
+
+## Online play (API 9)
+
+```c
+int playing_online(void);
+/* and in FH2ModInfo: */
+int offline_only;
+```
+
+[FH2MP](https://github.com/Charelene/FH2MP) brings back online play, and runs on the platform itself (its `fh2-mods\FH2MP.dll`). Some mods shouldn't run in online play, because they change how cars drive or what other players see: a nitro boost, say. From platform 2.8.0 such a mod isn't loaded when the game is started from the FH2MP launcher.
+
+- **Online is decided once, before any mod loads.** It's online when FH2MP's launcher has handed the game a session (its `data\bin\fh2mp-session.txt`, which the launcher writes before starting the game and removes when it ends; the platform only checks that it's there, and never reads it, as it holds the player's token), and `FH2MP.dll` is in `fh2-mods` and turned on. `playing_online` is never true without FH2MP. The log says "started from the FH2MP launcher (online play)".
+- **`offline_only`**: set it to 1 in your `FH2ModInfo` if your mod shouldn't run online. Online, `register_mod` then returns `NULL`, so call `register_mod` first in `fh2mod_init` and return straight away when it gives you `NULL` (as every mod should anyway); what you return then isn't reported as a problem. The platform remembers it, and from the next online launch doesn't load your DLL at all. Offline, nothing changes. Older platforms ignore the member, so set it whatever the version.
+- **The player decides in the end.** Where FH2MP is installed, each mod's page on MODS > Installed mods has a **Load when playing online** switch, set from your `offline_only` until the player changes it. Their choice is kept in `fh2-mods\platform-online.txt` and takes effect the next time the game starts from the launcher. It works for any DLL in `fh2-mods`, platform mods or not, so players can also turn off a mod whose author hasn't set the flag.
+- **`playing_online`** returns 1 when the game is online in that sense, 0 otherwise. Call it from anywhere, `fh2mod_init` included; it doesn't change during the session. Use it to turn off just the part of your mod that shouldn't run online and keep the rest. Check `api_version >= 9` first.
+- **What it can't switch off**: files you copied into `mediaoverride` yourself (your mod's zip, say). The game reads those online too. Files you put there with `set_file` are your mod's, and go with it.
+
+```cpp
+FH2ModInfo info{sizeof info, "Nitro", "1.2.0", "Me/Nitro", FH2MOD_PLATFORM_VERSION, 1};
+info.description  = "Fast & Furious style nitro.";
+info.offline_only = 1;   // the boost would be a cheat online
+g_mod = api->register_mod(&info);
+if (!g_mod) return 0;    // online (or a bad info): nothing to do
+```
+
+## Sessions (API 9)
+
+```c
+const char* session_id(void);
+const wchar_t* session_log_path(FH2Mod* mod, const wchar_t* folder, uint32_t keep);
+```
+
+Each run of the game is a session, with an id like `20261021-203224-1234`: the time the platform started, and the process id. The game can start twice in one launch, and the MODS page's Restart now starts a new process, so "the newest log" isn't always the one you want; the id says which run a file belongs to.
+
+- **`platform.log`** is still rewritten every time the game starts, and its third line names the session ("session 20261021-203224-1234: started 2026-10-21 20:32:24, process 1234; ..."). The platform also keeps a copy of each session's log in `fh2-mods\platform-logs\platform-<id>.log`, the newest 20.
+- **`session_id`** returns the id. Call it from anywhere, `fh2mod_init` included.
+- **`session_log_path`** makes `<azimuth_dir>\<folder>\logs\` and returns `<folder>\logs\<id>.log` in it, for your own log: give your mod's own folder next to `azimuth.exe` (`L"MyMod"`), and how many logs to keep there, counting this one. Older `*.log` files in that `logs` folder are deleted. Open the file yourself (the platform doesn't create it); the path stays valid for the session. It returns `NULL`, and the log says why, if `folder` isn't a plain folder name or can't be made.
+- **`fh2-mods\platform-session.json`** says what's running, for tools such as a test runner or a log collector. It's written to a `.tmp` and moved over, so a reader never sees half of it, once the mods have started and again when something in it changes:
+
+  ```json
+  {
+    "session": "20261021-203224-1234",
+    "pid": 1234,
+    "started": "2026-10-21 20:32:24",
+    "platform": "2.8.0",
+    "azimuth": "D:\\Games\\Azimuth",
+    "mods": {
+      "WreckingBall": "1.3.2"
+    },
+    "pipe": "\\\\.\\pipe\\fh2mod-1234",
+    "state": "running"
+  }
+  ```
+
+  `mods` has every mod that registered. `pipe` is the command pipe (see Commands), or `""` while it isn't up. `state` is `running`, or `crashed` after a crash, with `"crash_report": "crashes\\crash-....txt"` (relative to `fh2-mods`). Azimuth ends the game with `TerminateProcess`, so nothing can write `ended`: a tool should take a `running` whose `pid` isn't alive any more (or whose process started at another time than `started`) as a session that's over.
+
+## Save snapshots (API 9)
+
+```c
+int request_save_snapshot(FH2Mod* mod, const char* reason, uint32_t keep);
+```
+
+Before an experimental session, the safe thing is a copy of the saves. Ask the platform for one from `fh2mod_init` (a mod being tested, or one that changes what gets saved), and once every mod's `fh2mod_init` has returned it copies `<azimuth_dir>\data\titles\1A96545B\saves` to `fh2-mods\save-snapshots\<session id>\`: once, however many mods ask, keeping the newest `keep` copies (the most any mod asked for). `platform.log` says how much it copied and for which mods and reasons. The game only reads the saves when A is pressed on the title screen, long after.
+
+The platform only ever reads the saves. To go back to a snapshot, close the game and copy the whole snapshot over the saves folder: Azimuth checks the saves' hashes, so don't mix files from different copies. It returns 1 if a copy will be made, 0 if there's no saves folder or the call came after `fh2mod_init` (the log says which).
+
+## Hotkeys (API 9)
+
+```c
+int add_hotkey(FH2Mod* mod, const FH2Hotkey* hotkey);
+
+typedef struct FH2Hotkey {
+    uint32_t size;                 /* sizeof(FH2Hotkey) */
+    const char* key;               /* unique within your mod: "Mark" */
+    const char* label;             /* "Mark this spot", for its rows on the Mods page */
+    uint32_t vk;                   /* a Windows virtual-key code (VK_F9, 'M'); 0 = none */
+    uint32_t modifiers;            /* FH2_KEY_CTRL | FH2_KEY_SHIFT | FH2_KEY_ALT */
+    uint32_t pad_chord;            /* FH2_PAD_LB | FH2_PAD_RB | FH2_PAD_Y ...; 0 = none */
+    FH2HotkeyFn on_press;          /* void (*)(void* user, const char* key) */
+    FH2HotkeyRebindFn on_rebind;   /* void (*)(void* user, const char* key, uint32_t vk, uint32_t modifiers, uint32_t pad_chord) */
+    void* user;
+} FH2Hotkey;
+```
+
+A key on the keyboard, a chord on the controller or both, that call `on_press` once per press: a key that writes "the problem is here" to your log, or a live switch while you test something.
+
+- **Only while the game is in front.** The platform polls the keyboard (`GetAsyncKeyState`) and the controllers (XInput, from System32) every 15 ms while Azimuth's window has the focus. It never takes a key from other programs (no `RegisterHotKey`), and the game still gets every key and button, so pick ones that do nothing harmful in game: an F-key, or LB+RB with a face button. The modifiers have to match exactly, so Ctrl+F5 doesn't set off a hotkey on F5.
+- **`on_press`** runs on the platform's hotkey thread, not the game's. Keep it short, and hand anything that touches the game to a hook. If it crashes, the log says so and the next press calls it again.
+- **The Mods page.** Each hotkey gets two choice rows in your mod's part of Pause > Settings > MODS: "<label>: key" (Off, F1 to F12, Ctrl+F1 to F12, or your own binding if it's none of those) and "<label>: controller" (Off, or LB+RB with Y, X, B, A or a d-pad direction, or your own chord). A change there takes effect straight away and calls `on_rebind` with the new binding. The platform doesn't keep bindings: save them in your settings and pass them in next time, as with your rows.
+- **When.** Add hotkeys from `fh2mod_init`, so their rows show (rows added later only show from the next launch). It returns 1 if the hotkey was added, 0 if not, and the log says why.
+
+```cpp
+FH2Hotkey mark{sizeof mark};
+mark.key       = "Mark";
+mark.label     = "Mark this spot";
+mark.vk        = saved_vk ? saved_vk : VK_F9;
+mark.pad_chord = FH2_PAD_LB | FH2_PAD_RB | FH2_PAD_Y;
+mark.on_press  = [](void*, const char*) { g_mark_now = true; };   // the frame hook writes the position
+mark.on_rebind = [](void*, const char*, uint32_t vk, uint32_t mods, uint32_t chord) { save_binding(vk, mods, chord); };
+api->add_hotkey(g_mod, &mark);
+```
+
+## Commands (API 9)
+
+```c
+int add_command(FH2Mod* mod, const char* name, const char* help, FH2CommandFn fn, void* user);
+typedef void (*FH2CommandFn)(void* user, const char* name, const char* args, char* reply, size_t reply_size);
+```
+
+A command is something another program can ask your mod to do while the game runs: flip a setting for an A/B test without restarting, print some numbers, mark a spot. Run them with `fh2mod.exe`, in the `tools` folder of the platform's zip:
+
+```
+fh2mod list
+fh2mod MyMod shadows off
+fh2mod --pid 1234 MyMod stats
+```
+
+- **`add_command`** registers `name` (letters, digits and `_`, unique within your mod, matched in any case) with a line of `help` for `fh2mod list` (or `NULL`). Add commands whenever you like; it returns 1 if added, 0 if not, and the log says why.
+- **`fn`** runs on the platform's command thread, not the game's, one command at a time, with the rest of the line in `args`. Write your answer into `reply` (UTF-8, `reply_size` bytes with the NUL: 16 KB). Start it with `error: ` for a failure: `fh2mod.exe` prints it and exits with 1. Hand anything that touches the game to a hook or your own thread. If `fn` crashes, the request gets an error and the log says so.
+- **The pipe.** It starts when the first command is added: `\\.\pipe\fh2mod-<process id>`, also in `fh2-mods\platform-session.json`. It refuses remote clients, and its DACL lets in only the Windows user the game runs as, so only that user's programs on that PC can connect. A request is one line of UTF-8: `list`, or `<mod> <command> [args]`, with a mod name that has spaces in double quotes. The reply is text, and the connection then closes. Any tool can use it the way `fh2mod.exe` does (`tools/fh2mod.cpp`).
+- **Which game.** Without `--pid`, `fh2mod.exe` finds the one running game with a command pipe; when there are more (the game started twice, or two installs), it lists their process ids for `--pid`.
+- **On Linux** the pipe is inside the game's Wine prefix, so run `fh2mod.exe` with the same prefix (`wine`, or `protontricks -c`).
+
+```cpp
+api->add_command(g_mod, "debris", "debris clear: removes every broken piece now",
+                 [](void*, const char*, const char* args, char* reply, size_t size) {
+                     if (strcmp(args, "clear") != 0) { snprintf(reply, size, "error: debris clear"); return; }
+                     g_clear_debris = true;   // the game's update hook does it
+                     snprintf(reply, size, "clearing");
+                 }, nullptr);
+```
+
 ## Crash reports
 
-These need no code from you. If the game crashes, the platform writes `fh2-mods\crashes\crash-<date>-<time>.txt` and a minidump (`.dmp`) beside it, and adds the summary to `platform.log`. The report has the exception, the call stack as module+offset (`game+0x...`, `YourMod.dll+0x...`), the mod the crash came from, if any, and every hook in place (see above). The ten newest reports are kept. Open the minidump in Visual Studio or WinDbg with your mod's debug symbols to see the exact line.
+These need no code from you. If the game crashes, the platform writes `fh2-mods\crashes\crash-<date>-<time>.txt` and a minidump (`.dmp`) beside it, and adds the summary to `platform.log`. The report has the exception, the call stack as module+offset (`game+0x...`, `YourMod.dll+0x...`), the mod the crash came from, if any, and every hook in place (see above). When Azimuth 1.0.1 was running another game, it says which, so a crash there isn't taken for a mod's. The ten newest reports are kept. Open the minidump in Visual Studio or WinDbg with your mod's debug symbols to see the exact line.
+
+From platform 2.8.0:
+
+- **Your mod's state is in the dump.** The minidump has the writable data (the globals) of every DLL the platform loaded: the mods, fh2wheel and the platform itself. Other modules' data stays out, so the dump stays small. `platform.log` says how many DLLs' data and how many added ranges went in.
+- **`add_dump_memory(mod, p, n)`** (API 9) adds memory of your own to every dump from then on, for state that lives on the heap behind your globals: your tables, what your hooks keep track of. 1 byte to 64 MB a range, 64 ranges at most from every mod together. The memory has to stay allocated; a range that can't be read at the crash is skipped.
+- **A full-memory dump** while you chase a crash: put `full` in `fh2-mods\platform-dump.txt`. The next dump then has the whole process, which under Azimuth is several GB, so it's named `crash-<date>-<time>-full.dmp` and only the newest one is kept. Delete the file (or the word) to go back to small dumps.
+- **Symbols.** The report lists the PDB (name, GUID and age) of each loaded DLL that has a CodeView record, which is what a debugger needs to load the right symbols. Release builds with llvm-mingw are stripped and have none; build with `-gcodeview -Wl,--pdb=` and keep the PDB if you want them.
+- **`fh2-mods\platform-session.json`** says `crashed`, with the report's name (see Sessions).
+
+Wine's dbghelp writes the dumps too; whether it honours the mods' data and added ranges there hasn't been checked yet.

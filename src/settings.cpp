@@ -96,6 +96,8 @@ struct Row {
     float fboot = 0, fmin = 0, fmax = 1, fstep = 0.01f, scale = 1;
     int decimals = 0;
     FH2SliderChangedFn on_slide = nullptr;
+    // choices (API 9): a slider over 0 .. n-1, shown by name; `value` is the index
+    std::vector<std::string> choices;
 };
 std::mutex g_mu;                     // guards the list (rows are never removed)
 std::deque<Row> g_rows;
@@ -313,9 +315,17 @@ void slider_set(Row* r, void* obj, uint8_t* value) {
     const bool pending_before = restart_pending();
     const float old          = r->fvalue.exchange(f);
     if (std::fabs(old - f) < r->fstep * 0.01f) return;
-    log_line(r->mod->name, r->key + " set to " + show(*r, f) + " on the Mods page");
-    if (r->on_slide && !call_on_slide(r->on_slide, r->user, r->key.c_str(), f))
-        log_line(r->mod->name, "crashed in its on_slide for " + r->key);
+    if (!r->choices.empty()) {   // a choice row (API 9): its index, to on_change
+        const int v = static_cast<int>(std::lround(f));
+        r->value    = v;
+        log_line(r->mod->name, r->key + " set to " + r->choices[static_cast<std::size_t>(v)] + " on the Mods page");
+        if (r->on_change && !call_on_change(r->on_change, r->user, r->key.c_str(), v))
+            log_line(r->mod->name, "crashed in its on_change for " + r->key);
+    } else {
+        log_line(r->mod->name, r->key + " set to " + show(*r, f) + " on the Mods page");
+        if (r->on_slide && !call_on_slide(r->on_slide, r->user, r->key.c_str(), f))
+            log_line(r->mod->name, "crashed in its on_slide for " + r->key);
+    }
     if (restart_pending() != pending_before && obj && g_notice_desc) notify_changed(obj, g_notice_desc);
 }
 
@@ -624,6 +634,27 @@ uint8_t* mod_notice_descriptor() {
     return g_mod_notice_desc;
 }
 
+// FH2Mod_TitleReady: whether the title screen is hooked, so the lines of the mods' title-screen
+// entries can show (write_title_page keeps them collapsed until it's true; a binding that never
+// resolves leaves the title screen as the game ships it).
+uint8_t* g_title_desc = nullptr;
+std::atomic<bool> g_title_ready{false};
+void** __cdecl title_ready_get(void** out, void*, void*) {
+    bool v = g_title_ready.load();
+    *out   = nullptr;
+    reinterpret_cast<BoxBoolFn>(g_base + RVA_BOX_BOOL)(out, &v);
+    return out;
+}
+uint8_t* title_ready_descriptor() {
+    std::scoped_lock lk{g_desc_mu};
+    if (!g_title_desc) {
+        void* bool_type = reinterpret_cast<TypeFn>(g_base + RVA_BOOL_TYPE)(0);
+        g_title_desc    = new_descriptor("FH2Mod_TitleReady", reinterpret_cast<void*>(&title_ready_get),
+                                         reinterpret_cast<void*>(&notice_set), bool_type);
+    }
+    return g_title_desc;
+}
+
 // ---- pages of a mod's own design: their slots (API 8) ------------------------------------------
 // FH2Mod_Slot_<n>: an int of the page's, for two-way bindings; FH2Mod_Slot_<n>_Is_<v>: whether
 // it's v. They read the page being opened or shown (g_custom_shown). A mod changes them from its
@@ -796,6 +827,7 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     if (std::wcscmp(n, L"FH2Mod_UpdateBadge") == 0) return badge_descriptor(false);
     if (std::wcscmp(n, L"FH2Mod_ErrorBadge") == 0) return badge_descriptor(true);
     if (std::wcscmp(n, L"FH2Mod_ModNotice") == 0) return mod_notice_descriptor();
+    if (std::wcscmp(n, L"FH2Mod_TitleReady") == 0) return title_ready_descriptor();
     if (const int k = name_number(n, L"FH2Mod_View_", kMaxViews); k >= 0) return flag_descriptor(g_view_desc[k], "FH2Mod_View_" + std::to_string(k));
     if (const int k = name_number(n, L"FH2Mod_ViewIn_", kMaxViews); k >= 0)
         return flag_descriptor(g_view_in_desc[k], "FH2Mod_ViewIn_" + std::to_string(k));
@@ -898,6 +930,64 @@ std::string slider_resources(const Row& r, std::size_t i) {
     return res;
 }
 
+// A choice row's style (API 9): laid out like the game's own option rows (A_Style_SpinnerControl_Default,
+// Shared_Spinners.xaml: the label, then the value between a left and a right arrow), but a Slider over
+// the choices' numbers, so it binds to a float property of ours like a slider. The control's
+// SpinnerControl takes its items from a list the page's C++ object makes, which a page of ours
+// can't; this shows each name by the slider's Value instead, as the game's own rating slider shows
+// its stars (F606_RateDialog.xaml: Trigger Property="Value" Value="1", ...). The Track is there,
+// unseen, for the Slider's own workings.
+std::string choice_resources(const Row& r, std::size_t i) {
+    const std::string n    = std::to_string(i);
+    const std::size_t last = r.choices.size() - 1;
+    std::string names, triggers;
+    for (std::size_t c = 0; c <= last; ++c) {
+        names += "                                        <local:FZTextBlock x:Name=\"FH2Mod_Choice_" + std::to_string(c) + "\" Text=\"" +
+                 xml_escape(r.choices[c]) + "\" Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Center\"" +
+                 (c ? " Visibility=\"Hidden\"" : "") + " />\r\n";
+        std::string set;
+        if (c == 0) set += "                                    <Setter TargetName=\"LeftArrow\" Property=\"Visibility\" Value=\"Hidden\" />\r\n";
+        if (c == last) set += "                                    <Setter TargetName=\"RightArrow\" Property=\"Visibility\" Value=\"Hidden\" />\r\n";
+        if (c) {
+            set += "                                    <Setter TargetName=\"FH2Mod_Choice_0\" Property=\"Visibility\" Value=\"Hidden\" />\r\n";
+            set += "                                    <Setter TargetName=\"FH2Mod_Choice_" + std::to_string(c) +
+                   "\" Property=\"Visibility\" Value=\"Visible\" />\r\n";
+        }
+        triggers += "                                <Trigger Property=\"Value\" Value=\"" + std::to_string(c) + "\">\r\n" + set +
+                    "                                </Trigger>\r\n";
+    }
+    return "            <Style x:Key=\"FH2Mod_Choice_" + n + "\" TargetType=\"Slider\" BasedOn=\"{StaticResource A_Style_Slider_Options}\">\r\n"
+           "                <Setter Property=\"Minimum\" Value=\"0\" />\r\n"
+           "                <Setter Property=\"Maximum\" Value=\"" + std::to_string(last) + "\" />\r\n"
+           "                <Setter Property=\"SmallChange\" Value=\"1\" />\r\n"
+           "                <Setter Property=\"LargeChange\" Value=\"1\" />\r\n"
+           "                <Setter Property=\"Template\">\r\n"
+           "                    <Setter.Value>\r\n"
+           "                        <ControlTemplate TargetType=\"Slider\">\r\n"
+           "                            <Grid FocusManager.IsFocusScope=\"True\" VerticalAlignment=\"Center\">\r\n"
+           "                                <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition /></Grid.ColumnDefinitions>\r\n"
+           "                                <local:FZTextBlock x:Name=\"PART_Label\" Text=\"{Binding Tag.Heading, RelativeSource={RelativeSource TemplatedParent}}\" "
+           "Style=\"{StaticResource A_Style_SliderControlText}\" HorizontalAlignment=\"Left\" />\r\n"
+           "                                <Grid Grid.Column=\"1\">\r\n"
+           "                                    <Track x:Name=\"PART_Track\" Opacity=\"0\" />\r\n"
+           "                                    <DockPanel>\r\n"
+           "                                        <Grid DockPanel.Dock=\"Left\"><ContentControl x:Name=\"LeftArrow\" Style=\"{StaticResource A_Style_Arrow_Left}\" /></Grid>\r\n"
+           "                                        <Grid DockPanel.Dock=\"Right\"><ContentControl x:Name=\"RightArrow\" Style=\"{StaticResource A_Style_Arrow_Right}\" /></Grid>\r\n"
+           "                                        <Grid>\r\n" +
+           names +
+           "                                        </Grid>\r\n"
+           "                                    </DockPanel>\r\n"
+           "                                </Grid>\r\n"
+           "                            </Grid>\r\n"
+           "                            <ControlTemplate.Triggers>\r\n" +
+           triggers +
+           "                            </ControlTemplate.Triggers>\r\n"
+           "                        </ControlTemplate>\r\n"
+           "                    </Setter.Value>\r\n"
+           "                </Setter>\r\n"
+           "            </Style>\r\n";
+}
+
 // A page laid out like the HUD options page (A_HUDOptions.xaml), with a list of our own. An item
 // is one of our rows, or a line of information: a row with a label and a description and no
 // value to change.
@@ -988,6 +1078,12 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
             if (r.restart) desc += (desc.empty() ? "" : " ") + std::string("Takes effect the next time you start the game.");
             if (r.mod != &g_hub_owner) desc += (desc.empty() ? "" : " ") + std::string("(") + r.mod->name + ")";
             data_item(label, desc);
+            if (!r.choices.empty()) {
+                res += choice_resources(r, it.row);
+                rows += "                                        <Slider Value=\"{Binding " + r.prop + "}\" Tag=\"{StaticResource " + key +
+                        "}\" Style=\"{StaticResource FH2Mod_Choice_" + std::to_string(it.row) + "}\"" + first + " />\r\n";
+                continue;
+            }
             if (r.slider) {
                 res += slider_resources(r, it.row);
                 rows += "                                        <Slider Value=\"{Binding " + r.prop + "}\" Tag=\"{StaticResource " + key +
@@ -1518,6 +1614,7 @@ bool write_settings_page() {
 // Installed mods has a switch per mod in fh2-mods, with that mod's own rows under it.
 std::vector<ModEntry> g_entries;     // fh2-mods, in load order (set once, before the hooks)
 std::vector<int> g_entry_row;        // each entry's switch row in g_rows
+std::vector<int> g_entry_online_row; // each entry's "Load when playing online" row in g_rows, or -1
 std::mutex g_page_mu;                // one page written at a time
 
 enum HubPage { kHubInstalled = 1, kHubUpdates, kHubGetMods, kHubAbout, kHubAllSettings = 6, kHubModPage = 10, kHubTilePage = 80 };
@@ -1536,8 +1633,15 @@ void hub_switch_changed(void* user, const char*, int v) {
     if (i < g_entries.size()) set_mod_enabled(g_entries[i].dll, v != 0);
 }
 
+void hub_online_changed(void* user, const char*, int v) {
+    const auto i = reinterpret_cast<std::uintptr_t>(user);
+    if (i < g_entries.size()) set_mod_online(g_entries[i].dll, v != 0);
+}
+
 void add_hub_rows() {
     g_entries = mod_entries();
+    // "Load when playing online" (platform 2.8.0), only where FH2MP is installed, and not for FH2MP
+    const bool fh2mp = fh2mp_installed();
     std::scoped_lock lk{g_mu};
     for (std::size_t i = 0; i < g_entries.size(); ++i) {
         const ModEntry& e = g_entries[i];
@@ -1552,6 +1656,24 @@ void add_hub_rows() {
         r.on_change = &hub_switch_changed;
         r.user     = reinterpret_cast<void*>(static_cast<std::uintptr_t>(i));
         g_entry_row.push_back(static_cast<int>(g_rows.size() - 1));
+        if (!fh2mp || _wcsicmp(e.dll.c_str(), L"FH2MP.dll") == 0) {
+            g_entry_online_row.push_back(-1);
+            continue;
+        }
+        Row& o       = g_rows.emplace_back();
+        o.mod        = &g_hub_owner;
+        o.key        = "ModOnline_" + std::to_string(i);
+        o.label      = "Load when playing online";
+        o.description = std::string("Off: when you start the game from the FH2MP launcher, the game doesn't load ") + e.name +
+                        ", so it can't change online play. " +
+                        (e.offline_only ? "Its author made it for offline play, so it's off unless you turn it on. " : "") +
+                        "Takes effect the next time you start the game from the launcher.";
+        o.prop       = "FH2Mod_" + std::to_string(g_rows.size() - 1);
+        o.value      = e.loads_online ? 1 : 0;
+        o.boot       = o.value;
+        o.on_change  = &hub_online_changed;   // no restart notice: it's about the next online start
+        o.user       = reinterpret_cast<void*>(static_cast<std::uintptr_t>(i));
+        g_entry_online_row.push_back(static_cast<int>(g_rows.size() - 1));
     }
 }
 
@@ -1658,6 +1780,9 @@ std::string about_mod(const ModEntry& e) {
 
 std::string mod_note(const ModEntry& e) {
     if (!e.enabled) return "Turned off: the game doesn't load it.";
+    if (e.online_off)
+        return "Off for online play: you started the game from the FH2MP launcher, and it's set not to load then "
+               "(\"Load when playing online\" on its page).";
     if (_wcsicmp(e.dll.c_str(), L"fh2wheel.dll") == 0) return "Not a platform mod: its settings are in fh2wheel-config.exe.";
     if (!e.platform_mod) return "A mod from before the platform: it has no settings here.";
     return "";
@@ -1676,6 +1801,7 @@ void add_mod_lines(PageItem& it, const ModEntry& e) {
     } else {
         std::string state;
         if (!e.enabled) state = "turned off";
+        else if (e.online_off) state = "off for online play";
         else if (!e.problem.empty()) state = "didn't load";
         else if (!e.mod || e.mod->repo.empty() || !e.mod->check_updates) state = "doesn't check for updates";
         else state = latest.empty() ? "not checked yet" : "up to date";
@@ -1717,7 +1843,7 @@ std::vector<PageItem> installed_items() {
     for (std::size_t i = 0; i < g_entries.size(); ++i) {
         const ModEntry& e = g_entries[i];
         PageItem it = info(e.name, about_mod(e));
-        it.value    = (e.enabled ? "" : "Off  ") + (e.version.empty() ? std::string() : e.version);
+        it.value    = (!e.enabled ? "Off  " : e.online_off ? "Off online  " : "") + (e.version.empty() ? std::string() : e.version);
         it.button   = i < kMaxModPages ? static_cast<int>(i) : -1;
         add_mod_lines(it, e);
         if (!it.version_alert.empty()) {   // a newer version is out: the version in red, with a !
@@ -1747,6 +1873,7 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
     sw.note += (sw.note.empty() ? "" : " ") + std::string("Off leaves it in fh2-mods, but the game doesn't load it.");
     add_mod_lines(sw, e);
     items.push_back(sw);
+    if (i < g_entry_online_row.size() && g_entry_online_row[i] >= 0) items.push_back({g_entry_online_row[i], "", ""});
     std::size_t own = 0;
     if (e.mod) {
         std::scoped_lock lk{g_mu};
@@ -1784,6 +1911,7 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
     }
     if (!own)
         items.push_back(info("No settings", !e.enabled ? "Its settings show here once it's turned on and the game has restarted."
+                                            : e.online_off ? "It isn't loaded for online play, so its settings aren't here this time."
                                             : e.platform_mod ? "This mod has no settings of its own."
                                                              : "A mod from before the platform can't add settings here."));
     return items;
@@ -2405,6 +2533,11 @@ void* fn_get(PopupFn* self) { return &self->popup; }
 void* g_fn_vt[7] = {reinterpret_cast<void*>(&fn_copy), reinterpret_cast<void*>(&fn_copy), reinterpret_cast<void*>(&fn_call),
                     reinterpret_cast<void*>(&fn_type), reinterpret_cast<void*>(&fn_delete), reinterpret_cast<void*>(&fn_dtor),
                     reinterpret_cast<void*>(&fn_get)};
+void handle_title_choice(PopupFn* self);
+void fn_call_title(PopupFn* self) { handle_title_choice(self); }
+void* g_title_fn_vt[7] = {reinterpret_cast<void*>(&fn_copy), reinterpret_cast<void*>(&fn_copy), reinterpret_cast<void*>(&fn_call_title),
+                          reinterpret_cast<void*>(&fn_type), reinterpret_cast<void*>(&fn_delete), reinterpret_cast<void*>(&fn_dtor),
+                          reinterpret_cast<void*>(&fn_get)};
 
 using MakeItemsFn     = void** (*)(void** out);
 using MakeItemFn      = void** (*)(void** out, const int* id, void** label);
@@ -2426,15 +2559,16 @@ void release(uint8_t* obj) {
         reinterpret_cast<ObjectFreeFn>(g_base + RVA_OBJECT_FREE)(obj);
 }
 
-bool show_popup_inner(void* page) {
-    static FakeLocString* title   = loc_string(kTitle);
-    static FakeLocString* message = loc_string(kMessage);
-    static FakeLocString* labels[3] = {loc_string(kChoices[0]), loc_string(kChoices[1]), loc_string(kChoices[2])};
+// The message box over `page`, with `labels` as its items (ids 0, 1, ...). `fn_vt` is the
+// vtable of the handler it calls with the chosen item: g_fn_vt for the restart choices,
+// g_title_fn_vt for a title-screen entry's list.
+bool show_list_inner(void* page, FakeLocString* title, FakeLocString* message, FakeLocString* const* labels, int count,
+                     void** fn_vt) {
     void* items = nullptr;
     reinterpret_cast<MakeItemsFn>(g_base + RVA_MAKE_ITEMS)(&items);
     if (!items) return false;
     auto* coll = static_cast<uint8_t*>(items);
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < count; ++i) {
         void* item  = nullptr;
         void* label = labels[i];
         reinterpret_cast<MakeItemFn>(g_base + RVA_MAKE_ITEM)(&item, &i, &label);
@@ -2452,7 +2586,7 @@ bool show_popup_inner(void* page) {
         return false;
     }
     reinterpret_cast<PopupHelpFn>(g_base + RVA_POPUP_HELP)(popup, 6);
-    PopupFn fn{g_fn_vt, popup, page};
+    PopupFn fn{fn_vt, popup, page};
     StdFunction f{};
     f.impl = fn_copy(&fn, nullptr);   // on the heap; the callee deletes it
     reinterpret_cast<PopupHandlerFn>(g_base + RVA_POPUP_HANDLER)(popup, 2, &f, true);
@@ -2460,13 +2594,20 @@ bool show_popup_inner(void* page) {
     return true;
 }
 
-bool show_popup(void* page) {
+bool show_list(void* page, FakeLocString* title, FakeLocString* message, FakeLocString* const* labels, int count, void** fn_vt) {
     __try {
-        return show_popup_inner(page);
+        return show_list_inner(page, title, message, labels, count, fn_vt);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         g_popup_ok = false;
         return false;
     }
+}
+
+bool show_popup(void* page) {
+    static FakeLocString* title     = loc_string(kTitle);
+    static FakeLocString* message   = loc_string(kMessage);
+    static FakeLocString* labels[3] = {loc_string(kChoices[0]), loc_string(kChoices[1]), loc_string(kChoices[2])};
+    return show_list(page, title, message, labels, 3, g_fn_vt);
 }
 
 int chosen_item(void* popup) {
@@ -3262,6 +3403,338 @@ void hook_hud_shown(FH2Mod* m) {
         g_api->enable_hooks(m, k);
 }
 
+// ---- title-screen entries (API 9) -----------------------------------------------------------
+// The title screen is the Splash page (UI.zip Scenes\Anthem\A_Splash.xaml; C++ Splash, vtable
+// 0x142E533C8): the attract video, the logo and "PRESS (A) TO START" (Main.str IDS_Press and
+// IDS_To_Start, which also carries the notices), with no control to focus. The pad reaches the
+// top page's vtable +0x578 (page, key, pressed) as keys (see pad_button); Splash's is the shared
+// 0x140CEC3D0, which runs the key handlers a page registered. Splash registers only A (key 18,
+// at 0x140E8F9AD, when it's shown): its handler 0x140EA0D40 returns while the state at
+// page+0x448 is 3 or 4 (0 waiting, 1 A pressed, 2 a popup up, 3/4 on its way to loading), and
+// otherwise sets 1 and starts signing in. So X, Y, LB and RB do nothing there: each entry gets
+// one. Its line is written into the page under the Grid holding HelpButton (fading with it in
+// the five state storyboards), and our +0x578 runs its on_press while the state is 0;
+// FH2_TITLE_START then presses A through the original, so OnStart's own checks and the
+// sign-in run as ever. An entry with a list shows the message box (show_list) over Splash
+// instead, and the pick does the same through on_choose. A list longer than one box holds
+// (kTitleListFits, as up to 2.8.0's FH2_TITLE_MAX_CHOICES) goes in pages of kTitlePageSize, with
+// Previous and Next items that show the box again with the page before or after.
+constexpr uintptr_t RVA_SPLASH_BUTTON_SLOT = 0x2E53940;   // Splash vtable +0x578 (holds RVA_PAGE_BUTTON)
+constexpr uintptr_t RVA_SPLASH_ON_START    = 0x0EA0D40;   // Splash::OnStart (A)
+constexpr uintptr_t RVA_SPLASH_A_HANDLER   = 0x0E8F9A5;   // Splash shown: registers A (key 18)
+constexpr std::size_t kSplashState         = 0x448;       // int, see above
+constexpr std::size_t kMaxTitleLabel       = 32;          // bytes; the panel is 326 px wide (about 24 characters)
+constexpr std::size_t kTitleListFits       = 10;          // choices one box shows, with Back
+constexpr std::size_t kTitlePageSize       = 8;           // choices on a page of a longer list, with Previous, Next and Back
+const char* const kTitleFile               = "UI/Scenes/Anthem/A_Splash.xaml";
+struct TitleEntry {
+    FH2Mod* mod;
+    std::string key, label;
+    FH2TitlePressFn on_press;
+    void* user;
+    int button;                              // FH2_BUTTON_
+    FH2TitleChooseFn on_choose = nullptr;    // an entry with a list: its choices, then Back
+    std::vector<std::string> choices;
+    std::wstring list_title, list_message;
+    std::vector<std::wstring> wchoices;
+    std::vector<FakeLocString*> loc;         // title, message, the choices, Back (made once it's in g_titles)
+    std::vector<std::wstring> page_titles;   // a list in pages: the title with "2/5" after it, per page
+    std::vector<FakeLocString*> page_loc;
+};
+std::deque<TitleEntry> g_titles;             // guarded by g_mu (entries are never removed or moved)
+std::atomic<int> g_title_started{-1};        // the entry whose on_press started the game, -1 for none
+std::atomic<int> g_title_list{-1};           // the entry whose list is up, -1 for none
+// What each item of the list that's up is (UI thread only): a choice's position in the whole
+// list, or one of these.
+constexpr int kItemBack = -1, kItemPrevious = -2, kItemNext = -3;
+std::vector<int> g_title_items;
+int g_title_list_page = 0;
+FakeLocString* g_loc_previous = nullptr;   // made with the first list in pages
+FakeLocString* g_loc_next     = nullptr;
+bool show_title_list(void* page, int j, int p);
+bool g_title_page = false;                   // A_Splash.xaml is written with the entries
+bool g_title_handled[7] = {};                // per FH2_BUTTON_: the press was an entry's (UI thread only)
+const int kTitleButtons[] = {FH2_BUTTON_Y, FH2_BUTTON_X, FH2_BUTTON_RB, FH2_BUTTON_LB};
+
+const char* button_letters(int b) {
+    switch (b) {
+        case FH2_BUTTON_X: return "X";
+        case FH2_BUTTON_Y: return "Y";
+        case FH2_BUTTON_LB: return "LB";
+        case FH2_BUTTON_RB: return "RB";
+        default: return nullptr;
+    }
+}
+
+std::string ascii_upper(std::string s) {
+    for (char& c : s)
+        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+    return s;
+}
+
+// A_Splash.xaml with every entry's line in it, or remove_leftover_file when there are none.
+bool write_title_page() {
+    std::vector<std::pair<int, std::string>> lines;
+    {
+        std::scoped_lock lk{g_mu};
+        for (const TitleEntry& e : g_titles) lines.emplace_back(e.button, e.label);
+    }
+    if (lines.empty()) {
+        remove_leftover_file(kTitleFile);
+        return false;
+    }
+    std::string page = read_ui("Scenes/Anthem/A_Splash.xaml");
+    const std::string fade  = "<DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"(UIElement.Opacity)\" Storyboard.TargetName=\"HelpButton\">";
+    const std::string close = "</DoubleAnimationUsingKeyFrames>";
+    auto count = [&page](const std::string& what) {
+        std::size_t n = 0;
+        for (std::size_t at = page.find(what); at != std::string::npos; at = page.find(what, at + 1)) ++n;
+        return n;
+    };
+    if (page.empty() || count(fade) != 5 || count("x:Name=\"HelpButton\"") != 1 || count("x:Name=\"LoadingControl\"") != 1 ||
+        count("</ResourceDictionary>") != 1) {
+        slog("A_Splash.xaml doesn't look as expected; no title-screen entries");
+        remove_leftover_file(kTitleFile);
+        return false;
+    }
+    // each state's storyboard: the entries take HelpButton's opacity (a copy of its block)
+    std::string out;
+    std::size_t at = 0;
+    for (std::size_t f = page.find(fade); f != std::string::npos; f = page.find(fade, f + 1)) {
+        const std::size_t e = page.find(close, f);
+        if (e == std::string::npos) {
+            slog("A_Splash.xaml doesn't look as expected; no title-screen entries");
+            remove_leftover_file(kTitleFile);
+            return false;
+        }
+        const std::size_t end  = e + close.size();
+        const std::size_t line = page.rfind('\n', f) + 1;
+        std::string copy       = page.substr(f, end - f);
+        swap_all(copy, "Storyboard.TargetName=\"HelpButton\"", "Storyboard.TargetName=\"FH2Mod_TitleEntries\"");
+        out += page.substr(at, end - at) + "\r\n" + page.substr(line, f - line) + copy;
+        at = end;
+    }
+    out += page.substr(at);
+    page = out;
+    // the lines, under the Grid that holds HelpButton and LoadingControl
+    std::string panel = "\r\n                    <!-- FH2 Mod Platform: title-screen entries -->\r\n"
+                        "                    <StackPanel x:Name=\"FH2Mod_TitleEntries\" Style=\"{StaticResource FH2Mod_Style_TitleEntries}\" "
+                        "HorizontalAlignment=\"Center\" Margin=\"0, 8, 0, 0\">";
+    for (const auto& [button, label] : lines)
+        panel += std::string("\r\n                        <StackPanel Orientation=\"Horizontal\" HorizontalAlignment=\"Center\" Margin=\"0, 4, 0, 0\">\r\n"
+                             "                            <local:FZMaterial ImageSource=\"{StaticResource A_BitmapImage_ControllerButton_") +
+                 button_letters(button) + "}\" Width=\"32\" Height=\"32\" />\r\n"
+                 "                            <local:FZTextBlock Text=\"" + xml_escape(ascii_upper(label)) +
+                 "\" Style=\"{StaticResource A_Style_Text_LoadingSmall}\" Margin=\"8, 0, 0, 0\" />\r\n"
+                 "                        </StackPanel>";
+    panel += "\r\n                    </StackPanel>";
+    const std::size_t grid = page.find("</Grid>", page.find("x:Name=\"LoadingControl\""));
+    if (grid == std::string::npos) {
+        slog("A_Splash.xaml doesn't look as expected; no title-screen entries");
+        remove_leftover_file(kTitleFile);
+        return false;
+    }
+    page.insert(grid + 7, panel);
+    // collapsed unless the title screen is hooked
+    page.insert(page.find("</ResourceDictionary>"),
+                "    <Style x:Key=\"FH2Mod_Style_TitleEntries\" TargetType=\"StackPanel\">\r\n"
+                "                <Setter Property=\"Visibility\" Value=\"Collapsed\" />\r\n"
+                "                <Style.Triggers>\r\n"
+                "                    <DataTrigger Binding=\"{Binding FH2Mod_TitleReady}\" Value=\"True\">\r\n"
+                "                        <Setter Property=\"Visibility\" Value=\"Visible\" />\r\n"
+                "                    </DataTrigger>\r\n"
+                "                </Style.Triggers>\r\n"
+                "            </Style>\r\n        ");
+    g_title_page = set_file(&g_owner_mod, kTitleFile, page.data(), page.size()) != 0;
+    return g_title_page;
+}
+
+PageButtonFn o_splash_button = nullptr;
+
+bool call_on_press(FH2TitlePressFn fn, void* user, const char* key, int* result) {
+    __try {
+        *result = fn(user, key);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool call_on_choose(FH2TitleChooseFn fn, void* user, const char* key, uint32_t choice, int* result) {
+    __try {
+        *result = fn(user, key, choice);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+int splash_state(void* page) {
+    __try {
+        return *reinterpret_cast<int*>(static_cast<uint8_t*>(page) + kSplashState);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+
+bool d_splash_button(void* page, int button, bool pressed) {
+    const int code = pad_button(button);
+    if (code == FH2_BUTTON_A && pressed && splash_state(page) == 0) g_title_started = -1;   // the player's own start
+    if (!g_title_ready.load() || !button_letters(code)) return o_splash_button(page, button, pressed);
+    int j               = -1;
+    FH2Mod* mod         = nullptr;
+    FH2TitlePressFn fn  = nullptr;
+    void* user          = nullptr;
+    std::string key;
+    std::vector<FakeLocString*> loc;
+    {
+        std::scoped_lock lk{g_mu};
+        for (std::size_t i = 0; i < g_titles.size(); ++i)
+            if (g_titles[i].button == code) {
+                j    = static_cast<int>(i);
+                mod  = g_titles[i].mod;
+                fn   = g_titles[i].on_press;
+                user = g_titles[i].user;
+                key  = g_titles[i].key;
+                loc  = g_titles[i].loc;
+            }
+    }
+    if (j < 0) return o_splash_button(page, button, pressed);
+    if (!pressed) {   // the release of an entry's press is the entry's too
+        const bool ours        = g_title_handled[code];
+        g_title_handled[code] = false;
+        return ours || o_splash_button(page, button, pressed);
+    }
+    if (splash_state(page) != 0) return o_splash_button(page, button, pressed);   // already signing in
+    g_title_handled[code] = true;
+    if (!loc.empty()) {   // the list (the message box plays its own sound)
+        if (!show_title_list(page, j, 0)) log_line(mod->name, "couldn't show the list for title entry " + key);
+        return true;
+    }
+    play_sound(kSoundSelect);
+    int r = FH2_TITLE_HANDLED;
+    if (!call_on_press(fn, user, key.c_str(), &r)) {
+        log_line(mod->name, "crashed in its on_press for title entry " + key);
+        r = FH2_TITLE_HANDLED;
+    }
+    if (r == FH2_TITLE_START) {
+        log_line(mod->name, "title entry " + key + " starts the game");
+        g_title_started = j;
+        o_splash_button(page, kButtonA, true);   // A, as the player would press it
+    }
+    return true;
+}
+
+// Shows page `p` of entry `j`'s list (UI thread): a list that fits in one box as it is, a longer
+// one as kTitlePageSize choices with Previous before them (after the first page) and Next after
+// them (before the last), each page titled with its number. Back is always the last item.
+bool show_title_list(void* page, int j, int p) {
+    std::vector<FakeLocString*> labels;
+    std::vector<int> items;
+    FakeLocString *title = nullptr, *message = nullptr;
+    {
+        std::scoped_lock lk{g_mu};
+        if (j < 0 || j >= static_cast<int>(g_titles.size()) || g_titles[j].loc.size() < 3) return false;
+        const TitleEntry& e = g_titles[j];
+        const int n         = static_cast<int>(e.choices.size());
+        title               = e.loc[0];
+        message             = e.loc[1];
+        int from = 0, to = n;
+        if (n > static_cast<int>(kTitleListFits)) {
+            const int pages = static_cast<int>(e.page_loc.size());
+            p               = p < 0 ? 0 : p >= pages ? pages - 1 : p;
+            from            = p * static_cast<int>(kTitlePageSize);
+            to              = std::min(n, from + static_cast<int>(kTitlePageSize));
+            title           = e.page_loc[p];
+            if (p > 0) {
+                labels.push_back(g_loc_previous);
+                items.push_back(kItemPrevious);
+            }
+        }
+        for (int i = from; i < to; ++i) {
+            labels.push_back(e.loc[2 + i]);
+            items.push_back(i);
+        }
+        if (to < n) {
+            labels.push_back(g_loc_next);
+            items.push_back(kItemNext);
+        }
+        labels.push_back(e.loc[2 + n]);   // Back
+        items.push_back(kItemBack);
+    }
+    g_title_items     = std::move(items);
+    g_title_list_page = p;
+    g_title_list      = j;
+    if (g_popup_ok && show_list(page, title, message, labels.data(), static_cast<int>(labels.size()), g_title_fn_vt)) return true;
+    g_title_list = -1;
+    return false;
+}
+
+// A pick from a title entry's list (the message box's chosen-item handler, on the UI thread).
+// The box closes by itself; Back does nothing else, and Previous or Next show the box again with
+// the page before or after.
+void handle_title_choice(PopupFn* self) {
+    const int j    = g_title_list.exchange(-1);
+    const int item = chosen_item(self->popup);
+    const int what = item >= 0 && item < static_cast<int>(g_title_items.size()) ? g_title_items[item] : kItemBack;
+    if (what == kItemPrevious || what == kItemNext) {
+        if (!show_title_list(self->page, j, g_title_list_page + (what == kItemNext ? 1 : -1))) {
+            std::scoped_lock lk{g_mu};
+            if (j >= 0 && j < static_cast<int>(g_titles.size()))
+                log_line(g_titles[j].mod->name, "couldn't show the next page of the list for title entry " + g_titles[j].key);
+        }
+        return;
+    }
+    const int choice    = what;
+    FH2Mod* mod         = nullptr;
+    FH2TitleChooseFn fn = nullptr;
+    void* user          = nullptr;
+    std::string key, label;
+    {
+        std::scoped_lock lk{g_mu};
+        if (j < 0 || j >= static_cast<int>(g_titles.size())) return;
+        const TitleEntry& e = g_titles[j];
+        if (choice < 0 || choice >= static_cast<int>(e.choices.size())) return;   // Back
+        mod   = e.mod;
+        fn    = e.on_choose;
+        user  = e.user;
+        key   = e.key;
+        label = e.choices[choice];
+    }
+    int r = FH2_TITLE_HANDLED;
+    if (!call_on_choose(fn, user, key.c_str(), static_cast<uint32_t>(choice), &r)) {
+        log_line(mod->name, "crashed in its on_choose for title entry " + key);
+        r = FH2_TITLE_HANDLED;
+    }
+    if (r == FH2_TITLE_START) {
+        log_line(mod->name, "title entry " + key + " (" + label + ") starts the game");
+        g_title_started = j;
+        if (splash_state(self->page) == 0) o_splash_button(self->page, kButtonA, true);   // A, as the player would press it
+    }
+}
+
+// Checks the title screen's code and makes (doesn't enable) the hook on its buttons; null if
+// it can't, with the page's lines taken back out.
+FH2Hook* hook_title(FH2Mod* m) {
+    const uint8_t on_start[]  = {0x8B, 0x81, 0x48, 0x04, 0x00, 0x00, 0x83, 0xE8, 0x03, 0x83, 0xF8, 0x01};   // the state at +0x448, 3 and 4
+    const uint8_t a_handler[] = {0xBA, 0x12, 0x00, 0x00, 0x00, 0x48, 0x8B, 0xCE, 0xE8, 0xDE, 0xB6, 0x58, 0x00};   // A (18) registered
+    void** slot = reinterpret_cast<void**>(g_base + RVA_SPLASH_BUTTON_SLOT);
+    if (!code_matches(RVA_SPLASH_ON_START + 0x27, on_start, sizeof on_start) ||
+        !code_matches(RVA_SPLASH_A_HANDLER, a_handler, sizeof a_handler) || !readable(slot, 8) ||
+        *slot != reinterpret_cast<void*>(g_base + RVA_PAGE_BUTTON)) {
+        slog("the title screen's code doesn't look as expected; no title-screen entries");
+        clear_file(&g_owner_mod, kTitleFile);
+        return nullptr;
+    }
+    FH2Hook* h = g_api->hook_pointer(m, "Title screen: buttons", slot, reinterpret_cast<void*>(&d_splash_button),
+                                     reinterpret_cast<void**>(&o_splash_button));
+    if (!h) {
+        slog("hooking the title screen failed; no title-screen entries");
+        clear_file(&g_owner_mod, kTitleFile);
+    }
+    return h;
+}
+
 // ---- hooking up ----------------------------------------------------------------------------
 void hook_game() {
     void* base = g_api->wait_for_code(0xFFFFFFFFu);
@@ -3303,7 +3776,7 @@ void hook_game() {
     };
     g_sliders_ok = true;
     for (const Check& c : slider_checks) g_sliders_ok = g_sliders_ok && code_matches(c.rva, c.bytes.data(), c.bytes.size());
-    if (!g_sliders_ok) slog("the game's float properties don't look as expected; sliders won't work");
+    if (!g_sliders_ok) slog("the game's float properties don't look as expected; sliders and choice rows won't work");
     const Check popup_checks[] = {
         {RVA_MAKE_ITEMS, {0x40, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48, 0xC7, 0x44, 0x24}},
         {RVA_MAKE_ITEM, {0x40, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x40}},
@@ -3332,6 +3805,7 @@ void hook_game() {
     }
 
     FH2Mod* m = &g_owner_mod;
+    FH2Hook* title = g_title_page ? hook_title(m) : nullptr;
     if (!g_api->hook_function(m, "AVUI::Type::FindProperty", reinterpret_cast<void*>(g_base + RVA_FIND_PROPERTY),
                               reinterpret_cast<void*>(&d_find_property), reinterpret_cast<void**>(&o_find_property)) ||
         !g_api->hook_function(m, "PauseOptionsMenu: wire the tiles", reinterpret_cast<void*>(g_base + RVA_PAUSE_WIRE_TILES),
@@ -3345,6 +3819,10 @@ void hook_game() {
         return;
     }
     slog("ready");
+    if (title) {
+        g_title_ready = true;
+        slog("title-screen entries ready");
+    }
     hook_hub();
 }
 
@@ -3402,6 +3880,29 @@ int settings_add(FH2Mod* m, const FH2Setting* s) {
         r.fboot    = r.fvalue;
         r.value    = 0;
         r.boot     = 0;
+    }
+    if (s->size >= offsetof(FH2Setting, choice_count) + sizeof(uint32_t) && s->kind == FH2_SETTING_CHOICE) {
+        if (!s->choices || s->choice_count < 2 || s->choice_count > FH2_SETTING_MAX_CHOICES) {
+            log_line(m->name, std::string("add_setting: ") + s->key + " is a choice row but needs 2 to " +
+                                  std::to_string(FH2_SETTING_MAX_CHOICES) + " choices");
+            g_rows.pop_back();
+            return 0;
+        }
+        // shown like the game's own option rows; underneath, a slider over the choices' numbers
+        for (uint32_t c = 0; c < s->choice_count; ++c)
+            r.choices.push_back(s->choices[c] && *s->choices[c] ? s->choices[c] : "?");
+        const int last = static_cast<int>(s->choice_count) - 1;
+        const int v    = s->value < 0 ? 0 : s->value > last ? last : s->value;
+        r.slider       = true;
+        r.fmin         = 0;
+        r.fmax         = static_cast<float>(last);
+        r.fstep        = 1;
+        r.scale        = 1;
+        r.decimals     = 0;
+        r.value        = v;
+        r.boot         = v;
+        r.fvalue       = static_cast<float>(v);
+        r.fboot        = r.fvalue;
     }
     log_line(m->name, "Mods page row: " + r.label + (r.restart ? " (after a restart)" : "") +
                           (g_written ? "; the page is already written, so it shows from the next launch" : ""));
@@ -3686,6 +4187,129 @@ int pages_focus(FH2Mod* m, const char* key, const char* name) {
     return 1;
 }
 
+int title_add(FH2Mod* m, const FH2TitleEntry* e) {
+    if (!m || !e) return 0;
+    if (e->size < offsetof(FH2TitleEntry, button) + sizeof(int)) {
+        log_line(m->name, "add_title_entry: the FH2TitleEntry's size is too small (set size = sizeof(FH2TitleEntry))");
+        return 0;
+    }
+    if (!valid_key(e->key)) {
+        log_line(m->name, std::string("add_title_entry: \"") + (e->key ? e->key : "") + "\" isn't a usable key (letters, digits, _)");
+        return 0;
+    }
+    if (!e->label || !*e->label) {
+        log_line(m->name, std::string("add_title_entry: ") + e->key + " needs a label");
+        return 0;
+    }
+    // a list: choices (from the struct's newer part), each with a label, and on_choose
+    const bool has_list = e->size >= offsetof(FH2TitleEntry, list_message) + sizeof(const char*) && e->choices;
+    std::vector<std::string> choices;
+    if (has_list) {
+        if (e->choice_count < 1 || e->choice_count > FH2_TITLE_MAX_CHOICES) {
+            log_line(m->name, std::string("add_title_entry: ") + e->key + " can have 1 to " + std::to_string(FH2_TITLE_MAX_CHOICES) +
+                                  " choices, not " + std::to_string(e->choice_count));
+            return 0;
+        }
+        for (uint32_t i = 0; i < e->choice_count; ++i) {
+            if (!e->choices[i] || !*e->choices[i]) {
+                log_line(m->name, std::string("add_title_entry: ") + e->key + "'s choice " + std::to_string(i) + " has no label");
+                return 0;
+            }
+            choices.emplace_back(e->choices[i]);
+        }
+        if (!e->on_choose) {
+            log_line(m->name, std::string("add_title_entry: ") + e->key + " has choices but no on_choose");
+            return 0;
+        }
+    } else if (!e->on_press) {
+        log_line(m->name, std::string("add_title_entry: ") + e->key + " needs an on_press");
+        return 0;
+    }
+    if (g_written) {
+        log_line(m->name, std::string("add_title_entry: ") + e->key + " came after the title screen was written; add entries from fh2mod_init");
+        return 0;
+    }
+    if (e->button && !button_letters(e->button)) {
+        log_line(m->name, std::string("add_title_entry: ") + e->key + "'s button has to be FH2_BUTTON_Y, _X, _RB or _LB (or 0 for the next free one)");
+        return 0;
+    }
+    std::scoped_lock lk{g_mu};
+    auto owner = [](int b) -> const TitleEntry* {
+        for (const TitleEntry& t : g_titles)
+            if (t.button == b) return &t;
+        return nullptr;
+    };
+    for (const TitleEntry& t : g_titles)
+        if (t.mod == m && t.key == e->key) {
+            log_line(m->name, std::string("add_title_entry: there's already an entry called ") + e->key);
+            return 0;
+        }
+    int button = 0;
+    if (e->button && !owner(e->button)) button = e->button;
+    for (int b : kTitleButtons)
+        if (!button && !owner(b)) button = b;
+    if (!button) {
+        log_line(m->name, std::string("add_title_entry: no button left for ") + e->key + " (four entries at most, from every mod)");
+        return 0;
+    }
+    if (e->button && button != e->button) {
+        const TitleEntry* o = owner(e->button);
+        log_line(m->name, std::string("add_title_entry: ") + button_letters(e->button) + " is " + o->mod->name + "'s " + o->key + "; " + e->key +
+                              " gets " + button_letters(button));
+    }
+    std::string label = e->label;
+    if (label.size() > kMaxTitleLabel) {
+        std::size_t cut = kMaxTitleLabel;
+        while (cut > 0 && (static_cast<unsigned char>(label[cut]) & 0xC0) == 0x80) --cut;   // not inside a character
+        label.resize(cut);
+        log_line(m->name, std::string("add_title_entry: ") + e->key + "'s label is cut to \"" + label + "\"");
+    }
+    TitleEntry& t = g_titles.emplace_back();
+    t.mod         = m;
+    t.key         = e->key;
+    t.label       = label;
+    t.on_press    = e->on_press;
+    t.user        = e->user;
+    t.button      = button;
+    if (has_list) {
+        // the strings stay where they are: the entry doesn't move once it's in g_titles
+        t.on_choose    = e->on_choose;
+        t.choices      = std::move(choices);
+        t.list_title   = widen(e->list_title && *e->list_title ? e->list_title : label.c_str());
+        t.list_message = widen(e->list_message ? e->list_message : "");
+        for (const std::string& c : t.choices) t.wchoices.push_back(widen(c));
+        t.wchoices.push_back(L"Back");
+        t.loc.push_back(loc_string(t.list_title.c_str()));
+        t.loc.push_back(loc_string(t.list_message.c_str()));
+        for (const std::wstring& c : t.wchoices) t.loc.push_back(loc_string(c.c_str()));
+        if (t.choices.size() > kTitleListFits) {
+            const std::size_t pages = (t.choices.size() + kTitlePageSize - 1) / kTitlePageSize;
+            for (std::size_t p = 0; p < pages; ++p)
+                t.page_titles.push_back(t.list_title + L"  " + std::to_wstring(p + 1) + L"/" + std::to_wstring(pages));
+            for (const std::wstring& pt : t.page_titles) t.page_loc.push_back(loc_string(pt.c_str()));
+            if (!g_loc_previous) {
+                g_loc_previous = loc_string(L"Previous");
+                g_loc_next     = loc_string(L"Next");
+            }
+        }
+    }
+    std::string list;
+    if (has_list) {
+        list = " (a list of " + std::to_string(t.choices.size());
+        if (!t.page_loc.empty()) list += ", in " + std::to_string(t.page_loc.size()) + " pages of " + std::to_string(kTitlePageSize);
+        list += ")";
+    }
+    log_line(m->name, std::string("title-screen entry: (") + button_letters(button) + ") " + ascii_upper(label) + list);
+    return 1;
+}
+
+const char* title_started_by(FH2Mod* m) {
+    const int j = g_title_started.load();
+    if (!m || j < 0) return nullptr;
+    std::scoped_lock lk{g_mu};
+    return j < static_cast<int>(g_titles.size()) && g_titles[j].mod == m ? g_titles[j].key.c_str() : nullptr;
+}
+
 int settings_get(FH2Mod* m, const char* key) {
     if (!m || !key) return -1;
     std::scoped_lock lk{g_mu};
@@ -3696,7 +4320,14 @@ int settings_get(FH2Mod* m, const char* key) {
 void settings_set(FH2Mod* m, const char* key, int value) {
     if (!m || !key) return;
     std::scoped_lock lk{g_mu};
-    if (Row* r = find_row(m, key); r && !r->slider) r->value = value ? 1 : 0;
+    Row* r = find_row(m, key);
+    if (r && !r->choices.empty()) {   // a choice row: the index
+        const int last = static_cast<int>(r->choices.size()) - 1;
+        r->value       = value < 0 ? 0 : value > last ? last : value;
+        r->fvalue      = static_cast<float>(r->value.load());
+    } else if (r && !r->slider) {
+        r->value = value ? 1 : 0;
+    }
 }
 
 float settings_get_slider(FH2Mod* m, const char* key) {
@@ -3811,7 +4442,8 @@ void settings_start(const FH2ModApi* api) {
     add_hub_rows();
     g_written = true;
     const char* const files[] = {"UI/Scenes/Anthem/A_PauseOptions.xaml", "UI/Scenes/Anthem/A_ModOptions.xaml",
-                                 "UI/Scenes/Anthem/A_PauseMenu.xaml",    "stateflow/pause.xml", "stateflow/ui_screens.xml"};
+                                 "UI/Scenes/Anthem/A_PauseMenu.xaml",    "stateflow/pause.xml", "stateflow/ui_screens.xml",
+                                 kTitleFile};
     if (game_mount().empty()) {
         slog("the game folder wasn't found; no Mods page or MODS tab");
         for (const char* f : files) remove_leftover_file(f);
@@ -3854,9 +4486,10 @@ void settings_start(const FH2ModApi* api) {
     }
     if (!mods_page) remove_leftover_file("UI/Scenes/Anthem/A_ModOptions.xaml");
     if (!write_hud_notice()) remove_leftover_file("UI/Scenes/Anthem/A_Hud.xaml");
+    write_title_page();
     slog(std::to_string(n) + " row(s) on the Mods page, " + std::to_string(g_entries.size()) + " mod(s) on the MODS tab" +
          (g_hub_files ? "" : " (not shown)"));
-    if (g_hub_files || g_settings_tile) std::thread(hook_game).detach();
+    if (g_hub_files || g_settings_tile || g_title_page) std::thread(hook_game).detach();
     if (g_hub_files)
         // Update checks finish after this (from the cache, usually within a second or two): the
         // UPDATES tile's count is rewritten while the game is likely still to read the page.

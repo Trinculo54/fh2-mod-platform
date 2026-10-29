@@ -66,11 +66,15 @@ struct Found {                                    // every DLL in fh2-mods, in l
     std::wstring file;
     bool loaded = false, disabled = false, has_init = false;
     std::string problem;                          // why it didn't load or start, for the MODS tab
+    bool online_off = false;                      // not loaded or started: the game is online (FH2MP)
 };
 std::vector<Found> g_found;
+std::vector<std::unique_ptr<FH2Mod>> g_held;      // mods that registered but don't run online (offline_only)
+bool g_online = false;                            // started from the FH2MP launcher (set before any mod loads)
 
 std::mutex g_log_mu;
 FILE* g_log = nullptr;
+FILE* g_log_copy = nullptr; // fh2-mods\platform-logs\platform-<session id>.log
 
 FH2ModApi g_api{};
 
@@ -86,12 +90,14 @@ void log_line(const std::string& who, const std::string& text) {
     SYSTEMTIME t;
     GetLocalTime(&t);
     std::scoped_lock lk{g_log_mu};
-    if (!g_log) return;
-    std::fprintf(g_log, "%02u:%02u:%02u.%03u %s%s%s", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds,
-                 who.empty() ? "" : "[", who.c_str(), who.empty() ? "" : "] ");
-    std::fputs(text.c_str(), g_log);
-    std::fputc('\n', g_log);
-    std::fflush(g_log);
+    for (FILE* f : {g_log, g_log_copy}) {
+        if (!f) continue;
+        std::fprintf(f, "%02u:%02u:%02u.%03u %s%s%s", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds,
+                     who.empty() ? "" : "[", who.c_str(), who.empty() ? "" : "] ");
+        std::fputs(text.c_str(), f);
+        std::fputc('\n', f);
+        std::fflush(f);
+    }
 }
 fs::path azimuth_dir() { return g_azimuth; }
 fs::path game_mount() { return g_game; }
@@ -339,20 +345,38 @@ bool readable(const void* p, std::size_t n) {
     return static_cast<const char*>(p) + n <= static_cast<const char*>(mbi.BaseAddress) + mbi.RegionSize;
 }
 
+// The headers are copied, not read in place: a region can be freed or changed between VirtualQuery
+// and the read (Azimuth mapping the game, another thread freeing memory), and a plain read then
+// faults in whichever thread is looking.
 bool is_game(const char* base) {
-    if (!readable(base, 0x1000)) return false;
-    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 64 || dos->e_lfanew > 0x800) return false;
-    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-    return nt->Signature == IMAGE_NT_SIGNATURE && nt->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 &&
-           nt->FileHeader.TimeDateStamp == kTimestamp && nt->OptionalHeader.SizeOfImage == kSizeOfImage;
+    IMAGE_DOS_HEADER dos;
+    IMAGE_NT_HEADERS64 nt;
+    if (!readable(base, 0x1000) || !safe_copy(&dos, base, sizeof dos)) return false;
+    if (dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < 64 || dos.e_lfanew > 0x800) return false;
+    if (!safe_copy(&nt, base + dos.e_lfanew, sizeof nt)) return false;
+    return nt.Signature == IMAGE_NT_SIGNATURE && nt.FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 &&
+           nt.FileHeader.TimeDateStamp == kTimestamp && nt.OptionalHeader.SizeOfImage == kSizeOfImage;
 }
 
+// clang's __try only catches a fault inside a call made in the block, not in a plain load or an
+// inlined memcpy, so safe_copy's copy goes through a pointer the compiler can't see through.
+void* (*volatile g_copy)(void*, const void*, std::size_t) = std::memcpy;
+
 } // namespace
+
+__attribute__((noinline)) bool safe_copy(void* dst, const void* src, std::size_t n) {
+    __try {
+        g_copy(dst, src, n);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
 
 void* find_game() {
     static void* found = nullptr;
     if (found) return found;
+    if (launched_game() == Launched::other) return nullptr; // not FH2: no point searching
     SYSTEM_INFO si{};
     GetSystemInfo(&si);
     auto addr       = reinterpret_cast<uintptr_t>(si.lpMinimumApplicationAddress);
@@ -422,6 +446,10 @@ void check_updates(FH2Mod* m) {
     }
 }
 
+// In the MODS tab's section below.
+std::map<std::wstring, bool> online_choices();   // the player's "Load when playing online", per DLL (lower case)
+bool remembered_offline_only(const std::wstring& dll);
+
 FH2Mod* api_register(const FH2ModInfo* info) {
     if (!info || info->size < offsetof(FH2ModInfo, check_updates) + sizeof(int) || !info->name) return nullptr;
     auto m             = std::make_unique<FH2Mod>();
@@ -432,8 +460,27 @@ FH2Mod* api_register(const FH2ModInfo* info) {
     m->check_updates   = info->check_updates != 0;
     if (info->size >= offsetof(FH2ModInfo, description) + sizeof(const char*) && info->description)
         m->description = info->description;   // API 6
+    if (info->size >= offsetof(FH2ModInfo, offline_only) + sizeof(int))
+        m->offline_only = info->offline_only != 0;   // API 9
     m->wname           = widen(m->name);
     FH2Mod* raw        = m.get();
+    if (m->offline_only && g_online) {
+        std::scoped_lock lk{g_mu};
+        const auto choices = online_choices();
+        const auto chosen  = choices.find(lower_w(g_current_dll));
+        if (chosen == choices.end() || !chosen->second) {
+            // Its author says it shouldn't run online, and the player hasn't said otherwise. It
+            // isn't registered, so its fh2mod_init returns; it's remembered (platform-mods.txt),
+            // so the next online launch doesn't load it at all.
+            m->dll = g_current_dll;
+            for (auto& f : g_found)
+                if (lower_w(f.file) == lower_w(g_current_dll)) f.online_off = true;
+            log_line(m->name, m->version + " doesn't run in online play (its author says so), so it isn't started; "
+                                           "MODS > Installed mods has its \"Load when playing online\" switch");
+            g_held.push_back(std::move(m));
+            return nullptr;
+        }
+    }
     {
         std::scoped_lock lk{g_mu};
         m->dll = g_current_dll;
@@ -502,7 +549,7 @@ void* api_wait_for_game(uint32_t timeout_ms) {
     const ULONGLONG until = timeout_ms == 0xFFFFFFFFu ? ~0ull : GetTickCount64() + timeout_ms;
     for (;;) {
         if (void* b = find_game()) return b;
-        if (GetTickCount64() >= until) return nullptr;
+        if (GetTickCount64() >= until || launched_game() == Launched::other) return nullptr;
         Sleep(100);
     }
 }
@@ -595,6 +642,84 @@ const char* api_mod_version(const char* name) {
 
 // ---- loading mods --------------------------------------------------------------
 
+int api_playing_online() { return g_online ? 1 : 0; }
+
+// ---- online play (FH2MP) ---------------------------------------------------------
+//
+// FH2MP's launcher hands the game a session in data\bin\fh2mp-session.txt before starting it,
+// and removes the file when the game ends (FH2MP's own DLL reads it and never deletes it, as
+// Azimuth can start the game twice in one launch). It holds the player's token, so the platform
+// only looks for it and never reads it. FH2MP_TOKEN in the environment does the same for FH2MP's
+// tests. Either only counts while FH2MP.dll is in fh2-mods and turned on: FH2MP then plays
+// online with it, even with a session file a crashed launcher left behind.
+bool detect_online(const std::set<std::wstring>& off) {
+    std::error_code ec;
+    if (!fs::is_regular_file(g_azimuth / "fh2-mods" / "FH2MP.dll", ec) || off.count(L"fh2mp.dll")) return false;
+    wchar_t env[8];
+    if (GetEnvironmentVariableW(L"FH2MP_TOKEN", env, 8) > 0) return true;
+    return fs::is_regular_file(g_azimuth / "data" / "bin" / "fh2mp-session.txt", ec);
+}
+
+// Whether `dll` loads when playing online: the player's choice, else not if its author marked it
+// offline-only at an earlier launch, else yes. FH2MP itself always does.
+bool loads_online(const std::wstring& dll, const std::map<std::wstring, bool>& choices) {
+    if (lower_w(dll) == L"fh2mp.dll") return true;
+    if (const auto it = choices.find(lower_w(dll)); it != choices.end()) return it->second;
+    return !remembered_offline_only(dll);
+}
+
+// Whether a DLL exports fh2mod_init, read from the file without loading it: 1 yes, 0 no, -1
+// can't tell (then it's loaded as before).
+int exports_init_in(const char* file, std::size_t size) {
+    __try {
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(file);
+        if (size < 0x400 || dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 64 ||
+            static_cast<std::size_t>(dos->e_lfanew) + sizeof(IMAGE_NT_HEADERS64) > size)
+            return -1;
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(file + dos->e_lfanew);
+        if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) return -1;
+        const auto* sec    = IMAGE_FIRST_SECTION(nt);
+        const unsigned n   = nt->FileHeader.NumberOfSections;
+        auto at = [&](uint32_t rva) -> const char* { // the file offset of an RVA
+            for (unsigned i = 0; i < n; ++i)
+                if (rva >= sec[i].VirtualAddress && rva < sec[i].VirtualAddress + sec[i].SizeOfRawData &&
+                    sec[i].PointerToRawData + (rva - sec[i].VirtualAddress) < size)
+                    return file + sec[i].PointerToRawData + (rva - sec[i].VirtualAddress);
+            return nullptr;
+        };
+        const auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+        if (!dir.VirtualAddress) return 0;
+        const auto* ed = reinterpret_cast<const IMAGE_EXPORT_DIRECTORY*>(at(dir.VirtualAddress));
+        const auto* names = ed ? reinterpret_cast<const uint32_t*>(at(ed->AddressOfNames)) : nullptr;
+        if (!names) return ed ? 0 : -1;
+        for (DWORD i = 0; i < ed->NumberOfNames && i < 100000; ++i) {
+            const char* name = at(names[i]);
+            if (name && file + size - name > 12 && std::memcmp(name, "fh2mod_init", 12) == 0) return 1;
+        }
+        return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+
+int exports_init(const fs::path& dll) {
+    HANDLE f = CreateFileW(dll.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+    if (f == INVALID_HANDLE_VALUE) return -1;
+    LARGE_INTEGER size{};
+    int found = -1;
+    if (GetFileSizeEx(f, &size) && size.QuadPart > 0 && size.QuadPart < (1ll << 31))
+        if (HANDLE map = CreateFileMappingW(f, nullptr, PAGE_READONLY, 0, 0, nullptr)) {
+            if (const void* view = MapViewOfFile(map, FILE_MAP_READ, 0, 0, 0)) {
+                found = exports_init_in(static_cast<const char*>(view), static_cast<std::size_t>(size.QuadPart));
+                UnmapViewOfFile(view);
+            }
+            CloseHandle(map);
+        }
+    CloseHandle(f);
+    return found;
+}
+
 int call_init(FH2ModInitFn init, const FH2ModApi* api, DWORD* code) {
     __try {
         return init(api);
@@ -609,11 +734,25 @@ DWORD WINAPI load_mods(LPVOID) {
     std::error_code ec;
     fs::create_directories(g_azimuth / "fh2-mods", ec);
     g_log = _wfopen((g_azimuth / "fh2-mods" / "platform.log").c_str(), L"w");
+    {
+        FILE* copy = start_session();
+        std::scoped_lock lk{g_log_mu};
+        g_log_copy = copy;
+    }
     plog(std::string("FH2 Mod Platform ") + FH2MOD_PLATFORM_VERSION + " (API " + std::to_string(FH2MOD_API_VERSION) +
          ") in " + narrow(g_azimuth.wstring()));
     plog("loaded as " + narrow(g_self_name) + (g_copies.empty() ? "" : "; " + g_copies));
+    plog(session_line());
     plog(g_game.empty() ? "couldn't find the game's Mount folder; game text, file and database changes are off"
                         : "game folder " + narrow(g_game.wstring()));
+    // Azimuth 1.0.1 runs other Forza games too. Told to start one of those straight away, the
+    // platform does nothing at all.
+    if (const std::string other = other_game_on_command_line(); !other.empty()) {
+        plog("Azimuth was started for " + other + ", not Forza Horizon 2: no mods are loaded, and the platform "
+             "leaves the game alone");
+        SetEvent(g_mods_ready);
+        return 0;
+    }
     start_media_overrides();
 
     struct Loaded {
@@ -621,6 +760,7 @@ DWORD WINAPI load_mods(LPVOID) {
         HMODULE mod;
     };
     std::vector<Loaded> loaded;
+    std::vector<std::wstring> legacy; // mods from before the platform, loaded once the game is FH2
     std::vector<std::wstring> files;
     for (const auto& e : fs::directory_iterator(g_azimuth / "fh2-mods", ec))
         if (e.is_regular_file(ec) && lower(narrow(e.path().extension().wstring())) == ".dll")
@@ -628,6 +768,17 @@ DWORD WINAPI load_mods(LPVOID) {
     std::sort(files.begin(), files.end());
     std::vector<LoadedDll> dlls;
     const auto off = disabled_mods();
+    g_online       = detect_online(off);
+    const auto online_choice = online_choices();
+    if (g_online) plog("started from the FH2MP launcher (online play): mods set to stay off online aren't loaded");
+    // A DLL not loaded because the game is online: noted for the MODS tab.
+    auto stays_off_online = [&](const std::wstring& f) {
+        if (!g_online || loads_online(f, online_choice)) return false;
+        plog(narrow(f) + " is set to stay off when playing online; not loaded");
+        std::scoped_lock lk{g_mu};
+        g_found.back().online_off = true;
+        return true;
+    };
     // fh2wheel (github.com/iamAzoDx/fh2wheel, racing wheels with force feedback) ships its own
     // d3dcompiler_47.dll, a loader that does nothing but forward to the system compiler and load
     // fh2wheel.dll from the Azimuth folder. Only one d3dcompiler_47.dll can sit next to azimuth.exe,
@@ -643,6 +794,7 @@ DWORD WINAPI load_mods(LPVOID) {
             }
             if (off.count(lower_w(wheel))) {
                 plog("fh2wheel.dll (next to azimuth.exe) is turned off on the MODS tab; not loaded");
+            } else if (stays_off_online(wheel)) {
             } else if (GetModuleHandleW(path.c_str())) {
                 plog("fh2wheel.dll is already loaded (by fh2wheel's own loader?)");
                 std::scoped_lock lk{g_mu};
@@ -676,8 +828,19 @@ DWORD WINAPI load_mods(LPVOID) {
             plog(narrow(f) + " is turned off on the MODS tab; not loaded");
             continue;
         }
+        if (stays_off_online(f)) continue;
         // ALTERED_SEARCH_PATH: a mod's own dependencies resolve from fh2-mods first.
         const auto path = (g_azimuth / "fh2-mods" / f).wstring();
+        // A mod from before the platform changes the game by itself, so it waits until the game
+        // Azimuth starts is known to be FH2 (Azimuth 1.0.1 runs other Forza games too).
+        if (exports_init(path) == 0) {
+            plog(narrow(f) + " has no fh2mod_init (a mod from before the platform); it runs on its own, and "
+                 "loads once the game Azimuth starts is known to be Forza Horizon 2");
+            legacy.push_back(f);
+            std::scoped_lock lk{g_mu};
+            g_found.back().loaded = true; // as far as the MODS tab goes, which only FH2 shows
+            continue;
+        }
         if (HMODULE h = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) {
             loaded.push_back({f, h});
             {
@@ -712,6 +875,31 @@ DWORD WINAPI load_mods(LPVOID) {
         }
     }
     install_crash_handler(dlls);
+    watch_launched_game(
+        [legacy] {
+            for (const auto& f : legacy) {
+                const auto path = (g_azimuth / "fh2-mods" / f).wstring();
+                if (HMODULE h = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) {
+                    const auto* base = reinterpret_cast<const char*>(h);
+                    const auto* nt   = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
+                        base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
+                    add_crash_dll({f, base, nt->OptionalHeader.SizeOfImage});
+                    const auto v = version_string(h);
+                    plog("loaded " + narrow(f) + (v.empty() ? "" : " " + v) + " (a mod from before the platform)");
+                } else {
+                    const DWORD err = GetLastError();
+                    plog("FAILED to load " + narrow(f) + " (error " + std::to_string(err) + ")");
+                    std::scoped_lock lk{g_mu};
+                    for (auto& e : g_found)
+                        if (e.file == f) e.problem = "Windows couldn't load it (error " + std::to_string(err) + ").";
+                }
+            }
+        },
+        [legacy] {
+            for (const auto& f : legacy)
+                plog(narrow(f) + " isn't loaded: it's a mod from before the platform, which changes the game by "
+                     "itself");
+        });
     std::thread([] {
         // Azimuth sets up more of itself when Play is pressed.
         if (api_wait_for_game(0xFFFFFFFFu)) {
@@ -732,6 +920,17 @@ DWORD WINAPI load_mods(LPVOID) {
         }
         DWORD code   = 0;
         const int rc = call_init(init, &g_api, &code);
+        {
+            // register_mod turned it away (offline-only, and the game is online): that's not a problem
+            std::scoped_lock lk{g_mu};
+            bool held = false;
+            for (const auto& f : g_found)
+                if (lower_w(f.file) == lower_w(l.file)) held = f.online_off;
+            if (held && !code) {
+                g_current_dll.clear();
+                continue;
+            }
+        }
         std::string problem;
         if (code) {
             char b[16];
@@ -759,6 +958,8 @@ DWORD WINAPI load_mods(LPVOID) {
     build_database();
     settings_start(&g_api);
     plog(std::to_string(loaded.size()) + " mod(s) loaded");
+    start_save_snapshot();
+    write_session_status();
     SetEvent(g_mods_ready);
 
     // Tables written last time that no mod has edited by now are leftovers
@@ -792,9 +993,14 @@ DWORD WINAPI load_mods(LPVOID) {
 // loader skips them. fh2-mods\platform-mods.txt remembers each mod's name, version and
 // description from the last launch it was loaded, so a turned-off mod still shows by name.
 
+// fh2-mods\platform-online.txt (platform 2.8.0) holds the player's "Load when playing online" for
+// the mods they've set it on, as "<DLL><tab>1" or "0"; the others follow their author's
+// FH2ModInfo.offline_only, which platform-mods.txt remembers for the mods that aren't loaded.
+
 namespace {
 fs::path disabled_path() { return g_azimuth / "fh2-mods" / "platform-disabled.txt"; }
 fs::path known_path() { return g_azimuth / "fh2-mods" / "platform-mods.txt"; }
+fs::path online_path() { return g_azimuth / "fh2-mods" / "platform-online.txt"; }
 
 std::vector<std::wstring> read_lines(const fs::path& p) {
     std::vector<std::wstring> out;
@@ -830,7 +1036,45 @@ std::vector<std::wstring> split_tabs(const std::wstring& l) {
         else out.back() += c;
     return out;
 }
+
+std::map<std::wstring, bool> online_choices() {
+    std::map<std::wstring, bool> out;
+    for (const auto& l : read_lines(online_path())) {
+        const auto f = split_tabs(l);
+        if (f.size() >= 2 && !f[0].empty()) out[lower_w(f[0])] = f[1] != L"0";
+    }
+    return out;
+}
+
+// platform-mods.txt's sixth column: 1 when the mod's author marked it offline-only
+bool remembered_offline_only(const std::wstring& dll) {
+    for (const auto& l : read_lines(known_path())) {
+        const auto f = split_tabs(l);
+        if (f.size() > 5 && lower_w(f[0]) == lower_w(dll)) return f[5] == L"1";
+    }
+    return false;
+}
 } // namespace
+
+bool playing_online() { return g_online; }
+
+bool fh2mp_installed() {
+    std::error_code ec;
+    return fs::is_regular_file(g_azimuth / "fh2-mods" / "FH2MP.dll", ec);
+}
+
+void set_mod_online(const std::wstring& dll, bool on) {
+    auto choices = online_choices();
+    choices[lower_w(dll)] = on;
+    std::vector<std::wstring> lines;
+    for (const auto& [d, v] : choices) lines.push_back(d + L"\t" + (v ? L"1" : L"0"));
+    write_lines(online_path(),
+                L"# The mods' \"Load when playing online\" on MODS > Installed mods: 1 loads it when the game is started from the "
+                L"FH2MP launcher, 0 doesn't.\n",
+                lines);
+    log_line("", narrow(dll) + (on ? " now loads" : " now stays off") +
+                     " when playing online (MODS tab); takes effect the next time the game starts from the FH2MP launcher");
+}
 
 std::set<std::wstring> disabled_mods() {
     std::set<std::wstring> out;
@@ -861,6 +1105,7 @@ std::vector<ModEntry> mod_entries() {
     }
     std::vector<ModEntry> out;
     std::vector<std::wstring> remember;
+    const auto choices = online_choices();
     std::scoped_lock lk{g_mu};
     for (const auto& f : g_found) {
         ModEntry e;
@@ -868,30 +1113,38 @@ std::vector<ModEntry> mod_entries() {
         e.enabled      = !f.disabled;
         e.problem      = f.problem;
         e.platform_mod = f.has_init;
-        for (const auto& m : g_mods)
-            if (lower_w(m->dll) == lower_w(f.file)) {
-                e.mod         = m.get();
-                e.name        = m->name;
-                e.version     = m->version;
-                e.description = m->description;
-                e.repo        = m->repo;
-                e.platform_mod = true;
-                break;
-            }
+        e.online_off   = f.online_off;
+        bool told      = false;   // registered this launch, so its offline_only is known
+        for (const auto* list : {&g_mods, &g_held})
+            for (const auto& m : *list)
+                if (!told && lower_w(m->dll) == lower_w(f.file)) {
+                    e.mod          = list == &g_mods ? m.get() : nullptr;   // a held mod isn't running
+                    e.name         = m->name;
+                    e.version      = m->version;
+                    e.description  = m->description;
+                    e.repo         = m->repo;
+                    e.offline_only = m->offline_only;
+                    e.platform_mod = true;
+                    told           = true;
+                }
         if (!e.mod && lower_w(f.file) == L"fh2wheel.dll") {
             e.name        = "fh2wheel";
             e.description = "Racing wheels with force feedback, by iamAzoDx. Loaded by the platform from next to azimuth.exe, "
                             "in place of fh2wheel's own d3dcompiler_47.dll.";
             e.repo        = "iamAzoDx/fh2wheel";
-        } else if (!e.mod) {
+        } else if (!told) {
             if (auto it = known.find(lower_w(f.file)); it != known.end()) {
                 e.name    = narrow(it->second[1]);
                 e.version = narrow(it->second[2]);
                 if (it->second.size() > 3) e.description = narrow(it->second[3]);
                 if (it->second.size() > 4) e.repo = narrow(it->second[4]);
+                if (it->second.size() > 5) e.offline_only = it->second[5] == L"1";
                 e.platform_mod = true;
             }
         }
+        if (const auto c = choices.find(lower_w(f.file)); c != choices.end()) e.loads_online = c->second;
+        else e.loads_online = !e.offline_only;
+        if (lower_w(f.file) == L"fh2mp.dll") e.loads_online = true;
         // nothing told us its name: its file's name, without .dll, cut short if it's long
         if (e.name.find_first_not_of(" \t") == std::string::npos) {
             std::wstring stem = f.file;
@@ -905,10 +1158,12 @@ std::vector<ModEntry> mod_entries() {
         }
         if (e.mod || e.platform_mod)
             remember.push_back(f.file + L"\t" + widen(e.name) + L"\t" + widen(e.version) + L"\t" + widen(e.description) + L"\t" +
-                               widen(e.repo));
+                               widen(e.repo) + L"\t" + (e.offline_only ? L"1" : L"0"));
         out.push_back(e);
     }
-    write_lines(known_path(), L"# What the MODS tab remembers about each mod (DLL, name, version, description, GitHub repo).\n", remember);
+    write_lines(known_path(),
+                L"# What the MODS tab remembers about each mod (DLL, name, version, description, GitHub repo, offline only).\n",
+                remember);
     return out;
 }
 
@@ -945,7 +1200,9 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
             [](LPVOID) -> DWORD {
                 // Another copy of the platform may be loaded too (Azimuth 1.0.1 imports both names).
                 if (!this_copy_runs()) return 0;
-                g_game         = find_game_mount(g_azimuth);
+                // azimuth.exe --game=DIR starts the game in DIR, when that's FH2.
+                const fs::path started = command_line_game_folder();
+                g_game         = find_game_mount(g_azimuth, holds_fh2_exe(started) ? started : fs::path{});
                 g_azimuth_str  = g_azimuth.wstring();
                 g_game_str     = g_game.wstring();
                 g_api.size     = sizeof(FH2ModApi);
@@ -985,6 +1242,15 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.focus_page_element = pages_focus;
                 g_api.set_page_tile_text = pages_set_tile_text;
                 g_api.set_page_tile_colors = pages_set_tile_colors;
+                g_api.add_title_entry   = title_add;
+                g_api.title_started_by  = title_started_by;
+                g_api.playing_online    = api_playing_online;
+                g_api.session_id        = session_id;
+                g_api.session_log_path  = session_log_path;
+                g_api.request_save_snapshot = request_save_snapshot;
+                g_api.add_dump_memory   = add_dump_memory;
+                g_api.add_hotkey        = hotkey_add;
+                g_api.add_command       = command_add;
                 return load_mods(nullptr);
             },
             nullptr, 0, nullptr))

@@ -83,6 +83,8 @@ If two mods set the same key, the one loaded later wins, in alphabetical order o
 
 You don't need it for updates: register with `github_repo` and the platform checks your latest GitHub release (at most every six hours, remembered between launches, and again straight away when a different version of your mod is installed) and adds "MyMod 1.1.0 is available" itself when it's newer than your `version`. It compares `x.y.z` numbers, with or without a leading `v`, so tag releases to match your version. It also adds "Old FH2 Mod Platform: reinstall MyMod" when the installed platform is older than your `platform_version`.
 
+From platform 2.8.0 (API 9), `add_title_entry` adds a line there with a button of its own, like "(Y) START ON STORM ISLAND", and calls your code when the player presses it. Your code can have the platform start the game straight after, and `title_started_by` then tells your mod that this start was its entry's. There are four buttons for every mod together, so add one entry at most. [`api.md`](api.md#title-screen-entries-api-9) has the details.
+
 ## Replacing game files
 
 To swap out a whole file the game loads, such as a texture, an XML file or the Drivatar cache, use `set_file(mod, "drivatarglobalcache/DefaultCache.bin", data, size)` instead of writing into `mediaoverride` yourself. The path is relative to `media`, and a zip counts as a folder: `media\UI.zip\x.xml` is `"UI/x.xml"`. The platform makes sure only one mod replaces a given file and logs it when a second one tries. It also deletes the file once your mod stops claiming it, whether you call `clear_file` or the player removes your mod. Check the return value: 0 means you didn't get the file. These calls need API version 2, so check `api->api_version >= 2` first.
@@ -113,17 +115,19 @@ Azimuth maps the game, `forza_durango_release_final.exe`, into its own process w
 
 Only one build of the game is in circulation: the Xbox One build from 24 November 2015. Addresses in it are fixed, so mods can use offsets from the base. Even so, check that the code or data you're about to change looks the way you expect before you patch it, and log and skip if it doesn't. A wrong guess is then a missing feature, not a crash. [`game-notes.md`](game-notes.md) lists what's known about the build, and the existing mods are worth reading. FH2 Universal Radio redirects calls inside the game's FMOD radio, WheresMyBuddy swaps a virtual function on a save-game class, and [WreckingBall](https://github.com/Trinculo54/WreckingBall) hooks seventeen functions in the game's collision, physics and rendering code, checking that each looks right before it does.
 
+Before hunting for an address yourself, look in [`include/fh2game.h`](../include/fh2game.h) (platform 2.8.0). It names the places in the game's code and data that mods already use, `FH2_GAME_COLLISIONWORLD_GETPOLYS` and the like, with what each one is, which mods use it, and, as `FH2_GAME_..._BYTES`, the bytes the game has there for your check. It's a plain C header with nothing to link; include it next to `fh2mod.h`. When you find a new one, add it by pull request, with the bytes read from the exe on disk.
+
 ## Changing game code
 
 Hook through the platform (API 3) instead of patching memory yourself. `hook_function` detours a whole function, `hook_call` redirects one call instruction, and `hook_pointer` swaps a function pointer such as a vtable slot. The platform makes the patch, gives you the `original` to call on, and lets other mods hook the same code alongside you. It also refuses code that Extra Options has already changed, and lists your hooks in crash reports. [`api.md`](api.md#hooks-api-3) has the details and an example.
 
-Two rules matter. First, get the game's base from `wait_for_code`, not `wait_for_game`, before hooking game code, so Extra Options gets to patch first. Second, game code runs on many threads, so your detour can be called from any of them as soon as the hook is on. Set up everything it needs first, then call `enable_hooks`, and make the detour safe to run on several threads at once.
+Two rules matter. First, get the game's base from `wait_for_code`, not `wait_for_game`, before hooking game code, so Extra Options gets to patch first. It returns null when there's no FH2 to hook: Azimuth 1.0.1 can start other Forza games too, whose exes have the same name and address, and the platform refuses any hook into one of those ([`api.md`](api.md#game_base-and-wait_for_game)). Stop when it's null. Second, game code runs on many threads, so your detour can be called from any of them as soon as the hook is on. Set up everything it needs first, then call `enable_hooks`, and make the detour safe to run on several threads at once.
 
 If you can't use the platform's hooks for something (a patch in the middle of a function, say), still check the bytes are what you expect before you change them, and write them atomically.
 
 ## Switches in the game
 
-If players will want to turn parts of your mod on and off, or tune a number, give them rows on the Mods page (API 4; sliders API 5): Pause > Settings > MODS, shared by every mod. You pass the current value and get told when the player changes it; you keep saving it in your own settings file, as before. Rows that only work after a restart are marked so, and the game then offers to restart for the player. [`api.md`](api.md#the-mods-page-api-4-sliders-api-5) has the details and an example. Keep it to the main switches; fine-tuning still belongs in your ini.
+If players will want to turn parts of your mod on and off, or tune a number, give them rows on the Mods page (API 4; sliders API 5): Pause > Settings > MODS, shared by every mod. You pass the current value and get told when the player changes it; you keep saving it in your own settings file, as before. Rows that only work after a restart are marked so, and the game then offers to restart for the player. From platform 2.8.0 (API 9) a row can also offer named choices, like a button or a mode, instead of a number standing for one. [`api.md`](api.md#the-mods-page-api-4-sliders-api-5) has the details and an example. Keep it to the main switches; fine-tuning still belongs in your ini.
 
 ## Your own files
 
@@ -154,5 +158,6 @@ A few things keep mods from tripping over each other:
 - **Hook through the platform.** Your own copy of MinHook, or your own byte patches, can't see other mods' hooks, and the platform can't warn about clashes with them.
 - **Don't write into the game's own files.** Use the string-table, file and database functions, so that removing your mod puts everything back.
 - **Make your features switchable.** Give each one a setting, and when it's off, undo what you did, for example with `clear_strings`.
+- **Mind online play.** If your mod changes driving or what other players would see, set `offline_only` in your `FH2ModInfo` (platform 2.8.0), so it isn't loaded when the game is started from the FH2MP launcher, or check `playing_online()` and turn just that part off. [`api.md`](api.md#online-play-api-9) explains both.
 - **Don't take ages to start.** Do your setup on your own threads.
 - **Log what you change.** It's how people debug, you included.

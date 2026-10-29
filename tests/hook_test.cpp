@@ -13,6 +13,15 @@
 // they must leave the game's file lookup alone. "crash": a hooked function
 // crashes, and the report has to list the hooks.
 //
+// Azimuth 1.0.1 runs other Forza games too, with the same exe name and base
+// address (platform 2.8.0). "other-game": the exe mapped is another game's
+// (Forza Motorsport 5's, set up in data\azimuth.ini), so nothing may be hooked
+// or patched in it, wait_for_game and wait_for_code have to say so straight
+// away, and the mod from before the platform (Legacy.dll) mustn't load.
+// "skip-launcher": Azimuth is told to start that game straight away
+// (--skip-launcher with [launcher] game=7b35d917), so no mods load at all.
+// In the other phases, Legacy.dll loads once the game is FH2.
+//
 // Media overrides (2.7.3): without Extra Options the platform swaps the
 // game's file-lookup pointer (game+0x2E6EF28) for its own function; with
 // it, or with the game's code changed, the pointer stays the game's.
@@ -36,9 +45,43 @@ static std::string slurp(const fs::path& f) {
 }
 static bool has(const std::string& s, const char* x) { return s.find(x) != std::string::npos; }
 
+#include "../include/fh2game.h"
+
+// include/fh2game.h: what the game's exe has on disk at every entry with bytes (platform 2.8.0).
+static void check_fh2game(const wchar_t* exe) {
+    const std::string file = slurp(exe);
+    if (file.size() < 4096) return;
+    const auto* nt  = reinterpret_cast<const IMAGE_NT_HEADERS64*>(file.data() + reinterpret_cast<const IMAGE_DOS_HEADER*>(file.data())->e_lfanew);
+    const auto* sec = IMAGE_FIRST_SECTION(nt);
+    auto at = [&](uint32_t rva) -> const char* {
+        for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i)
+            if (rva >= sec[i].VirtualAddress && rva < sec[i].VirtualAddress + sec[i].SizeOfRawData)
+                return file.data() + sec[i].PointerToRawData + (rva - sec[i].VirtualAddress);
+        return nullptr;
+    };
+    struct Named {
+        const char* name;
+        uint32_t at;
+        const char* bytes;
+        std::size_t n;
+    };
+    static const Named named[] = {
+#include "fh2game_checks.inc"
+    };
+    int bad = 0;
+    for (const Named& e : named) {
+        const char* p = at(e.at);
+        if (!p || std::memcmp(p, e.bytes, e.n) != 0) {
+            std::printf("FAIL fh2game.h: FH2_GAME_%s isn't what the game has there\n", e.name);
+            ++bad;
+        }
+    }
+    CHECK(bad == 0 && sizeof named / sizeof *named >= 40);
+}
+
 // Maps the exe the way Azimuth does, enough for its bytes and protections:
 // sections at their addresses, code read/execute, read-only data read-only.
-static char* map_game(const wchar_t* path, bool change_volume_code) {
+static char* map_game(const wchar_t* path, bool change_volume_code, bool other_game = false) {
     std::ifstream in{path, std::ios::binary};
     std::vector<char> file((std::istreambuf_iterator<char>(in)), {});
     if (file.size() < 4096) return nullptr;
@@ -63,9 +106,11 @@ static char* map_game(const wchar_t* path, bool change_volume_code) {
     }
     // What Extra Options would do: change FMOD::Sound::getUserData's first bytes.
     DWORD old = 0;
-    VirtualProtect(base + 0x199FBE0, 1, PAGE_EXECUTE_READWRITE, &old);
-    base[0x199FBE0] = static_cast<char>(0xCC);
-    VirtualProtect(base + 0x199FBE0, 1, old, &old);
+    if (!other_game) {
+        VirtualProtect(base + 0x199FBE0, 1, PAGE_EXECUTE_READWRITE, &old);
+        base[0x199FBE0] = static_cast<char>(0xCC);
+        VirtualProtect(base + 0x199FBE0, 1, old, &old);
+    }
     if (change_volume_code) { // the game's folder volume constructor, used by the media overrides
         VirtualProtect(base + 0x11E05A0, 1, PAGE_EXECUTE_READWRITE, &old);
         base[0x11E05A0] = static_cast<char>(0xCC);
@@ -95,7 +140,8 @@ static LONG WINAPI after_crash(EXCEPTION_POINTERS*) {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc < 3) {
-        std::printf("usage: azimuth.exe plain|eo|wine-builtin|changed-code|crash <forza_durango_release_final.exe>\n");
+        std::printf("usage: azimuth.exe plain|eo|wine-builtin|changed-code|crash|other-game|skip-launcher "
+                    "<forza_durango_release_final.exe> [--skip-launcher]\n");
         return 2;
     }
     const std::wstring phase = argv[1];
@@ -103,6 +149,8 @@ int wmain(int argc, wchar_t** argv) {
         std::ofstream{"crash.txt"} << "1";
         SetUnhandledExceptionFilter(after_crash);
     }
+    const bool other_game = phase == L"other-game" || phase == L"skip-launcher";
+    if (other_game) std::ofstream{"other_game.txt"} << "1"; // for HookMod
     if (phase == L"eo") CHECK(GetProcAddress(LoadLibraryW(L".\\winmm.dll"), "Fh2TweaksStatus")); // Extra Options' proxy
     if (phase == L"wine-builtin") {
         HMODULE w = LoadLibraryW(L".\\winmm.dll"); // Wine's own, though it says it's this one
@@ -110,8 +158,9 @@ int wmain(int argc, wchar_t** argv) {
     }
     CHECK(LoadLibraryW(L"d3dcompiler_47.dll") != nullptr);
     Sleep(500);
-    char* game = map_game(argv[2], phase == L"changed-code");
+    char* game = map_game(argv[2], phase == L"changed-code", other_game);
     CHECK(game != nullptr); // "press Play"
+    if (phase == L"plain") check_fh2game(argv[2]);
     if (phase == L"eo") {
         Sleep(3000);
         std::ofstream{"FH2_ExtraOptions.log", std::ios::app} << "AZIMUTH: winmm proxy initialized; original TLS helper retained.\r\n";
@@ -120,7 +169,7 @@ int wmain(int argc, wchar_t** argv) {
     for (int i = 0; i < 300; ++i) {
         Sleep(100);
         log = slurp(L"fh2-mods\\platform.log");
-        if (has(log, "hook tests done")) break;
+        if (has(log, "hook tests done") || has(log, "no mods are loaded")) break;
     }
     if (phase == L"crash") {
         Sleep(10000);
@@ -130,7 +179,38 @@ int wmain(int argc, wchar_t** argv) {
     Sleep(200);
     log = slurp(L"fh2-mods\\platform.log");
     std::printf("---- platform.log\n%s----\n", log.c_str());
-    CHECK(has(log, "FH2 Mod Platform 2.7.4 (API 8)"));
+    CHECK(has(log, "FH2 Mod Platform 2.8.0 (API 9)"));
+    if (other_game) {
+        Sleep(500); // whatever the platform would still do once the game is up
+        log = slurp(L"fh2-mods\\platform.log");
+        if (phase == L"skip-launcher") {
+            CHECK(has(log, "Azimuth was started for Forza Motorsport 5 (title 7b35d917), from --skip-launcher, and "
+                           "[launcher] game=7b35d917 in data\\azimuth.ini, not Forza Horizon 2: no mods are loaded"));
+            CHECK(!has(log, "loaded HookMod.dll") && !has(log, "[HookA]"));
+            CHECK(!has(log, "media overrides"));
+        } else {
+            CHECK(has(log, "game: Azimuth started Forza Motorsport 5 (title 7b35d917), not Forza Horizon 2. The "
+                           "platform and its mods leave it alone"));
+            CHECK(has(log, "hook tests done, 0 failed"));
+            CHECK(has(log, "[HookA] can't hook function 0x140001000 (other game's code): it's in Forza Motorsport 5 "
+                           "(title 7b35d917), which the platform leaves alone"));
+            CHECK(has(log, "[HookA] can't make patch 0x140001000 (other game's bytes): it's in Forza Motorsport 5"));
+            CHECK(has(log, "[HookA] can't hook pointer 0x140002000"));
+            CHECK(has(log, "[HookA] can't hook instruction 0x140001000"));
+            CHECK(has(log, "Legacy.dll isn't loaded: it's a mod from before the platform"));
+            CHECK(!has(log, "hooks: game code is ready"));
+            CHECK(!has(log, "media overrides: hooked"));
+        }
+        CHECK(!fs::exists("legacy_ran.txt"));
+        CHECK(!has(log, "loaded Legacy.dll"));
+        std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
+        std::fflush(stdout);
+        TerminateProcess(GetCurrentProcess(), fails);
+    }
+    CHECK(has(log, "game: Azimuth started Forza Horizon 2 (the 24 Nov 2015 exe the mods are made for)"));
+    CHECK(has(log, "Legacy.dll has no fh2mod_init (a mod from before the platform); it runs on its own, and loads "
+                   "once the game Azimuth starts is known to be Forza Horizon 2"));
+    CHECK(has(log, "loaded Legacy.dll") && fs::exists("legacy_ran.txt"));
     CHECK(has(log, "(ivictim mov)") && has(log, "(mark b) (shared with HookA, HookB)"));
     CHECK(has(log, "(prolog): it's in the function's prolog"));
     CHECK(has(log, "(mid-instruction): it isn't the start of an instruction"));

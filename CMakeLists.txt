@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 # Bump VERSION before tagging a release (the tag build checks they match).
-project(fh2_mod_platform VERSION 2.7.4 LANGUAGES C CXX RC)
+project(fh2_mod_platform VERSION 2.8.0 LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -51,7 +51,7 @@ set_source_files_properties(${_sqlite_src} PROPERTIES
     COMPILE_DEFINITIONS "SQLITE_OMIT_LOAD_EXTENSION;SQLITE_DEFAULT_MEMSTATUS=0")
 
 add_library(fh2mod_platform SHARED src/platform.cpp src/strings.cpp src/updates.cpp src/files.cpp
-            src/database.cpp src/media_overrides.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
+            src/database.cpp src/media_overrides.cpp src/titles.cpp src/session.cpp src/hotkeys.cpp src/commands.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
 target_include_directories(fh2mod_platform PRIVATE third_party/minhook/include ${_minhook} third_party/sqlite)
 if(NOT MSVC)
     # InterlockedCompareExchange128, for rewriting call sites atomically.
@@ -87,6 +87,15 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     endif()
     set_target_properties(hello_mod PROPERTIES OUTPUT_NAME HelloMod PREFIX "")
 
+    # fh2mod.exe: runs mods' commands in the running game (docs/api.md, Commands).
+    add_executable(fh2mod_cli tools/fh2mod.cpp)
+    target_compile_definitions(fh2mod_cli PRIVATE UNICODE _UNICODE)
+    target_compile_options(fh2mod_cli PRIVATE ${_warn})
+    if(NOT MSVC)
+        target_link_options(fh2mod_cli PRIVATE -municode -static)
+    endif()
+    set_target_properties(fh2mod_cli PROPERTIES OUTPUT_NAME fh2mod)
+
     option(FH2MOD_TESTS "Build the offline test" OFF)
     if(FH2MOD_TESTS)
         add_executable(platform_test tests/platform_test.cpp src/strings.cpp src/updates.cpp ${_sqlite_src})
@@ -116,6 +125,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_library(fake_winmm SHARED tests/fake_winmm.cpp)
         set_target_properties(fake_winmm PROPERTIES OUTPUT_NAME winmm PREFIX "")
         target_link_options(fake_winmm PRIVATE -static)
+        add_library(offline_mod SHARED tests/offline_mod.cpp)
+        target_link_libraries(offline_mod PRIVATE fh2mod_api)
+        set_target_properties(offline_mod PROPERTIES OUTPUT_NAME OfflineMod PREFIX "")
+        target_link_options(offline_mod PRIVATE -static)
         add_library(legacy_mod SHARED tests/legacy_mod.cpp)
         set_target_properties(legacy_mod PROPERTIES OUTPUT_NAME Legacy PREFIX "")
         target_link_options(legacy_mod PRIVATE -static)

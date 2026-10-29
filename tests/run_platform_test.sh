@@ -15,7 +15,7 @@ dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
 mkdir -p "$dir/fh2-mods" "$dir/FH2/Mount/media/Stripped/StringTables" "$dir/FH2/Mount/mediaoverride/UI"
 cp "$b/platform_test.exe" "$dir/azimuth.exe"
-cp "$b/d3dcompiler_47.dll" "$b/database_test.exe" "$b/DbMod.dll" "$dir/"
+cp "$b/d3dcompiler_47.dll" "$b/database_test.exe" "$b/DbMod.dll" "$b/fh2mod.exe" "$dir/"
 cp "$b/AaaMod.dll" "$b/HelloMod.dll" "$b/TestMod.dll" "$b/Legacy.dll" "$dir/fh2-mods/"
 cp "$1" "$dir/FH2/Mount/media/Stripped/StringTables/EN.zip"
 cp "$2" "$dir/FH2/Mount/media/Stripped/gamedbRC.slt"
@@ -32,3 +32,16 @@ rm fh2-mods/TestMod.dll
 wine azimuth.exe removed
 wine database_test.exe
 wine azimuth.exe crash
+# Online play (platform 2.8.0): a stand-in FH2MP.dll (it only has to be there), OfflineMod, and
+# the session file the FH2MP launcher writes.
+rm -f crash.txt
+cp "$b/Legacy.dll" fh2-mods/FH2MP.dll
+cp "$b/OfflineMod.dll" fh2-mods/
+mkdir -p data/bin
+printf 'xuid=1\ntoken=test\n' > data/bin/fh2mp-session.txt
+wine azimuth.exe online-first
+wine azimuth.exe online
+printf 'OfflineMod.dll\t1\nHelloMod.dll\t0\n' > fh2-mods/platform-online.txt
+wine azimuth.exe online-chosen
+printf 'fh2mp.dll\n' > fh2-mods/platform-disabled.txt
+wine azimuth.exe fh2mp-off

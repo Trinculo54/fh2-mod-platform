@@ -5,7 +5,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
@@ -15,6 +17,7 @@ struct FH2Mod {
     std::string name, version, repo, platform_version, description;
     std::wstring wname, dll;
     bool check_updates = true;
+    bool offline_only  = false;      // FH2ModInfo.offline_only (API 9)
     // table (lower case) -> edits
     std::map<std::string, std::map<uint16_t, std::wstring>> set;
     std::map<std::string, std::map<std::wstring, std::wstring>> repl;
@@ -31,9 +34,31 @@ namespace fh2platform {
 void log_line(const std::string& who, const std::string& text);
 inline void plog(const std::string& text) { log_line("", text); }
 
-// Base of the mapped game exe, or nullptr.
+// Base of the mapped game exe, or nullptr (always, once Azimuth has started another game).
 void* find_game();
 constexpr uint32_t kGameSizeOfImage = 0x03A18000u;
+// Copies n bytes, false if any of them can't be read or written; dst may then hold part of the copy,
+// so don't use it. For memory that can change under the platform: the game's image while Azimuth
+// maps it, or a region freed after VirtualQuery.
+bool safe_copy(void* dst, const void* src, std::size_t n);
+
+// titles.cpp: which game Azimuth started. Azimuth 1.0.1 runs several Forza games, all from a
+// forza_durango_release_final.exe mapped at 0x140000000 (platform 2.8.0).
+enum class Launched { not_yet, fh2, other };
+Launched launched_game();
+const char* launched_game_name(); // the other game, for a log line or crash report ("" until then)
+// A game other than FH2 that Azimuth's command line starts straight away (--skip-launcher, or
+// --game=DIR), with how it was told, for the log; "" for FH2, or when the launcher shows first.
+// When it's another game, launched_game() says so from then on.
+std::string other_game_on_command_line();
+std::filesystem::path command_line_game_folder(); // --game=DIR, else empty
+bool holds_fh2_exe(const std::filesystem::path& folder); // in its Mount folder, or itself
+// The other game's name when `p` is in a game exe mapped at 0x140000000 that isn't FH2's
+// 24 Nov 2015 one, else "". Nothing is hooked or patched there.
+std::string other_game_at(const void* p);
+// Watches for Azimuth mapping the game, says in platform.log which one it is, and then calls
+// `fh2` or `other` on its own thread.
+void watch_launched_game(std::function<void()> fh2, std::function<void()> other);
 
 std::filesystem::path azimuth_dir();
 std::filesystem::path game_mount(); // empty if not found
@@ -78,6 +103,9 @@ int pages_set_slot(FH2Mod* mod, const char* page_key, int slot, int value);
 int pages_focus(FH2Mod* mod, const char* page_key, const char* name);
 int pages_set_tile_text(FH2Mod* mod, const char* page_key, const char* text);
 int pages_set_tile_colors(FH2Mod* mod, const char* page_key, uint32_t background, uint32_t text);
+// Title-screen entries (API 9).
+int title_add(FH2Mod* mod, const FH2TitleEntry* entry);
+const char* title_started_by(FH2Mod* mod);
 // After every fh2mod_init: writes the pages and hooks the game if any mod added a row.
 void settings_start(const FH2ModApi* api);
 
@@ -89,13 +117,38 @@ struct ModEntry {
     std::string problem;              // why it didn't load or start ("" if it did)
     bool platform_mod = false;        // has fh2mod_init (an old-style mod doesn't register)
     FH2Mod* mod = nullptr;            // when loaded and registered
+    bool offline_only = false;        // its author says it shouldn't run online (FH2ModInfo.offline_only)
+    bool loads_online = true;         // loaded when playing online (the player's choice, else !offline_only)
+    bool online_off = false;          // not running this time because the game is online (FH2MP)
 };
 std::vector<ModEntry> mod_entries();  // in load order, turned-off ones included
 // fh2-mods\platform-disabled.txt: the DLLs the MODS tab turned off (lower case).
 std::set<std::wstring> disabled_mods();
 void set_mod_enabled(const std::wstring& dll, bool on);
+// Online play (platform 2.8.0): the game was started from the FH2MP launcher. Decided once,
+// before the mods load.
+bool playing_online();
+bool fh2mp_installed();               // FH2MP.dll is in fh2-mods (turned on or not)
+// fh2-mods\platform-online.txt: the player's choice per DLL, "Load when playing online".
+void set_mod_online(const std::wstring& dll, bool on);
 // The latest release of a mod on GitHub, once checked ("" before that, or if unknown).
 std::string latest_known(const FH2Mod* m);
+
+// session.cpp: this run of the game (API 9). start_session makes the id and opens the copy of
+// platform.log that fh2-mods\platform-logs keeps; session_line is platform.log's line about it.
+FILE* start_session();
+std::string session_line();
+const char* session_id();
+const wchar_t* session_log_path(FH2Mod* mod, const wchar_t* folder, uint32_t keep);
+// fh2-mods\platform-session.json: rewritten as the mods load and the command pipe starts, and
+// marked crashed (with the report's name, relative to fh2-mods) by the crash handler.
+void write_session_status();
+void set_session_pipe(const std::string& name);
+void write_session_crashed(const wchar_t* fh2mods_dir, const char* report);
+// Copies of the saves folder that mods ask for from fh2mod_init (API 9), made once they've all
+// returned (start_save_snapshot).
+int request_save_snapshot(FH2Mod* mod, const char* reason, uint32_t keep);
+void start_save_snapshot();
 
 // crash.cpp
 struct LoadedDll {
@@ -104,6 +157,14 @@ struct LoadedDll {
     std::size_t size;
 };
 void install_crash_handler(const std::vector<LoadedDll>& mods);
+void add_crash_dll(const LoadedDll& dll); // one loaded later (a mod from before the platform)
 void recheck_crash_handler();
+void add_dump_memory(FH2Mod* mod, const void* p, std::size_t n); // memory a mod wants in every dump (API 9)
+
+// hotkeys.cpp: keys and controller chords that call mods back, with rows on the Mods page (API 9).
+int hotkey_add(FH2Mod* mod, const FH2Hotkey* hotkey);
+
+// commands.cpp: mods' commands, run through a named pipe (API 9).
+int command_add(FH2Mod* mod, const char* name, const char* help, FH2CommandFn fn, void* user);
 
 } // namespace fh2platform

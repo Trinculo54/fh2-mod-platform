@@ -102,11 +102,8 @@ int mount_folder(void* filesystem, const char* folder, unsigned priority) {
 
 // Returns a line for the log, or "" when it's too early (no root volume yet).
 std::string mount_all(void* filesystem) {
-    __try {
-        if (!*reinterpret_cast<void**>(static_cast<char*>(filesystem) + 0x68)) return {};
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return {};
-    }
+    void* root = nullptr;
+    if (!safe_copy(&root, static_cast<char*>(filesystem) + 0x68, sizeof root) || !root) return {};
     int expected = 0;
     if (!g_state.compare_exchange_strong(expected, 1)) return {};
     int over = 0, pc = 0;
@@ -177,24 +174,18 @@ bool disk_bytes(const Disk& d, uint32_t rva, void* out, DWORD n) {
 bool same_as_disk(const Disk& d, uint32_t rva, DWORD n) {
     unsigned char disk[32], mem[32];
     if (n > sizeof disk || !disk_bytes(d, rva, disk, n)) return false;
-    __try {
-        std::memcpy(mem, g_base + rva, n);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-    return std::memcmp(disk, mem, n) == 0;
+    return safe_copy(mem, g_base + rva, n) && std::memcmp(disk, mem, n) == 0;
 }
 
 bool header_is_game(const char* base) {
-    __try {
-        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-        if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 64 || dos->e_lfanew > 0x800) return false;
-        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-        return nt->Signature == IMAGE_NT_SIGNATURE && nt->FileHeader.TimeDateStamp == kTimestamp &&
-               nt->OptionalHeader.SizeOfImage == kGameSizeOfImage;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    // A copy of the headers' page, as Azimuth may still be writing (or unmapping) it.
+    static char head[0x1000];
+    if (!safe_copy(head, base, sizeof head)) return false;
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(head);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 64 || dos->e_lfanew > 0x800) return false;
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(head + dos->e_lfanew);
+    return nt->Signature == IMAGE_NT_SIGNATURE && nt->FileHeader.TimeDateStamp == kTimestamp &&
+           nt->OptionalHeader.SizeOfImage == kGameSizeOfImage;
 }
 
 bool committed(const void* p) {
@@ -210,11 +201,8 @@ bool executable(const void* p) {
 }
 
 uint64_t read_slot(void** slot) {
-    __try {
-        return reinterpret_cast<uint64_t>(*slot);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
+    uint64_t v = 0;
+    return safe_copy(&v, slot, sizeof v) ? v : 0;
 }
 
 void watch() {
@@ -222,6 +210,7 @@ void watch() {
     // millisecond, a full search now and then.
     char* base = nullptr;
     for (unsigned i = 0; !base; ++i) {
+        if (launched_game() == Launched::other) return; // not FH2: its files are left to it
         const auto* pref = reinterpret_cast<const char*>(kPreferredBase);
         if (committed(pref) && header_is_game(pref)) base = const_cast<char*>(pref);
         else if (i % 50 == 49) base = static_cast<char*>(find_game());

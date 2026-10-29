@@ -18,7 +18,10 @@ Mod makers: this zip has
   d3dcompiler_47.dll        the platform, to test with
   DWrite.dll                the same file, for Azimuth 1.0.1 and later
   include\fh2mod.h          the API (C/C++)
+  include\fh2game.h         names for the game addresses mods use
   examples\HelloMod.dll     an example mod; put it in fh2-mods to try it
+  tools\fh2mod.exe          runs mods' commands in the running game:
+                            fh2mod list, fh2mod <mod> <command> [args]
 Docs, the example's source and build setup:
   https://github.com/Trinculo54/FH2-Mod-Platform
 
