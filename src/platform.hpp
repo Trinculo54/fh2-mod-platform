@@ -37,6 +37,10 @@ inline void plog(const std::string& text) { log_line("", text); }
 // Base of the mapped game exe, or nullptr (always, once Azimuth has started another game).
 void* find_game();
 constexpr uint32_t kGameSizeOfImage = 0x03A18000u;
+// Copies n bytes, false if any of them can't be read or written; dst may then hold part of the copy,
+// so don't use it. For memory that can change under the platform: the game's image while Azimuth
+// maps it, or a region freed after VirtualQuery.
+bool safe_copy(void* dst, const void* src, std::size_t n);
 
 // titles.cpp: which game Azimuth started. Azimuth 1.0.1 runs several Forza games, all from a
 // forza_durango_release_final.exe mapped at 0x140000000 (platform 2.8.0).

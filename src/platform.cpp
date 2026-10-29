@@ -345,16 +345,33 @@ bool readable(const void* p, std::size_t n) {
     return static_cast<const char*>(p) + n <= static_cast<const char*>(mbi.BaseAddress) + mbi.RegionSize;
 }
 
+// The headers are copied, not read in place: a region can be freed or changed between VirtualQuery
+// and the read (Azimuth mapping the game, another thread freeing memory), and a plain read then
+// faults in whichever thread is looking.
 bool is_game(const char* base) {
-    if (!readable(base, 0x1000)) return false;
-    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 64 || dos->e_lfanew > 0x800) return false;
-    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-    return nt->Signature == IMAGE_NT_SIGNATURE && nt->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 &&
-           nt->FileHeader.TimeDateStamp == kTimestamp && nt->OptionalHeader.SizeOfImage == kSizeOfImage;
+    IMAGE_DOS_HEADER dos;
+    IMAGE_NT_HEADERS64 nt;
+    if (!readable(base, 0x1000) || !safe_copy(&dos, base, sizeof dos)) return false;
+    if (dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < 64 || dos.e_lfanew > 0x800) return false;
+    if (!safe_copy(&nt, base + dos.e_lfanew, sizeof nt)) return false;
+    return nt.Signature == IMAGE_NT_SIGNATURE && nt.FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 &&
+           nt.FileHeader.TimeDateStamp == kTimestamp && nt.OptionalHeader.SizeOfImage == kSizeOfImage;
 }
 
+// clang's __try only catches a fault inside a call made in the block, not in a plain load or an
+// inlined memcpy, so safe_copy's copy goes through a pointer the compiler can't see through.
+void* (*volatile g_copy)(void*, const void*, std::size_t) = std::memcpy;
+
 } // namespace
+
+__attribute__((noinline)) bool safe_copy(void* dst, const void* src, std::size_t n) {
+    __try {
+        g_copy(dst, src, n);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
 
 void* find_game() {
     static void* found = nullptr;

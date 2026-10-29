@@ -68,19 +68,6 @@ using Method    = void (*)(void*);
 using Mount     = uint8_t (*)(void*, const GameString*, void**, unsigned, uint8_t, uint8_t, const void*);
 using Exists    = uint8_t (*)(void*, const GameString*);
 
-// Copies n bytes, false if any of them can't be read or written. clang's __try only catches a fault
-// inside a call made in the block, not in a plain load or an inlined memcpy, so the copy goes through
-// a pointer the compiler can't see through.
-void* (*volatile g_copy)(void*, const void*, std::size_t) = std::memcpy;
-__attribute__((noinline)) bool safe_copy(void* dst, const void* src, std::size_t n) {
-    __try {
-        g_copy(dst, src, n);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
 char* g_base = nullptr;
 Resolve g_resolve = nullptr;
 Exists g_exists   = nullptr;
