@@ -5,7 +5,8 @@
 //   FH2\Mount\mediaoverride\UI\handmade.xml (an override placed by hand)
 //   azimuth.exe <phase> [fh2.exe]
 // phase "full": everything installed; "removed": TestMod.dll deleted;
-// "crash": AaaMod crashes on purpose; then, with an FH2MP.dll, OfflineMod.dll and FH2MP's
+// "crash": AaaMod crashes on purpose; "crash-chained": a crash handler installed after the
+// platform's passes crashes on to it; then, with an FH2MP.dll, OfflineMod.dll and FH2MP's
 // session file: "online-first", "online", "online-chosen" (the player's choices) and
 // "fh2mp-off" (FH2MP turned off on the MODS tab).
 #include "strings.hpp"
@@ -15,6 +16,7 @@
 
 #include "sqlite3.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -140,6 +142,96 @@ static char* map_image(const wchar_t* path) {
     return base;
 }
 
+// The "crash-chained" phase (platform 2.8.1): a crash handler installed after the platform's that
+// passes crashes on to the one it replaced, as the C runtime's does. 10 s after the game is found
+// the platform puts its own back in front, and a crash must then go through each of them once,
+// not back and forth between them until the stack overflows.
+static LPTOP_LEVEL_EXCEPTION_FILTER g_replaced = nullptr;
+static int g_chained_calls                     = 0;
+static bool g_report_first                     = false;
+static std::vector<fs::path> g_old_reports;
+
+static int count(const std::string& s, const char* what) {
+    int n = 0;
+    for (std::size_t at = s.find(what); at != std::string::npos; at = s.find(what, at + 1)) ++n;
+    return n;
+}
+
+static LONG WINAPI chained_handler(EXCEPTION_POINTERS* ep) {
+    if (++g_chained_calls == 1)
+        g_report_first = has(slurp("fh2-mods\\platform.log"), "crash report saved in fh2-mods\\crashes");
+    if (g_chained_calls > 50) {
+        std::printf("FAIL the crash handlers called each other %d times, on their way to a stack overflow\n",
+                    g_chained_calls);
+        std::fflush(stdout);
+        TerminateProcess(GetCurrentProcess(), 1);
+    }
+    return g_replaced ? g_replaced(ep) : EXCEPTION_CONTINUE_SEARCH;
+}
+
+static LONG WINAPI after_chained_crash(EXCEPTION_POINTERS*) {
+    // The handler that was there before the platform's: the crash ends here.
+    std::vector<fs::path> reports;
+    for (const auto& e : fs::directory_iterator("fh2-mods\\crashes"))
+        if (e.path().extension() == ".txt" &&
+            std::find(g_old_reports.begin(), g_old_reports.end(), e.path()) == g_old_reports.end())
+            reports.push_back(e.path());
+    const std::string report = reports.size() == 1 ? slurp(reports[0]) : "";
+    std::printf("---- crash report\n%s----\n", report.c_str());
+    CHECK(g_chained_calls == 1);   // the other handler ran once,
+    CHECK(g_report_first);         // after the platform's, which was back in front
+    CHECK(reports.size() == 1);
+    CHECK(has(report, "CRASH: access violation (0xC0000005) at azimuth.exe+0x") && has(report, "writing address 0x0"));
+    CHECK(count(slurp("fh2-mods\\platform.log"), "crash report saved in fh2-mods\\crashes") == 1);
+    std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
+    std::fflush(stdout);
+    TerminateProcess(GetCurrentProcess(), fails);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+// FH2's exe header where Azimuth maps it: enough for the platform to find "the game".
+static void fake_game() {
+    auto* base = static_cast<char*>(VirtualAlloc(reinterpret_cast<void*>(0x140000000ull), 0x3A18000,
+                                                 MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    if (!base) return;
+    auto* dos     = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    dos->e_magic  = IMAGE_DOS_SIGNATURE;
+    dos->e_lfanew = 0x100;
+    auto* nt                       = reinterpret_cast<IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+    nt->Signature                  = IMAGE_NT_SIGNATURE;
+    nt->FileHeader.Machine         = IMAGE_FILE_MACHINE_AMD64;
+    nt->FileHeader.TimeDateStamp   = 0x565501ED; // 24 Nov 2015
+    nt->OptionalHeader.SizeOfImage = 0x3A18000;
+}
+
+static int crash_chained() {
+    std::string log;
+    for (int i = 0; i < 250 && !has(log, "mod(s) loaded"); ++i) {
+        Sleep(100);
+        log = slurp(L"fh2-mods\\platform.log");
+    }
+    g_replaced = SetUnhandledExceptionFilter(chained_handler);   // after the platform's
+    fake_game();   // and 10 s from now the platform puts its own back in front
+    const char* back = "crash reports: another crash handler was installed after the platform's; both run";
+    for (int i = 0; i < 300 && !has(log, back); ++i) {
+        Sleep(100);
+        log = slurp(L"fh2-mods\\platform.log");
+    }
+    CHECK(has(log, "mod(s) loaded") && has(log, back));
+    if (fails) {
+        std::printf("---- platform.log\n%s----\n\n%d FAILED\n", log.c_str(), fails);
+        std::fflush(stdout);
+        TerminateProcess(GetCurrentProcess(), fails);
+    }
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator("fh2-mods\\crashes", ec)) g_old_reports.push_back(e.path());
+    *static_cast<volatile int*>(nullptr) = 1;
+    Sleep(10000);
+    std::printf("FAIL no crash\n");
+    TerminateProcess(GetCurrentProcess(), 1);
+    return 1;
+}
+
 int wmain(int argc, wchar_t** argv) {
     const std::wstring phase = argc > 1 ? argv[1] : L"full";
     // Update-check cache: 6 hours, for the same version, never older than it.
@@ -156,12 +248,14 @@ int wmain(int argc, wchar_t** argv) {
         std::ofstream{"crash.txt"} << "1";
         SetUnhandledExceptionFilter(after_crash); // Windows' (or Azimuth's) handler, to the platform
     }
+    if (phase == L"crash-chained") SetUnhandledExceptionFilter(after_chained_crash);
     if (phase == L"full") {   // a saves folder, for the snapshot TestMod asks for (platform 2.8.0)
         fs::create_directories(L"data\\titles\\1A96545B\\saves\\1A96545B");
         std::ofstream{"data\\titles\\1A96545B\\saves\\1A96545B\\test.sav", std::ios::binary} << "save data";
     }
     HMODULE p = LoadLibraryW(L"d3dcompiler_47.dll"); // what azimuth.exe does at startup
     CHECK(p != nullptr);
+    if (phase == L"crash-chained") return crash_chained();
     if (argc > 2) map_image(argv[2]); // "press Play"
     // the online phases (platform 2.8.0): run after "removed", with OfflineMod and an FH2MP.dll
     const bool online_phase = phase.rfind(L"online", 0) == 0 || phase == L"fh2mp-off";
@@ -185,7 +279,7 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("---- platform.log\n%s----\n", log.c_str());
 
     if (phase == L"full") {
-        CHECK(has(log, "FH2 Mod Platform 2.8.0 (API 9)"));
+        CHECK(has(log, "FH2 Mod Platform 2.8.1 (API 9)"));
         CHECK(has(log, "media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride"));
         CHECK(log.find("loaded HelloMod.dll") != std::string::npos);
         CHECK(log.find("Legacy.dll has no fh2mod_init") != std::string::npos);
@@ -298,7 +392,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(id.size() >= 17 && id[8] == '-' && id[15] == '-' && id.substr(16) == std::to_string(GetCurrentProcessId()));
             CHECK(has(log, ("session " + id + ": started ").c_str()));
             const std::string copy = slurp(fs::path(L"fh2-mods\\platform-logs") / ("platform-" + id + ".log"));
-            CHECK(has(copy, "FH2 Mod Platform 2.8.0 (API 9)") && has(copy, "[TestMod] session id "));
+            CHECK(has(copy, "FH2 Mod Platform 2.8.1 (API 9)") && has(copy, "[TestMod] session id "));
             CHECK(slurp(fs::path(L"TestModData\\logs") / (id + ".log")) == "test mod's own log\n");
             CHECK(has(log, ("[TestMod] session log: TestModData\\logs\\" + id + ".log (the newest 3 kept)").c_str()));
             CHECK(has(log, "[TestMod] bad log folder refused") &&
@@ -312,7 +406,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(slurp(fs::path(L"fh2-mods\\save-snapshots") / id / L"1A96545B" / L"test.sav") == "save data");
             CHECK(slurp(L"data\\titles\\1A96545B\\saves\\1A96545B\\test.sav") == "save data");
             CHECK(has(status, ("\"session\": \"" + id + "\"").c_str()) && has(status, "\"state\": \"running\"") &&
-                  has(status, "\"platform\": \"2.8.0\"") && has(status, "\"TestMod\": \"1.0.0\""));
+                  has(status, "\"platform\": \"2.8.1\"") && has(status, "\"TestMod\": \"1.0.0\""));
         }
         // The game's menus were given: the pages are written. (Not with the game mapped: this
         // test's copy of it doesn't pass the menus' code checks, so the platform takes them out.)

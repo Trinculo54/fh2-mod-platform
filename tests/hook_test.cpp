@@ -179,7 +179,7 @@ int wmain(int argc, wchar_t** argv) {
     Sleep(200);
     log = slurp(L"fh2-mods\\platform.log");
     std::printf("---- platform.log\n%s----\n", log.c_str());
-    CHECK(has(log, "FH2 Mod Platform 2.8.0 (API 9)"));
+    CHECK(has(log, "FH2 Mod Platform 2.8.1 (API 9)"));
     if (other_game) {
         Sleep(500); // whatever the platform would still do once the game is up
         log = slurp(L"fh2-mods\\platform.log");
