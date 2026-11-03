@@ -5,6 +5,7 @@
 // fh2-mods\platform-session.json says what's running for tools: written to a .tmp and moved over
 // on each change, and marked "crashed" by the crash handler, which only has fixed buffers (the
 // heap may be what broke), so the file's head is kept ready for it.
+#include "hud_layer.hpp"
 #include "platform.hpp"
 #include "updates.hpp"
 
@@ -115,8 +116,9 @@ void write_session_status() {
     {
         std::scoped_lock lk{g_mu};
         head = "{\r\n  \"session\": " + json(g_id) + ",\r\n  \"pid\": " + std::to_string(GetCurrentProcessId()) +
-               ",\r\n  \"started\": " + json(g_started) + ",\r\n  \"platform\": " + json(FH2MOD_PLATFORM_VERSION) +
-               ",\r\n  \"azimuth\": " + json(narrow(azimuth_dir().wstring())) + ",\r\n  \"mods\": {";
+               ",\r\n  \"started\": " + json(g_started) + ",\r\n  \"platform\": " + json(FH2MOD_PLATFORM_VERSION);
+        if (const std::string hud = hud_layer_session_text(); !hud.empty()) head += ",\r\n  \"hud_layer\": " + json(hud);
+        head += ",\r\n  \"azimuth\": " + json(narrow(azimuth_dir().wstring())) + ",\r\n  \"mods\": {";
         bool first = true;
         for (const ModEntry& m : mod_entries()) {
             if (!m.mod) continue;

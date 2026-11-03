@@ -15,7 +15,9 @@
 // add_dump_memory; and with fh2-mods\platform-dump.txt saying "full", the
 // whole process (several GB under Azimuth: only the newest is kept). The
 // report names each of those DLLs' PDB (GUID and age), for symbols later.
+#include "hud_layer.hpp"
 #include "platform.hpp"
+#include "platform_version.h"
 
 #include <windows.h>
 #include <dbghelp.h>
@@ -255,6 +257,8 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS* ep) {
     where(er.ExceptionAddress, at, sizeof at);
     o.put("CRASH: %s (0x%08lX) at %s, thread %lu", exception_name(er.ExceptionCode), er.ExceptionCode, at,
           GetCurrentThreadId());
+    o.put("platform: FH2 Mod Platform %s", PLATFORM_BUILD_STR);
+    if (const char* hud = hud_layer_crash_text(); hud[0]) o.put("HUD layer: %s", hud);
     if (launched_game() == Launched::other)
         o.put("game: %s, not the Forza Horizon 2 the platform and its mods are made for; they left it alone",
               launched_game_name());
