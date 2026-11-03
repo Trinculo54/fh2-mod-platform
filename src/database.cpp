@@ -45,6 +45,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <list>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -86,6 +87,7 @@ struct Files {
     fs::path layer_state; // fh2-mods\platform-db-layer.txt, its record (as platform-db.txt)
     fs::path strings;       // fh2-mods\platform-db-strings.txt and platform-db-layer-strings.txt: the Data_Car.str
     fs::path layer_strings; // keys each copy's car names have (name_strings)
+    fs::path car_ids;       // fh2-mods\platform-car-ids.txt: the Ids pack cars have (with_car_ids)
 };
 
 Files files() {
@@ -105,7 +107,8 @@ Files files() {
             instance_media() / L"Stripped" / L"gamedbRC.slt",
             mods / "platform-db-layer.txt",
             mods / "platform-db-strings.txt",
-            mods / "platform-db-layer-strings.txt"};
+            mods / "platform-db-layer-strings.txt",
+            mods / "platform-car-ids.txt"};
 }
 
 struct Stamp {
@@ -553,7 +556,106 @@ struct Fnv {
 struct Sql {
     std::string name;
     const std::vector<std::string>* statements;
+    const CarPack* pack = nullptr;
 };
+
+std::string lower_ascii(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+// The cars packs add (pack.ini) get their Ids here: a pack's SQL gives a car's Id as
+// {car:<media name>}. Each car keeps the Id it was first given, since a bought car's Id is in the
+// save: fh2-mods\platform-car-ids.txt records them ("<media name><TAB><id>" lines, never removed),
+// and a new car gets the lowest Id from 3000 up (above the game's and FM5's) that neither the
+// record nor the database being built on has. A pack is left out, saying why, when that database
+// already has one of its cars, another pack adds it too, or its recorded Id is another car's there.
+constexpr int64_t kFirstPackCarId = 3000;
+
+std::vector<Sql> with_car_ids(const Files& f, const fs::path& base, const std::vector<Sql>& given,
+                              std::list<std::vector<std::string>>& held) {
+    if (std::none_of(given.begin(), given.end(), [](const Sql& s) { return s.pack && !s.pack->cars.empty(); }))
+        return given;
+    std::set<int64_t> ids;
+    std::set<std::string> names;
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(narrow(base.wstring()).c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK) {
+        sqlite3_stmt* q = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT Id, MediaName FROM Data_Car", -1, &q, nullptr) == SQLITE_OK)
+            while (sqlite3_step(q) == SQLITE_ROW) {
+                ids.insert(sqlite3_column_int64(q, 0));
+                if (const auto* t = sqlite3_column_text(q, 1)) names.insert(lower_ascii(reinterpret_cast<const char*>(t)));
+            }
+        sqlite3_finalize(q);
+    }
+    sqlite3_close(db);
+    std::map<std::string, int64_t> record; // lower-case media name -> Id
+    std::set<int64_t> recorded;
+    for (const auto& l : read_lines(f.car_ids)) {
+        const auto tab = l.find('\t');
+        uint64_t id    = 0;
+        if (tab == std::string::npos || !to_u64(std::string_view{l}.substr(tab + 1), id)) continue;
+        record[lower_ascii(l.substr(0, tab))] = static_cast<int64_t>(id);
+        recorded.insert(static_cast<int64_t>(id));
+    }
+    std::vector<std::string> added;
+    std::map<std::string, std::string> claimed; // lower-case media name -> the pack adding it
+    std::vector<Sql> out;
+    for (const auto& s : given) {
+        if (!s.pack || s.pack->cars.empty()) {
+            out.push_back(s);
+            continue;
+        }
+        std::string problem;
+        if (ids.empty()) problem = "the cars of " + narrow(base.wstring()) + " couldn't be read";
+        std::vector<std::pair<std::string, int64_t>> cars;
+        for (const auto& car : s.pack->cars) {
+            if (!problem.empty()) break;
+            const std::string key = lower_ascii(car);
+            if (names.count(key)) {
+                problem = "the game already has " + car;
+            } else if (claimed.count(key)) {
+                problem = car + " is " + claimed[key] + "'s too";
+            } else if (const auto r = record.find(key); r != record.end()) {
+                if (ids.count(r->second)) problem = car + "'s Id, " + std::to_string(r->second) + ", is another car's now";
+                else cars.emplace_back(car, r->second);
+            } else {
+                int64_t id = kFirstPackCarId;
+                while (ids.count(id) || recorded.count(id)) ++id;
+                record[key] = id;
+                recorded.insert(id);
+                added.push_back(car + "\t" + std::to_string(id));
+                log_line(s.name, "database: " + car + " is car " + std::to_string(id) + " from now on");
+                cars.emplace_back(car, id);
+            }
+        }
+        if (!problem.empty()) {
+            log_line(s.name, "database: left out, so none of its changes were made: " + problem);
+            continue;
+        }
+        for (const auto& [car, id] : cars) claimed[lower_ascii(car)] = s.name;
+        auto& text = held.emplace_back();
+        for (const auto& statement : *s.statements) {
+            std::string t = statement;
+            for (const auto& [car, id] : cars) {
+                const std::string tag = "{car:" + lower_ascii(car) + "}", value = std::to_string(id);
+                for (std::size_t p = 0; (p = lower_ascii(t).find(tag, p)) != std::string::npos; p += value.size())
+                    t.replace(p, tag.size(), value);
+            }
+            text.push_back(std::move(t));
+        }
+        out.push_back({s.name, &text, s.pack});
+    }
+    if (!added.empty()) {
+        std::error_code ec;
+        fs::create_directories(f.car_ids.parent_path(), ec);
+        std::ofstream rec{f.car_ids, std::ios::app};
+        for (const auto& a : added) rec << a << "\n";
+        rec.close();
+        if (rec.fail()) plog("database: couldn't write fh2-mods\\platform-car-ids.txt");
+    }
+    return out;
+}
 
 // What a copy is built from: what it's built on (its kind and date) and every source's statements.
 std::string signature(const std::string& kind, const Stamp& base, const std::vector<Sql>& sources) {
@@ -732,7 +834,7 @@ void drop_layer_copy(const Files& f, const char* why) {
 // use this game folder don't get them. A copy this folder put in mediaoverride before goes, and
 // what another mod had there comes back, as when no mod has SQL. The layer's record is
 // fh2-mods\platform-db-layer.txt, as platform-db.txt is mediaoverride's.
-void apply_layer_database(const Files& f, const std::vector<Sql>& sources) {
+void apply_layer_database(const Files& f, const std::vector<Sql>& given) {
     reuse_strings(f.layer_strings); // what the copy there has, unless it's built again or goes
     if (const State st = read_state(f.state); !st.empty() || is_file(f.base)) {
         if (const DWORD e = unreadable(f.target)) {
@@ -742,7 +844,7 @@ void apply_layer_database(const Files& f, const std::vector<Sql>& sources) {
         }
         release(f, st, classify(f, st), false, "this folder's database is on the game's temp drive now");
     }
-    if (sources.empty()) {
+    if (given.empty()) {
         drop_layer_copy(f, "no car pack or mod changes the database any more");
         keep_strings(f.layer_strings, {});
         return;
@@ -769,6 +871,13 @@ void apply_layer_database(const Files& f, const std::vector<Sql>& sources) {
     const auto bs = stamp_of(base);
     if (!bs) {
         plog("database: couldn't find " + narrow(base.wstring()) + "; no database changes this time");
+        return;
+    }
+    std::list<std::vector<std::string>> held;
+    const std::vector<Sql> sources = with_car_ids(f, base, given, held);
+    if (sources.empty()) {
+        drop_layer_copy(f, "no changes could be applied");
+        keep_strings(f.layer_strings, {});
         return;
     }
     const std::string sig = signature(kind, *bs, sources);
@@ -831,7 +940,7 @@ void apply_database(const std::vector<FH2Mod*>& mods) {
     // Car packs first, so mods' changes reach their cars too.
     std::vector<Sql> sources;
     for (const auto& p : car_packs())
-        if (!p.sql.empty()) sources.push_back({"car pack " + p.name, &p.sql});
+        if (!p.sql.empty()) sources.push_back({"car pack " + p.name, &p.sql, &p});
     for (auto* m : mods)
         if (!m->sql.empty()) sources.push_back({m->name, &m->sql});
 
@@ -894,9 +1003,16 @@ void apply_database(const std::vector<FH2Mod*>& mods) {
         plog("database: couldn't find " + narrow(base.wstring()) + "; no database changes this time");
         return;
     }
+    std::list<std::vector<std::string>> held;
+    const std::vector<Sql> resolved = with_car_ids(f, base, sources, held);
+    if (resolved.empty()) {
+        release(f, st, found, true);
+        keep_strings(f.strings, {});
+        return;
+    }
     // "foreign" for mediaoverride's file and the copy kept from it alike (the copy has its date),
     // so keeping it doesn't mean building again.
-    const std::string sig = signature(kind, *bs, sources);
+    const std::string sig = signature(kind, *bs, resolved);
     if (found == Found::ours && st.sig == sig) {
         plog("database: same changes as last launch, reusing the copy");
         replay(st);
@@ -924,7 +1040,7 @@ void apply_database(const std::vector<FH2Mod*>& mods) {
     tmp += L".platform-tmp";
     std::vector<std::string> results;
     std::map<uint16_t, std::wstring> strings;
-    const int applied = build_copy(base, tmp, sources, results, strings);
+    const int applied = build_copy(base, tmp, resolved, results, strings);
     if (applied < 0) return;
 
     if (!applied) {

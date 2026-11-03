@@ -79,6 +79,8 @@ struct CarPack {
     std::string name;                         // its folder's name in fh2-cars
     std::filesystem::path root, media, mirror; // fh2-cars\<name>, its media folder, its copy on the temp drive
     std::vector<std::string> sql;             // its *.sql files' text, by file name (database.cpp runs them)
+    std::string title, version;               // pack.ini's [pack] name and version
+    std::vector<std::string> cars;            // the cars it adds: pack.ini's [car <media name>] sections
 };
 // <Azimuth>\data\titles\1A96545B\tmp, the folder Azimuth gives the game as its T:\ drive.
 std::filesystem::path temp_drive();

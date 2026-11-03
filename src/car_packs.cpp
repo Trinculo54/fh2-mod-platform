@@ -17,7 +17,8 @@
 // (cars\<name>.zip and so on). A pack's zips are added to the game's zipmanifest.xml (the line
 // for each, from the zip's own central directory), and its <pack>\*.sql run on the game
 // database with the mods' SQL (database.cpp), each pack in a transaction of its own, so packs
-// never write over each other's files.
+// never write over each other's files. A pack's pack.ini lists the cars it adds; their Ids are
+// given when the database is built (its SQL says {car:<media name>} where one goes), and kept.
 #include "platform.hpp"
 #include "updates.hpp"
 
@@ -173,6 +174,33 @@ void write_manifest() {
              " entries " + std::to_string(d.entries));
 }
 
+// pack.ini, next to the media folder: [pack] name= and version=, and a [car <media name>] section
+// for each car the pack adds (what's in those is for the tool that builds the pack). Without it a
+// pack adds no car, and its SQL runs as it is.
+void read_pack_ini(CarPack& pack) {
+    const std::wstring ini = (pack.root / L"pack.ini").wstring();
+    std::error_code ec;
+    if (!fs::is_regular_file(ini, ec)) return;
+    wchar_t buf[1024];
+    GetPrivateProfileStringW(L"pack", L"name", L"", buf, 1024, ini.c_str());
+    pack.title = narrow(buf);
+    GetPrivateProfileStringW(L"pack", L"version", L"", buf, 1024, ini.c_str());
+    pack.version = narrow(buf);
+    std::vector<wchar_t> names(32768);
+    const DWORD n = GetPrivateProfileSectionNamesW(names.data(), static_cast<DWORD>(names.size()), ini.c_str());
+    for (const wchar_t* s = names.data(); s < names.data() + n && *s; s += wcslen(s) + 1) {
+        const std::string section = narrow(s);
+        if (lower(section.substr(0, 4)) != "car ") continue;
+        std::string car = section.substr(4);
+        while (!car.empty() && car.front() == ' ') car.erase(car.begin());
+        const bool ok = !car.empty() && car.size() <= 64 && std::all_of(car.begin(), car.end(), [](char c) {
+            return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+        });
+        if (ok) pack.cars.push_back(car);
+        else plog("car packs: " + pack.name + ": pack.ini's [" + section + "] isn't a car's media name; left out");
+    }
+}
+
 // A pack's SQL: its *.sql files (next to its media folder), by file name.
 std::vector<std::string> read_sql(const CarPack& pack) {
     std::vector<fs::path> files;
@@ -282,7 +310,7 @@ void prepare_car_packs() {
     const fs::path root = azimuth_dir() / "fh2-cars";
     for (const auto& e : fs::directory_iterator(root, ec)) {
         if (!e.is_directory(ec) || !fs::is_directory(e.path() / "media", ec)) continue;
-        g_packs.push_back({narrow(e.path().filename().wstring()), e.path(), e.path() / "media", {}});
+        g_packs.push_back({narrow(e.path().filename().wstring()), e.path(), e.path() / "media", {}, {}, {}, {}, {}});
     }
     std::sort(g_packs.begin(), g_packs.end(), [](const CarPack& a, const CarPack& b) { return lower(a.name) < lower(b.name); });
     plog("car packs: " + std::to_string(g_packs.size()) + " pack(s) in " + narrow(root.wstring()));
@@ -295,6 +323,14 @@ void prepare_car_packs() {
             fs::remove_all(e.path(), ec) != static_cast<std::uintmax_t>(-1))
             plog("car packs: removed " + narrow(e.path().filename().wstring()) + " from the temp drive (no such pack now)");
     for (auto& pack : g_packs) {
+        read_pack_ini(pack);
+        if (!pack.title.empty() || !pack.cars.empty()) {
+            std::string cars;
+            for (const auto& c : pack.cars) cars += (cars.empty() ? "" : ", ") + c;
+            plog("car packs: " + pack.name + ": " + (pack.title.empty() ? pack.name : pack.title) +
+                 (pack.version.empty() ? "" : " " + pack.version) +
+                 (pack.cars.empty() ? ", no new car" : ", adds " + cars));
+        }
         mirror_pack(pack);
         pack.sql = read_sql(pack);
     }
