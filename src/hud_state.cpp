@@ -356,8 +356,10 @@ struct Layer {
     Data copy;
     uint64_t copy_gen = 0, seen_calls = 0, seen_show = 0;
     uint32_t seen_pulses = 0;
-    uint64_t killed = 0, taken = 0;     // the parts_seq whose show the platform ended (and the one another mod took)
+    std::atomic<uint64_t> killed{0};    // the parts_seq whose show the platform ended (pulse_hud reads it on any thread)
+    uint64_t taken = 0;                 // the parts_seq another mod's show took the screen from
     double idle   = 0;
+    bool fresh    = false;              // a call was seen this frame: the time before it isn't idle
     std::atomic<bool> status_off{false};   // its on_status crashed
     bool end_logged = false;            // the end of its show was logged already (lapse, crash, taken)
 };
@@ -409,6 +411,8 @@ struct Ix {
 };
 
 constexpr int kOff = 0, kIn = 1, kOut = 2;
+constexpr int kPartBar = 0, kPartTip = 2, kPartPanel = 3, kPartCount = 4;   // FH2_HUD_PART_ bit order
+static_assert(kPartCount == kHudParts - 1, "the countdown is the last part");
 struct Part {
     bool declared = false;
     int state     = kOff;
@@ -438,7 +442,10 @@ struct HudEngine::Impl {
     std::atomic<void*> empty{nullptr};
     std::deque<Retired> retired;
     std::atomic<uint64_t> made{0};
-    uint64_t freed_n = 0, left_n = 0;
+    // Released by the platform but not freed: still held by the game. While the page is off screen (a menu,
+    // the map) a binding keeps the String it showed until the page is told again, and frees it then, so
+    // those are counted apart (off_n); left_n is what the game still held while the page was live.
+    uint64_t freed_n = 0, left_n = 0, off_n = 0;
     // the pump's
     Part part[kHudParts];
     int owner_      = -1;
@@ -559,7 +566,9 @@ struct HudEngine::Impl {
             fault_strings();
             return false;
         }
-        freed ? ++freed_n : ++left_n;
+        if (freed) ++freed_n;
+        else if (live_now.load()) ++left_n;
+        else ++off_n;
         return true;
     }
     void retire() {
@@ -643,14 +652,23 @@ struct HudEngine::Impl {
                 clean_from = frame + 3;
             }
         }
-        if (i == ix.CountText && pop_pending) {   // the pop right after its number, outside the budget
-            pop_pending = false;
-            set_switch(ix.CountPop, true);
-            if (!tell(ix.CountPop)) return false;
-            pop_until = now + kPulseMs;
-        }
+        // the pop right after its number, outside the budget; a number told while the part is still coming in
+        // pops once the part's Visibility and fade are told (notify step d), not on a collapsed ring
+        if (i == ix.CountText && pop_pending && part[kPartCount].state != kOff && !start_pop()) return false;
         return true;
     }
+    bool start_pop() {
+        pop_pending = false;
+        set_switch(ix.CountPop, true);
+        if (!tell(ix.CountPop)) return false;
+        pop_until = now + kPulseMs;
+        return true;
+    }
+
+    // The tip and the panel sit on the bar's live height (its strip row included). While either fades out,
+    // the bar's height is kept as it is (the strip row's switch, the bar coming in, the bar collapsing), so
+    // a card that is fading out never jumps; the change follows within the fade's 250 ms.
+    bool card_fading() const { return part[kPartTip].state == kOut || part[kPartPanel].state == kOut; }
 
     // A new page: the switches are told again, hides first; content the platform ever published too
     // (what was never published is still the default the page read).
@@ -691,6 +709,7 @@ struct HudEngine::Impl {
             if (calls != L.seen_calls) {
                 L.seen_calls = calls;
                 L.idle       = 0;
+                L.fresh      = true;
             }
             if (L.gen.load() != L.copy_gen) {
                 if (L.mu.try_lock()) {
@@ -767,14 +786,18 @@ struct HudEngine::Impl {
     }
 
     // A layer shown or holding with no call for its lease: hidden (with a fade), its wish removed, LAPSED.
+    // The frame that sees a call adds nothing: the time since the frame before came (partly) before the
+    // call, so counting it would lapse a layer up to a frame early.
     bool leases(const FrameIn& in, int n, double dt) {
         bool ended = false;
         for (int i = 0; i < n; ++i) {
             Layer& L         = layers[i];
+            const bool fresh = L.fresh;
+            L.fresh          = false;
             const bool shown = owner_ == i && wanted != 0;
             const bool wish  = wish_counts(L);
             if (!shown && !wish) continue;
-            if (in.live) L.idle += dt;
+            if (in.live && !fresh) L.idle += dt;
             if (L.idle < static_cast<double>(L.lease)) continue;
             if (shown) {
                 L.killed     = L.parts_seq.load();
@@ -830,7 +853,9 @@ struct HudEngine::Impl {
                 const float at = std::isnan(m.at) ? 0.0f : std::clamp(m.at, 0.0f, 1.0f);
                 x              = at * 1104.0f - 20.0f;
             } else {
-                x = 552.0f + (static_cast<float>(k) - static_cast<float>(nm - 1) / 2.0f) * 24.0f - 20.0f;
+                // dots centred on the row, which is the screen's middle: the timeline's column starts at x 204,
+                // so its x 756 is the page's 960
+                x = 756.0f + (static_cast<float>(k) - static_cast<float>(nm - 1) / 2.0f) * 24.0f - 20.0f;
             }
             setf(ix.MarkX[k], x);
             setf(ix.MarkAngle[k], rail && m.shape == FH2_HUD_MARK_DIAMOND ? 45.0f : 0.0f);
@@ -903,10 +928,13 @@ struct HudEngine::Impl {
         if (held_caps) setf(ix.HoldFill, std::clamp(hold, 0.0f, 1.0f));
     }
 
-    // the parts, the shutter and the root, acted on only while the page is live.
+    // the parts, the shutter and the root, acted on only while the page is live. The bar comes last, so its
+    // collapse can wait for a tip or panel that is fading out above it (card_fading) and still go in the
+    // frame that card clears.
     void screen() {
         bool any = false;
-        for (int k = 0; k < kHudParts; ++k) {
+        static const int kOrder[kHudParts] = {1, 2, 3, 4, kPartBar};
+        for (const int k : kOrder) {
             Part& pt = part[k];
             if (!pt.declared) continue;
             const bool want = (wanted & (1u << k)) != 0;
@@ -924,7 +952,7 @@ struct HudEngine::Impl {
                     pt.clear = now + kClearMs;
                     pt.state = kOut;
                 }
-            } else if (pt.state == kOut && (pt.instant || now >= pt.clear)) {
+            } else if (pt.state == kOut && (pt.instant || (now >= pt.clear && !(k == kPartBar && card_fading())))) {
                 set_switch(ix.vis[k], false);
                 pt.state = kOff;
             }
@@ -978,10 +1006,12 @@ struct HudEngine::Impl {
             allowed[k] = part[k].declared && (wanted & (1u << k)) && part[k].state != kOut;
             pending[k] = false;
         }
+        const bool hold_row = card_fading();   // the strip row's switch waits (not pending: the bar isn't held back)
         for (int i = 0; i < np && !off_now(); ++i) {
             Prop& q = p[i];
             if (q.role != HudRole::content && q.role != HudRole::kbd && q.role != HudRole::frame_value) continue;
             if (i == ix.CountText || q.part < 0 || !allowed[q.part]) continue;
+            if (i == ix.StripRow && hold_row) continue;
             if (q.type == 's') {
                 if (q.tgt_text != q.pub_text && !publish_text(i, q.tgt_text, true)) pending[q.part] = true;
             } else if (q.tgt != q.pub.load(std::memory_order_relaxed)) {
@@ -1042,7 +1072,8 @@ struct HudEngine::Impl {
             if (!tell(i)) return false;
             --budget;
         }
-        // d: parts coming in: their content, then (once all of it is told) the root, <P>Vis and <P>
+        // d: parts coming in: their content, then (once all of it is told) the root, <P>Vis and <P>; the bar
+        // waits while a tip or panel above it fades out (card_fading)
         for (int k = 0; k < kHudParts; ++k) {
             if (!(coming & (1u << k))) continue;
             dirty_content(1u << k, c);
@@ -1052,7 +1083,7 @@ struct HudEngine::Impl {
                 --budget;
             }
             dirty_content(1u << k, c);
-            if (!c.empty() || pending[k]) continue;
+            if (!c.empty() || pending[k] || (k == kPartBar && card_fading())) continue;
             if (!pubb(ix.Shown)) set_switch(ix.Shown, true);
             if (p[ix.Shown].dirty && !tell(ix.Shown)) return false;
             set_switch(ix.vis[k], true);
@@ -1060,6 +1091,7 @@ struct HudEngine::Impl {
             set_switch(ix.fade[k], true);
             if (p[ix.fade[k]].dirty && !tell(ix.fade[k])) return false;
             part[k].state = kIn;
+            if (k == kPartCount && pop_pending && !start_pop()) return false;   // its first number's pop, now it can be seen
         }
         // f: what's left waits for the next frame
         dirty_content(on | coming, c);
@@ -1406,13 +1438,15 @@ int HudEngine::pulse(int layer, int pulse) {
     Layer& L = d.layers[layer];
     d.call(L);
     if (pulse != FH2_HUD_PULSE_SHUTTER) {
-        if (d.once_l(layer, "pulse " + std::to_string(pulse)))
+        // one line for the first unknown pulse, whatever comes after it, so a changing value can't flood the log
+        if (d.once_l(layer, "pulse bad"))
             d.mlog(layer, "pulse_hud: " + std::to_string(pulse) + " isn't a pulse this preview has");
         return 0;
     }
-    // shown: its newest show had parts, and no other mod's show with parts came after it
+    // shown: its newest show had parts, the platform hasn't ended that show (a lapse, a crash in on_status),
+    // and no other mod's show with parts came after it
     const uint64_t ps = L.parts_seq.load();
-    bool shown        = !d.off_now() && ps != 0 && L.show_seq.load() == ps;
+    bool shown        = !d.off_now() && ps != 0 && L.show_seq.load() == ps && L.killed.load() != ps;
     const int n       = d.count.load(std::memory_order_acquire);
     for (int i = 0; i < n && shown; ++i)
         if (i != layer && d.layers[i].parts_seq.load() > ps) shown = false;
@@ -1439,7 +1473,8 @@ int HudEngine::hold(int layer, int h) {
         return 0;
     }
     if (!d.hold_ok.load()) {
-        if (d.once_l(layer, "hold code")) d.mlog(layer, "hold_game_hud: the game's HUD code isn't as expected; the game's HUD stays");
+        if (d.once_l(layer, "hold code"))
+            d.mlog(layer, "hold_game_hud: the game's HUD code isn't as expected, or the hold crashed earlier this session; the game's HUD stays");
         return 0;
     }
     const bool before = d.wish_counts(L);
@@ -1463,7 +1498,8 @@ int HudEngine::play_sound(int layer, uint32_t sound) {
         return 0;
     }
     if (sound < FH2_SOUND_ERROR || sound > FH2_SOUND_SHUTTER) {
-        if (d.once_l(layer, "sound " + std::to_string(sound)))
+        // one line for the first unknown sound, whatever comes after it
+        if (d.once_l(layer, "sound bad"))
             d.mlog(layer, "play_ui_sound: " + std::to_string(sound) + " isn't a sound this preview plays");
         return 0;
     }
@@ -1697,10 +1733,10 @@ std::string HudEngine::strings_line() const {
             refs += r;
             most = std::max(most, r);
         }
-    return fmt("Strings: %zu in use (one per text shown), %zu waiting to be let go; made %llu, freed %llu, left with the game %llu; the game "
-               "holds %lld references on the ones in use (at most %d on one)",
+    return fmt("Strings: %zu in use (one per text shown), %zu waiting to be let go; made %llu, freed %llu, left with the game %llu, left with "
+               "the page while off screen %llu; the game holds %lld references on the ones in use (at most %d on one)",
                in_use, d.retired.size(), static_cast<unsigned long long>(d.made.load()), static_cast<unsigned long long>(d.freed_n),
-               static_cast<unsigned long long>(d.left_n), refs, most);
+               static_cast<unsigned long long>(d.left_n), static_cast<unsigned long long>(d.off_n), refs, most);
 }
 
 void HudEngine::log_rated(int layer, int kind, const std::string& text) { d_->rated(layer, kind, text); }

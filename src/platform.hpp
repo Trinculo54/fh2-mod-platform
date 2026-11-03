@@ -93,6 +93,7 @@ void fill_hook_api(FH2ModApi& api);
 bool hook_at(const void* p, char* out, std::size_t n); // p is in a hook's trampoline or stub
 // Whether the exe on disk holds `expect` at game address p, n <= 256 bytes (the HUD layer's code checks).
 bool disk_bytes_equal(const void* p, const void* expect, std::size_t n);
+bool disk_image_readable();   // the exe on disk could be opened for disk_bytes_equal
 int hook_count();
 const char* hook_line(int i, bool* enabled);
 

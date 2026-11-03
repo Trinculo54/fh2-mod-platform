@@ -4,7 +4,8 @@
 // page is told) and the game:
 //  - add_hud_layer, from fh2mod_init only; once every mod's fh2mod_init has returned, the page gets one
 //    copy of the layer (hud_template.cpp) with the union of the layers' parts, checked before set_file.
-//    A crash marker leaves the layer out after a crash while the page with it was in use.
+//    A crash marker leaves the layer out for one session after any crash between start-up and the HUD
+//    page's first 10 s on screen, whatever the crash was.
 //  - FindProperty (hooked by the platform for the Mods page) answers the FH2Mod_Hud_ names with
 //    descriptors of the layer's own. Their getter gives the free-roam HUD page (Hud, vtable
 //    0x142DEF9C8) the published values and every other page the defaults; Strings are the game's own.
@@ -344,7 +345,10 @@ struct SeenPage {
 std::mutex g_seen_mu;
 std::vector<SeenPage> g_seen_pages;
 std::atomic<void*> g_last_getter_obj{nullptr};
+std::atomic<uintptr_t> g_last_getter_vt{0};
 
+// Pages are freed and new ones built at the same address; only the Hud class's destructor is hooked, so a
+// known address coming back with another vtable is a new page too, seen afresh.
 void getter_seen(void* obj, uintptr_t vt, bool hud) {
     const DWORD tid = GetCurrentThreadId();
     void* page      = g_page.load();
@@ -355,18 +359,29 @@ void getter_seen(void* obj, uintptr_t vt, bool hud) {
         ++g_get_build;
         g_th_get_build.see(tid);
     }
-    if (!hud) {
-        std::scoped_lock lk{g_seen_mu};
-        for (SeenPage& s : g_seen_pages)
-            if (s.page == obj) ++s.refusals;
+    if (obj == g_last_getter_obj.load() && vt == g_last_getter_vt.load()) {
+        if (!hud) {
+            std::scoped_lock lk{g_seen_mu};
+            for (SeenPage& s : g_seen_pages)
+                if (s.page == obj && s.vt == vt) ++s.refusals;
+        }
+        return;
     }
-    if (obj == g_last_getter_obj.load()) return;
     g_last_getter_obj = obj;
+    g_last_getter_vt  = vt;
     bool first        = false;
     {
         std::scoped_lock lk{g_seen_mu};
-        first = std::none_of(g_seen_pages.begin(), g_seen_pages.end(), [&](const SeenPage& s) { return s.page == obj; });
-        if (first && g_seen_pages.size() < 64) g_seen_pages.push_back({obj, vt, hud ? 0u : 1u});
+        const auto it = std::find_if(g_seen_pages.begin(), g_seen_pages.end(), [&](const SeenPage& s) { return s.page == obj; });
+        if (it == g_seen_pages.end()) {
+            first = true;
+            if (g_seen_pages.size() < 64) g_seen_pages.push_back({obj, vt, hud ? 0u : 1u});
+        } else if (it->vt != vt) {
+            first = true;   // a new page where an old one was
+            *it   = {obj, vt, hud ? 0u : 1u};
+        } else if (!hud) {
+            ++it->refusals;
+        }
     }
     if (first) {
         char b[48];
@@ -433,9 +448,14 @@ bool check_marker() {
     }
     const bool crashed = !newest.empty() && CompareFileTime(&newest_t, &marked) > 0;
     if (crashed || (loading && n >= 2)) {
-        if (crashed)
-            hlog("crash marker: the last session crashed while the HUD page with the layer was in use (crash report %s); the layer is "
-                 "left out this session",
+        // the marker's state says how far the page had got: any crash in that window leaves the layer out
+        if (crashed && loading)
+            hlog("crash marker: the last session crashed while the HUD page with the layer was loading or had only just been shown "
+                 "(crash report %s); the layer is left out this session",
+                 narrow(newest).c_str());
+        else if (crashed)
+            hlog("crash marker: the last session crashed after the HUD page with the layer was written, before the game had started "
+                 "using it (crash report %s); the crash may have had another cause, but the layer is left out this session to be safe",
                  narrow(newest).c_str());
         else
             hlog("crash marker: the HUD page started loading with the layer in two sessions running and was never on screen for 10 s; "
@@ -786,8 +806,10 @@ void hold() {
             g_hold.ours[k] = true;
             continue;
         }
-        // it crashed: no more suspends. If it got as far as the flag, the resume is still the platform's.
-        g_suspend_off  = true;
+        // it crashed: no more suspends, and hold_game_hud says 0 from now on. If it got as far as the flag, the
+        // resume is still the platform's: the next frame lets the hold go (no wish counts any more).
+        g_suspend_off = true;
+        g_eng.set_hold_available(false);
         g_hold.ours[k] = prio_flag(g_mods.prio[k]) == 1;
         hlog("hold: the %s suspend crashed (exception 0x%08lX); its flag reads %d, so it's %s", kModName[k], static_cast<unsigned long>(code),
              prio_flag(g_mods.prio[k]), g_hold.ours[k] ? "resumed when the hold is let go" : "left alone");
@@ -819,6 +841,7 @@ void hold_tick() {
         DWORD code = 0;
         if (!call1(kSuspendRva[k], g_mods.mod[k], &code)) {
             g_suspend_off = true;
+            g_eng.set_hold_available(false);   // hold_game_hud says 0 from now on; the next frame lets the hold go
             hlog("hold: suspending the %s again crashed; the game's HUD isn't hidden again this session (the hold is still let go as usual)",
                  kModName[k]);
             return;
@@ -866,6 +889,7 @@ void release(bool world_gone) {
             why = "the resume crashed earlier this session";
         } else if (!call1(RVA_RESUME, g_mods.mod[k], &code)) {
             g_resume_off = true;
+            g_eng.set_hold_available(false);   // hold_game_hud says 0 from now on
             if (prio_flag(g_mods.prio[k]) == 0) cleared = kModName[k];
             else why = "the resume crashed";
         } else if (prio_flag(g_mods.prio[k]) != 0) {
@@ -1160,6 +1184,17 @@ uint64_t d_layer_hidden(void* page, void* b, void* c, void* d) {
 }
 
 uint64_t d_layer_dtor(void* page, void* flags, void* c, void* d) {
+    if (page) {
+        // any Hud page, tracked or not, is forgotten by the getters' bookkeeping before the original frees
+        // it, so a new page at the same address is seen afresh
+        {
+            std::scoped_lock lk{g_seen_mu};
+            g_seen_pages.erase(std::remove_if(g_seen_pages.begin(), g_seen_pages.end(), [&](const SeenPage& s) { return s.page == page; }),
+                               g_seen_pages.end());
+        }
+        void* last = page;
+        g_last_getter_obj.compare_exchange_strong(last, nullptr);
+    }
     void* tracked = page;
     if (page && g_page.compare_exchange_strong(tracked, nullptr)) {
         // forgotten first, before the original frees it
@@ -1167,14 +1202,6 @@ uint64_t d_layer_dtor(void* page, void* flags, void* c, void* d) {
         g_th_dtor.see(tid);
         ++g_page_gen;
         g_on_screen = false;
-        {
-            // a new page at the same address is seen afresh
-            std::scoped_lock lk{g_seen_mu};
-            g_seen_pages.erase(std::remove_if(g_seen_pages.begin(), g_seen_pages.end(), [&](const SeenPage& s) { return s.page == page; }),
-                               g_seen_pages.end());
-        }
-        void* last = page;
-        g_last_getter_obj.compare_exchange_strong(last, nullptr);
         hlog("HUD page 0x%llX (Hud) destroyed at frame %llu (thread %lu)", ullp(page), u64(g_frame.load()), static_cast<unsigned long>(tid));
     }
     return o_layer_dtor(page, flags, c, d);
@@ -1191,7 +1218,13 @@ void start_thread() {
     }
     g_base = reinterpret_cast<uintptr_t>(base);
     const char* const kOff = "the HUD layer is off";
-    // the code checks, on disk, before any hook
+    // the code checks, on disk, before any hook; with no exe to read, nothing can be checked (one line, not
+    // a "doesn't match" for every group)
+    if (!disk_image_readable()) {
+        hlog("the HUD layer is off: the game exe couldn't be read from the game folder, so the layer's game code can't be checked");
+        g_eng.set_off(HudOff::left_out);
+        return;
+    }
     struct Group {
         const char* name;
         bool ok;

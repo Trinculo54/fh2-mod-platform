@@ -1620,6 +1620,14 @@ bool disk_bytes_equal(const void* p, const void* expect, std::size_t n) {
     return false;
 }
 
+// Whether the exe on disk could be opened for those checks, so the HUD layer can say it couldn't be read
+// rather than log every check as a mismatch.
+bool disk_image_readable() {
+    std::scoped_lock lk{g_mu};
+    open_disk_image();
+    return g_disk.file != INVALID_HANDLE_VALUE;
+}
+
 void fill_hook_api(FH2ModApi& api) {
     watch_for_code();
     api.hook_function = api_hook_function;

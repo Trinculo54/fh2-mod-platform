@@ -31,12 +31,17 @@
  * fh2mod_init:
  *
  *     #include "fh2mod_hud.h"
- *     const FH2HudInterface* hud = (const FH2HudInterface*)api->get_interface(
- *         FH2_HUD_INTERFACE, FH2_HUD_INTERFACE_VERSION);
- *     if (!hud || hud->size < sizeof(FH2HudInterface))
+ *     const FH2HudInterface* hud = NULL;
+ *     if (api->api_version >= 2)
+ *         hud = (const FH2HudInterface*)api->get_interface(
+ *             FH2_HUD_INTERFACE, FH2_HUD_INTERFACE_VERSION);
+ *     if (hud && hud->size < sizeof(FH2HudInterface))
+ *         hud = NULL;
+ *     if (!hud)
  *         api->log(mod, "no HUD layer on this platform; carrying on without the bar");
  *
- * Every released platform returns NULL there.
+ * get_interface came with API 2, hence the version check. Every released
+ * platform returns NULL there.
  *
  * Where it shows. Only while the game's free-roam HUD page is on screen.
  * In testing, the pause menu, the map, photo mode, the rewind (with its
@@ -174,7 +179,7 @@ extern "C" {
 #define FH2_HUD_CENTRE_NORMAL 0
 #define FH2_HUD_CENTRE_ALERT  1       /* the middle of the bar in amber, for a warning */
 #define FH2_HUD_STRIP_NONE    0
-#define FH2_HUD_STRIP_DOTS    1       /* dots: at the end of line 2, or centred on the strip's row with strip_row */
+#define FH2_HUD_STRIP_DOTS    1       /* dots: at the end of line 2, or with strip_row on the strip's row, centred on the screen */
 #define FH2_HUD_STRIP_RAIL    2       /* a timeline on the strip's row: marks at their `at`, labels at its ends */
 #define FH2_HUD_MARK_DOT      0
 #define FH2_HUD_MARK_DIAMOND  1
@@ -314,9 +319,10 @@ typedef struct FH2HudInterface {
        (Automatic, Controller, Keyboard and mouse). Returns 1 if added, 0 if
        not (the log says why). Even then, check hud_status for
        FH2_HUD_AVAILABLE before relying on the layer: the platform leaves it
-       out when the game's code or UI files aren't as expected, when the last
-       session crashed while the HUD page with the layer was in use, or when
-       the game didn't read the platform's HUD page (the log says which). */
+       out when the game's code or UI files aren't as expected, for one
+       session after the last one crashed between start-up and the HUD
+       page's first 10 s on screen (whatever the crash was), or when the
+       game didn't read the platform's HUD page (the log says which). */
     int (*add_hud_layer)(FH2Mod* mod, const FH2HudLayer* layer);
 
     /* Everything your layer shows apart from the two per-frame numbers,
@@ -324,8 +330,11 @@ typedef struct FH2HudInterface {
        state, so pass all of it every time, and only when something changed;
        only what changed reaches the game. A part that isn't shown keeps what
        you set for when it is, and a part going out keeps showing what it had
-       until it has faded. Any thread. Returns 1, or 0 if you have no layer or
-       state->size is less than sizeof(FH2HudState) (logged once). */
+       until it has faded. Mind the order: when parts go out, call
+       show_hud_layer first and set_hud_state after it, or the new state can
+       empty them before they fade; when parts come in, set the state first.
+       Any thread. Returns 1, or 0 if you have no layer or state->size is
+       less than sizeof(FH2HudState) (logged once). */
     int (*set_hud_state)(FH2Mod* mod, const FH2HudState* state);
 
     /* A number that may change every frame, 0 to 1: FH2_HUD_PLAYHEAD (the
@@ -339,10 +348,12 @@ typedef struct FH2HudInterface {
        added); 0 hides the whole layer. Parts fade in and out over 0.15 s, and
        keep their contents while they fade out; add FH2_HUD_PART_INSTANT to
        take parts away at once (for a clean frame: then wait for
-       FH2_HUD_CLEAN). Parts coming in always fade in. Showing yours hides
-       another mod's layer (it gets FH2_HUD_TAKEN), and clears your
-       FH2_HUD_TAKEN and FH2_HUD_LAPSED. Any thread. Returns 1, or 0 if you
-       have no layer or it isn't available this session. */
+       FH2_HUD_CLEAN). Parts coming in always fade in. Call it before
+       set_hud_state when parts go out, and after it when parts come in (see
+       set_hud_state). Showing yours hides another mod's layer (it gets
+       FH2_HUD_TAKEN), and clears your FH2_HUD_TAKEN and FH2_HUD_LAPSED. Any
+       thread. Returns 1, or 0 if you have no layer or it isn't available
+       this session. */
     int (*show_hud_layer)(FH2Mod* mod, uint32_t parts);
 
     /* A one-off effect while your layer is shown: FH2_HUD_PULSE_SHUTTER, a
@@ -350,8 +361,10 @@ typedef struct FH2HudInterface {
        checkpoint placed, say; play FH2_SOUND_SHUTTER with it for the
        sound). Right after
        show_hud_layer is fine: "shown" means your latest show_hud_layer had
-       parts and no other mod's came after it. Any thread. Returns 1, or 0
-       if you have no layer, it isn't shown, or the pulse is unknown. */
+       parts, no other mod's came after it, and the platform hasn't hidden
+       it since (your lease running out, or on_status crashing). Any thread.
+       Returns 1, or 0 if you have no layer, it isn't shown, or the pulse is
+       unknown. */
     int (*pulse_hud)(FH2Mod* mod, int pulse);
 
     /* Your layer's FH2_HUD_ bits now. Any thread, cheap. Call it from the
@@ -369,8 +382,9 @@ typedef struct FH2HudInterface {
        go, or the player has neither HUD. hold_game_hud(mod, 1) also clears
        FH2_HUD_LAPSED. Any thread; it takes effect at the next frame
        (FH2_HUD_GAME_HIDDEN says when). Returns 1, or 0 if you have no layer,
-       the layer is off this session, or the game's HUD code isn't as
-       expected (logged). */
+       the layer is off this session, the game's HUD code isn't as expected,
+       or hiding or showing the game's HUD crashed earlier this session (then
+       the game's HUD stays; logged once). */
     int (*hold_game_hud)(FH2Mod* mod, int hold);
 
     /* Plays one of the game's UI sounds (FH2_SOUND_) once, at the next
@@ -380,7 +394,7 @@ typedef struct FH2HudInterface {
        100 ms from your mod. Never make a sound the only cue. Any thread.
        Returns 1 if it will play, 0 if not: no layer, the layer off this
        session, an unknown sound, a repeat, or one that can't play where the
-       player is (each logged once). */
+       player is (each logged once, apart from a repeat). */
     int (*play_ui_sound)(FH2Mod* mod, uint32_t sound);
 } FH2HudInterface;
 

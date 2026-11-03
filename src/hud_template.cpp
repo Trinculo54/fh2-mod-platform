@@ -550,7 +550,7 @@ void bar_strip_row(Xml& x) {
     x.line(std::string("<local:FZTextBlock Grid.Column=\"2\"") + kSmall + T("RailRight") +
            " Color=\"#FFDEDEDE\" HorizontalAlignment=\"Left\" VerticalAlignment=\"Top\" Margin=\"12,4,0,0\"" + TRIM(84) + " />");
     x.line(std::string("<local:FZTextBlock Grid.Column=\"3\"") + kSmall + T("RowAfter") +
-           " Color=\"#FFDEDEDE\" HorizontalAlignment=\"Left\" VerticalAlignment=\"Center\" Margin=\"24,0,0,0\"" + TRIM(384) + " />");
+           " Color=\"#FFDEDEDE\" HorizontalAlignment=\"Left\" VerticalAlignment=\"Top\" Margin=\"24,4,0,0\"" + TRIM(384) + " />");
     x.close("Grid");
     x.close("Grid");
 }
