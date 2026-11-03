@@ -26,6 +26,8 @@ if [ -n "${FH2_MEDIA:-}" ]; then
 fi
 exe=()
 [ -n "${3:-}" ] && exe=("$(winepath -w "$3" 2>/dev/null || echo "Z:${3//\//\\}")")
+game_exe=
+[ -n "${3:-}" ] && game_exe=$(cd "$(dirname "$3")" && pwd)/$(basename "$3")
 cd "$dir"
 wine azimuth.exe full "${exe[@]}"
 rm fh2-mods/TestMod.dll
@@ -45,3 +47,9 @@ printf 'OfflineMod.dll\t1\nHelloMod.dll\t0\n' > fh2-mods/platform-online.txt
 wine azimuth.exe online-chosen
 printf 'fh2mp.dll\n' > fh2-mods/platform-disabled.txt
 wine azimuth.exe fh2mp-off
+# The HUD layer preview: a mod that adds a layer (tests/hud_mod.cpp). The phases above have none, so
+# they also check that the build behaves as 2.8.0 without one. With the exe given, this phase maps all
+# of it and has it in the game folder, as the hook test does, so the layer's code checks and hooks run.
+cp "$b/HudTestMod.dll" fh2-mods/
+[ -n "$game_exe" ] && ln -s "$game_exe" FH2/Mount/forza_durango_release_final.exe
+wine azimuth.exe hud "${exe[@]}"
