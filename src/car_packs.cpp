@@ -28,6 +28,8 @@
 #include <cctype>
 #include <cstring>
 #include <fstream>
+#include <map>
+#include <mutex>
 #include <sstream>
 
 namespace fh2platform {
@@ -37,6 +39,9 @@ namespace fs = std::filesystem;
 namespace {
 
 std::vector<CarPack> g_packs;
+std::string g_unread;                         // why fh2-cars' packs aren't read this session
+std::mutex g_problem_mu;
+std::map<std::string, std::string> g_problems; // pack -> why it isn't working
 
 std::string lower(std::string s) {
     for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -130,6 +135,7 @@ void write_manifest() {
             from[game_path] = pack.name;
             if (!zip_dir(e.path(), d)) {
                 plog("car packs: " + pack.name + ": couldn't read the zip directory of " + game_path + "; left out");
+                note_car_pack_problem(pack.name, "the game can't read its " + game_path.substr(12) + ".");
                 continue;
             }
             zips.emplace_back(game_path, d);
@@ -202,8 +208,13 @@ void read_pack_ini(CarPack& pack) {
         const bool ok = !car.empty() && car.size() <= 64 && std::all_of(car.begin(), car.end(), [](char c) {
             return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
         });
-        if (ok) pack.cars.push_back(car);
-        else plog("car packs: " + pack.name + ": pack.ini's [" + section + "] isn't a car's media name; left out");
+        if (ok) {
+            pack.cars.push_back(car);
+            GetPrivateProfileStringW(s, L"name", L"", buf, 1024, ini.c_str());
+            pack.car_names.push_back(narrow(buf));
+        } else {
+            plog("car packs: " + pack.name + ": pack.ini's [" + section + "] isn't a car's media name; left out");
+        }
     }
 }
 
@@ -276,6 +287,8 @@ void mirror_pack(const CarPack& pack) {
     plog("car packs: " + pack.name + " on the temp drive: " + std::to_string(kept) + " file(s) as they were, " +
          std::to_string(linked) + " linked, " + std::to_string(copied) + " copied, " + std::to_string(removed) +
          " removed" + (failed ? ", " + std::to_string(failed) + " FAILED" : std::string{}));
+    if (failed)
+        note_car_pack_problem(pack.name, std::to_string(failed) + " of its files couldn't be put on the game's temp drive.");
 }
 
 // A pack's folder name on the temp drive: its own when the game can spell it.
@@ -314,9 +327,23 @@ void car_packs_unavailable(const std::string& why) {
     int n = 0;
     for (const auto& e : fs::directory_iterator(azimuth_dir() / "fh2-cars", ec))
         n += e.is_directory(ec) && fs::is_directory(e.path() / "media", ec);
-    if (n)
-        plog("car packs: the " + std::to_string(n) + " pack(s) in fh2-cars aren't read: " + why +
-             ". They need Azimuth 1.0 or later, without Extra Options");
+    if (!n) return;
+    g_unread = "The " + std::to_string(n) + " car pack(s) in fh2-cars aren't read: " + why +
+               ". They need Azimuth 1.0 or later, without Extra Options.";
+    plog("car packs: " + g_unread);
+}
+
+std::string car_packs_unread() { return g_unread; }
+
+void note_car_pack_problem(const std::string& pack, const std::string& why) {
+    std::scoped_lock lk{g_problem_mu};
+    if (auto& p = g_problems[pack]; p.empty()) p = why;
+}
+
+std::string car_pack_problem(const std::string& pack) {
+    std::scoped_lock lk{g_problem_mu};
+    const auto it = g_problems.find(pack);
+    return it == g_problems.end() ? std::string{} : it->second;
 }
 
 void prepare_car_packs() {

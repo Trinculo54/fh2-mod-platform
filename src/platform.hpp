@@ -81,6 +81,7 @@ struct CarPack {
     std::vector<std::string> sql;             // its *.sql files' text, by file name (database.cpp runs them)
     std::string title, version;               // pack.ini's [pack] name and version
     std::vector<std::string> cars;            // the cars it adds: pack.ini's [car <media name>] sections
+    std::vector<std::string> car_names;       // and each one's name= there ("" for none), for the MODS tab
 };
 // <Azimuth>\data\titles\1A96545B\tmp, the folder Azimuth gives the game as its T:\ drive.
 std::filesystem::path temp_drive();
@@ -98,6 +99,11 @@ const std::vector<CarPack>& car_packs();
 void prepare_car_packs();
 // Without the layer the packs in fh2-cars aren't read: says so (with `why`) when there are any.
 void car_packs_unavailable(const std::string& why);
+// Why the packs in fh2-cars aren't read this session (for the MODS tab), or "".
+std::string car_packs_unread();
+// Why a pack (by folder name) isn't working this session, or "": the first reason given.
+void note_car_pack_problem(const std::string& pack, const std::string& why);
+std::string car_pack_problem(const std::string& pack);
 
 // database.cpp: SQL patches applied to a copy of the game database.
 void apply_database(const std::vector<FH2Mod*>& mods);

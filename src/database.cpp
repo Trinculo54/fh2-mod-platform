@@ -631,6 +631,7 @@ std::vector<Sql> with_car_ids(const Files& f, const fs::path& base, const std::v
         }
         if (!problem.empty()) {
             log_line(s.name, "database: left out, so none of its changes were made: " + problem);
+            note_car_pack_problem(s.pack->name, "it was left out, as " + problem + ".");
             continue;
         }
         for (const auto& [car, id] : cars) claimed[lower_ascii(car)] = s.name;
@@ -758,10 +759,19 @@ void reuse_strings(const fs::path& file) {
     }
 }
 
+// A car pack's statements that failed (a result line, "car pack <name><TAB>FAILED, ..."): for the MODS tab.
+void note_pack_result(const std::string& source, const std::string& result) {
+    const std::string pack = "car pack ", failed = "FAILED, so none of its changes were made: ";
+    if (source.rfind(pack, 0) == 0 && result.rfind(failed, 0) == 0)
+        note_car_pack_problem(source.substr(pack.size()), "its database changes failed: " + result.substr(failed.size()));
+}
+
 void replay(const State& st) {
     for (std::size_t i = 1; i < st.lines.size(); ++i)
-        if (const auto tab = st.lines[i].find('\t'); tab != std::string::npos)
+        if (const auto tab = st.lines[i].find('\t'); tab != std::string::npos) {
             log_line(st.lines[i].substr(0, tab), "database: " + st.lines[i].substr(tab + 1));
+            note_pack_result(st.lines[i].substr(0, tab), st.lines[i].substr(tab + 1));
+        }
 }
 
 // Copies `base` to `tmp` (marked as the platform's) and runs every source's statements on it, each
@@ -808,6 +818,7 @@ int build_copy(const fs::path& base, const fs::path& tmp, const std::vector<Sql>
         {
             const auto& r = results.back();
             log_line(r.substr(0, r.find('\t')), "database: " + r.substr(r.find('\t') + 1));
+            note_pack_result(r.substr(0, r.find('\t')), r.substr(r.find('\t') + 1));
         }
         if (err) sqlite3_free(err);
     }
