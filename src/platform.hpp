@@ -74,7 +74,7 @@ void remove_leftover_file(const char* media_path);
 // media_overrides.cpp: mounts mediaoverride and mediapc itself when Extra Options isn't loaded.
 void start_media_overrides();
 
-// car_packs.cpp (prototype): this Azimuth folder's own media layer, and car packs.
+// car_packs.cpp: this Azimuth folder's own media layer, and car packs.
 struct CarPack {
     std::string name;                         // its folder's name in fh2-cars
     std::filesystem::path root, media, mirror; // fh2-cars\<name>, its media folder, its copy on the temp drive
@@ -96,6 +96,8 @@ const std::vector<CarPack>& car_packs();
 // Finds the packs, puts their files on the temp drive, and writes the merged zipmanifest.xml to
 // instance_media(). Their SQL goes into the database with the mods' (apply_database).
 void prepare_car_packs();
+// Without the layer the packs in fh2-cars aren't read: says so (with `why`) when there are any.
+void car_packs_unavailable(const std::string& why);
 
 // database.cpp: SQL patches applied to a copy of the game database.
 void apply_database(const std::vector<FH2Mod*>& mods);

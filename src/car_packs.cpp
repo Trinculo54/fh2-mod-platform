@@ -1,4 +1,4 @@
-// Car packs (prototype) and this Azimuth folder's own media layer.
+// Car packs, and this Azimuth folder's own media layer.
 //
 // Every Azimuth folder that starts the same game folder shares its mediaoverride, so one
 // install's mods show up in another's game. Without Extra Options the platform mounts the
@@ -114,18 +114,24 @@ void write_manifest() {
     const fs::path out = instance_media() / "zipmanifest.xml";
     std::error_code ec;
     std::vector<std::pair<std::string, ZipDir>> zips; // game path (lower case), directory
+    // Where two packs have the same zip, the game reads the first one's (media_overrides.cpp mounts
+    // them in name order), so its line is the one used.
+    std::map<std::string, std::string> from; // game path -> the pack it's from
     for (const auto& pack : g_packs)
         for (const auto& e : fs::recursive_directory_iterator(pack.media, ec)) {
             if (!e.is_regular_file(ec) || lower(narrow(e.path().extension().wstring())) != ".zip") continue;
             ZipDir d;
             const std::string game_path =
                 "game:\\media\\" + lower(narrow(fs::relative(e.path(), pack.media, ec).wstring()));
+            if (const auto f = from.find(game_path); f != from.end()) {
+                plog("car packs: " + pack.name + ": " + game_path + " is in " + f->second + " too, whose zip is read");
+                continue;
+            }
+            from[game_path] = pack.name;
             if (!zip_dir(e.path(), d)) {
                 plog("car packs: " + pack.name + ": couldn't read the zip directory of " + game_path + "; left out");
                 continue;
             }
-            zips.erase(std::remove_if(zips.begin(), zips.end(), [&](const auto& z) { return z.first == game_path; }),
-                       zips.end());
             zips.emplace_back(game_path, d);
         }
     if (zips.empty()) {
@@ -302,6 +308,16 @@ fs::path override_root() {
 }
 
 const std::vector<CarPack>& car_packs() { return g_packs; }
+
+void car_packs_unavailable(const std::string& why) {
+    std::error_code ec;
+    int n = 0;
+    for (const auto& e : fs::directory_iterator(azimuth_dir() / "fh2-cars", ec))
+        n += e.is_directory(ec) && fs::is_directory(e.path() / "media", ec);
+    if (n)
+        plog("car packs: the " + std::to_string(n) + " pack(s) in fh2-cars aren't read: " + why +
+             ". They need Azimuth 1.0 or later, without Extra Options");
+}
 
 void prepare_car_packs() {
     std::error_code ec;
