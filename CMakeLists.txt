@@ -67,6 +67,8 @@ target_compile_options(fh2mod_platform PRIVATE ${_warn} "$<$<AND:$<NOT:$<BOOL:${
 target_compile_definitions(fh2mod_platform PRIVATE _WIN32_WINNT=0x0A00 WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
                            FH2MOD_PLATFORM_VERSION="${PROJECT_VERSION}")
 target_include_directories(fh2mod_platform PRIVATE include src ${CMAKE_CURRENT_BINARY_DIR}/generated)
+# The HUD layer preview (include/fh2mod_hud.h): its template.
+target_sources(fh2mod_platform PRIVATE src/hud_template.cpp)
 # Only kernel32/user32 (and the C runtime) at load time: azimuth.exe loads
 # this DLL very early, and an app-folder version.dll or winhttp.dll proxy
 # from some other mod must not get pulled in by us. WinHTTP is loaded from
