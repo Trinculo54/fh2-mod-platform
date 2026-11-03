@@ -29,11 +29,14 @@
 // Folder volume methods: +0x10 add a reference, +0x18 release, +0xE8 does a
 // file exist.
 #include "platform.hpp"
+#include "updates.hpp"
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <iterator>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -75,6 +78,31 @@ void* g_folder_vtable[1 + 0x1F0 / sizeof(void*)];
 std::atomic<int> g_state{0}; // 0 not mounted, 1 mounting, 2 done
 std::atomic<int> g_lookups{0};
 
+// Prototype: the folders mounted from outside the game folder (this Azimuth folder's layer and
+// the car packs). Their first lookups, and every file they had, go to platform.log.
+struct Probe {
+    std::atomic<void*> volume{nullptr};
+    std::string label;
+    std::atomic<int> asked{0}, had{0};
+};
+Probe g_probes[32];
+std::atomic<int> g_probe_count{0};
+std::atomic<int> g_probe_lines{0};
+
+void note_lookup(void* volume, const char* text, std::size_t length, uint8_t found) {
+    const int n = g_probe_count.load(std::memory_order_acquire);
+    for (int i = 0; i < n; ++i) {
+        Probe& p = g_probes[i];
+        if (p.volume.load(std::memory_order_relaxed) != volume) continue;
+        const int asked = p.asked.fetch_add(1, std::memory_order_relaxed);
+        const bool show = asked < 6 || (found && p.had.fetch_add(1, std::memory_order_relaxed) < 40);
+        if (show && g_probe_lines.fetch_add(1, std::memory_order_relaxed) < 400)
+            plog("media overrides: " + p.label + " asked for \"" + std::string(text, std::min<std::size_t>(length, 200)) +
+                 "\": " + (found ? "HAS IT" : "no"));
+        return;
+    }
+}
+
 // The game's own folder volume answers archive selectors such as "<*>0" as
 // disk names; they aren't files. Same check as Extra Options'.
 uint8_t folder_exists(void* volume, const GameString* path) {
@@ -83,21 +111,78 @@ uint8_t folder_exists(void* volume, const GameString* path) {
         const unsigned char c = static_cast<unsigned char>(text[i]);
         if (c < 32 || c == '<' || c == '>' || c == '*' || c == '?' || c == '"' || c == '|') return 0;
     }
-    return g_exists(volume, path);
+    const uint8_t found = g_exists(volume, path);
+    if (g_probe_count.load(std::memory_order_relaxed)) note_lookup(volume, text, path->length, found);
+    return found;
 }
 
-int mount_folder(void* filesystem, const char* folder, unsigned priority) {
+int mount_folder(void* filesystem, const char* folder, unsigned priority, const char* label = nullptr) {
     void* storage = reinterpret_cast<Allocate>(g_base + RVA_ALLOCATE)(0x50);
     if (!storage) return 0;
     const GameString source = game_string(folder), target = game_string("game:\\media\\");
     void* volume = reinterpret_cast<Construct>(g_base + RVA_CONSTRUCT)(storage, &source, 1);
     *reinterpret_cast<void***>(volume) = g_folder_vtable + 1;
+    if (label) {
+        const int i = g_probe_count.load(std::memory_order_relaxed);
+        if (i < static_cast<int>(std::size(g_probes))) {
+            g_probes[i].label = label;
+            g_probes[i].volume.store(volume, std::memory_order_relaxed);
+            g_probe_count.store(i + 1, std::memory_order_release);
+        }
+    }
     void** methods = *reinterpret_cast<void***>(volume);
     reinterpret_cast<Method>(methods[0x10 / 8])(volume);
     void** fs_methods = *reinterpret_cast<void***>(filesystem);
     const int ok      = reinterpret_cast<Mount>(fs_methods[0x1E8 / 8])(filesystem, &target, &volume, priority, 0, 0, nullptr);
     reinterpret_cast<Method>(methods[0x18 / 8])(volume);
     return ok;
+}
+
+// A folder outside the game folder, as the game spells it, and its priority (above mediaoverride's).
+struct Outside {
+    std::string label, folder;
+    unsigned priority;
+};
+
+struct Mounted {
+    std::string label, folder;
+    int ok;
+};
+
+// Called inside mount_all's __try (no objects with destructors there).
+void mount_outside(void* filesystem, const std::vector<Outside>& folders, std::vector<Mounted>& out) {
+    for (const auto& f : folders)
+        out.push_back({f.label, f.folder, mount_folder(filesystem, f.folder.c_str(), f.priority, f.label.c_str())});
+}
+
+// This folder's layer, then the packs, each on the temp drive. Prototype: just above each pack's
+// copy, the pack's own folder by its full path, to learn whether Azimuth lets the game read
+// there too (a lookup there that fails doesn't stop the game; one under game:\ with ".." does).
+std::vector<Outside> outside_folders() {
+    std::vector<Outside> f;
+    if (!instance_layer()) return f;
+    f.push_back({"this folder's layer (T:)", temp_drive_spelling(instance_media()), 0x7FFFFFFE});
+    unsigned priority = 0x7FFFFFF0;
+    for (const auto& p : car_packs()) {
+        if (f.size() + 2 > std::size(g_probes)) break;
+        f.push_back({"pack " + p.name + " (its folder, full path)", narrow(p.media.wstring()) + "\\", priority--});
+        f.push_back({"pack " + p.name + " (T:)", temp_drive_spelling(p.mirror), priority--});
+    }
+    f.erase(std::remove_if(f.begin(), f.end(), [](const Outside& o) { return o.folder.size() < 4; }), f.end());
+    return f;
+}
+
+int mount_guarded(void* filesystem, const std::vector<Outside>& folders, std::vector<Mounted>& outside, int& over,
+                  int& pc) {
+    __try {
+        mount_outside(filesystem, folders, outside);
+        over = mount_folder(filesystem, "game:\\mediaoverride\\", 0x7FFFFF00);
+        pc   = mount_folder(filesystem, "game:\\mediapc\\", 0x7FFFFEFF);
+        reinterpret_cast<Method>((*reinterpret_cast<void***>(filesystem))[0x1F8 / 8])(filesystem);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+    return 1;
 }
 
 // Returns a line for the log, or "" when it's too early (no root volume yet).
@@ -107,15 +192,13 @@ std::string mount_all(void* filesystem) {
     int expected = 0;
     if (!g_state.compare_exchange_strong(expected, 1)) return {};
     int over = 0, pc = 0;
-    bool crashed = false;
-    __try {
-        over = mount_folder(filesystem, "game:\\mediaoverride\\", 0x7FFFFFFE);
-        pc   = mount_folder(filesystem, "game:\\mediapc\\", 0x7FFFFFFD);
-        reinterpret_cast<Method>((*reinterpret_cast<void***>(filesystem))[0x1F8 / 8])(filesystem);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        crashed = true;
-    }
+    std::vector<Mounted> outside;
+    outside.reserve(32);
+    const auto folders = outside_folders();
+    const bool crashed = !mount_guarded(filesystem, folders, outside, over, pc);
     g_state.store(2);
+    for (const auto& m : outside)
+        plog("media overrides: " + m.label + " " + m.folder + (m.ok ? " mounted" : " NOT mounted"));
     if (crashed) return "media overrides: mounting the folders crashed; the game's own files are used";
     return std::string("media overrides: game:\\mediaoverride\\ ") + (over ? "mounted" : "NOT mounted") +
            ", game:\\mediapc\\ " + (pc ? "mounted" : "NOT mounted") + ", over game:\\media\\ (first lookup was #" +
@@ -277,6 +360,11 @@ void start_media_overrides() {
         return;
     }
     plog("media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride and mediapc itself");
+    if (instance_layer()) {
+        plog("media overrides: car packs PROTOTYPE: the platform's files go to " + narrow(instance_media().wstring()) +
+             " (the game's " + temp_drive_spelling(instance_media()) + "), mounted ahead of mediaoverride");
+        prepare_car_packs();
+    }
     std::thread(watch).detach();
 }
 

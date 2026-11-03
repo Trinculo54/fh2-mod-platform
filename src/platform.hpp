@@ -74,8 +74,32 @@ void remove_leftover_file(const char* media_path);
 // media_overrides.cpp: mounts mediaoverride and mediapc itself when Extra Options isn't loaded.
 void start_media_overrides();
 
+// car_packs.cpp (prototype): this Azimuth folder's own media layer, and car packs.
+struct CarPack {
+    std::string name;                         // its folder's name in fh2-cars
+    std::filesystem::path root, media, mirror; // fh2-cars\<name>, its media folder, its copy on the temp drive
+    std::vector<std::string> sql;             // its *.sql files' text, by file name (database.cpp runs them)
+};
+// <Azimuth>\data\titles\1A96545B\tmp, the folder Azimuth gives the game as its T:\ drive.
+std::filesystem::path temp_drive();
+// How the game spells a folder under temp_drive(): "T:\...\".
+std::string temp_drive_spelling(const std::filesystem::path& folder);
+std::filesystem::path instance_media(); // temp_drive()\fh2-platform\media
+// The platform mounts its own folders (no Extra Options, Azimuth 1.0 or later): what it writes goes
+// to instance_media(), which only this Azimuth folder's game sees.
+bool instance_layer();
+// Where overrides are written: instance_media(), else the game's mediaoverride.
+std::filesystem::path override_root();
+const std::vector<CarPack>& car_packs();
+// Finds the packs, puts their files on the temp drive, and writes the merged zipmanifest.xml to
+// instance_media(). Their SQL goes into the database with the mods' (apply_database).
+void prepare_car_packs();
+
 // database.cpp: SQL patches applied to a copy of the game database.
 void apply_database(const std::vector<FH2Mod*>& mods);
+// Data_Car.str keys the database's car names have that a pack or mod gave as text, with their text
+// (the string tables are written with them).
+std::map<uint16_t, std::wstring> database_strings();
 
 // hooks.cpp: the hook API, and what crash reports say about hooks.
 // The folder of Extra Options' winmm.dll if that's the winmm.dll loaded, else empty. Extra
