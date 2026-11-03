@@ -129,6 +129,10 @@ If you can't use the platform's hooks for something (a patch in the middle of a 
 
 If players will want to turn parts of your mod on and off, or tune a number, give them rows on the Mods page (API 4; sliders API 5): Pause > Settings > MODS, shared by every mod. You pass the current value and get told when the player changes it; you keep saving it in your own settings file, as before. Rows that only work after a restart are marked so, and the game then offers to restart for the player. From platform 2.8.0 (API 9) a row can also offer named choices, like a button or a mode, instead of a number standing for one. [`api.md`](api.md#the-mods-page-api-4-sliders-api-5) has the details and an example. Keep it to the main switches; fine-tuning still belongs in your ini.
 
+## A HUD of your own (preview)
+
+A test build of the platform, "2.8.0 + HUD layer preview 1", lets a mod show a bar, labels and button prompts of its own in the game's free-roam HUD, drawn by the game's UI in its own look. It's only in that build, for the testers of a mod that needs it, and it will change before it joins the API. [`hud-layer-preview.md`](hud-layer-preview.md) has how to use it, and how to carry on without it everywhere else.
+
 ## Your own files
 
 Keep your settings, logs and other data in a folder of your own next to `azimuth.exe`, named after your mod, such as `MyMod\` or `mymod\`. The existing mods use `fh2-radio\` and `wheresmybuddy\`. `api->azimuth_dir` gives you that folder and `api->game_dir` the game's `Mount` folder. Don't put data in `fh2-mods`: anything in there ending in `.dll` gets loaded as a mod, and the platform keeps its own files there.
