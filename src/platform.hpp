@@ -97,6 +97,9 @@ const std::vector<CarPack>& car_packs();
 // Finds the packs, puts their files on the temp drive, and writes the merged zipmanifest.xml to
 // instance_media(). Their SQL goes into the database with the mods' (apply_database).
 void prepare_car_packs();
+// Once a pack's cars have their Ids (database.cpp): the part Ids of their own that their carbins
+// name (<car>.part-ids.txt), set in their zips on the temp drive.
+void place_car_ids(const CarPack& pack, const std::vector<std::pair<std::string, int64_t>>& cars);
 // Without the layer the packs in fh2-cars aren't read: says so (with `why`) when there are any.
 void car_packs_unavailable(const std::string& why);
 // Why the packs in fh2-cars aren't read this session (for the MODS tab), or "".

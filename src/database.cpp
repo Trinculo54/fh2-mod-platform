@@ -635,6 +635,7 @@ std::vector<Sql> with_car_ids(const Files& f, const fs::path& base, const std::v
             continue;
         }
         for (const auto& [car, id] : cars) claimed[lower_ascii(car)] = s.name;
+        place_car_ids(*s.pack, cars);
         auto& text = held.emplace_back();
         for (const auto& statement : *s.statements) {
             std::string t = statement;

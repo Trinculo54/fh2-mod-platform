@@ -24,6 +24,7 @@ With FH2MP in the Azimuth folder (an `fh2mp` folder there), the database is the 
 fh2-cars\<pack>\
   pack.ini                                        the pack's name and the cars it adds
   <name>.sql                                      database changes (any name; run in name order)
+  <car>.part-ids.txt                              where a car's carbin names its own part rows (see The model)
   media\cars\<car>.zip                            each car's model and data, as the game's own
   media\Stripped\RC1\Thumbnail_<car>_Big.swatchbin    its thumbnails
   media\Stripped\RC1\Thumbnail_<car>_Small.swatchbin
@@ -65,6 +66,16 @@ A pack is left out, and the log says why, when the database already has one of i
 
 `media\cars\<car>.zip` is laid out as the game's own car zips ([game-notes.md](game-notes.md#cars)). The platform reads its directory and adds its line to the game's `zipmanifest.xml`, so it can be any size. The car's files name it in their paths, `game:\media\cars\<car in lower case>\...`, so a copy of a stock car has to have those changed too. A zip with the name of one of the game's replaces it for that Azimuth folder.
 
+A carbin names the models of the car's upgradeable parts (rear wing, bumpers, side skirts, hood, roll cage) by the Ids of their database rows. The bumpers', side skirts', hood's and roll cage's are its body's rows, so a car sharing a stock car's body names them as that car does. The rear wing's rows are the car's own, `{car:X} * 1000 + n`, so its carbin can only name them once the car has its Id: `<car>.part-ids.txt` says where they are, and at each start the platform sets them in its copy of the zip on the temporary drive.
+
+```
+zip cars\<car>.zip        the zip, under media
+entry <offset>            where the carbin's local header is in it
+at <offset> <n>           a 4-byte Id there is set to <car Id> * 1000 + n (a line for each)
+```
+
+The carbin has to be stored in the zip so its bytes stay where the list says: stored, or deflated in stored blocks only. The platform makes the entry's CRC right after setting them.
+
 ### The thumbnail
 
 With `Thumbnail` set to `game:\Media\Stripped\RC1\Thumbnail_<car>.png`, the game reads `Stripped\RC1\Thumbnail_<car>_Big.swatchbin` (816 x 459, the Autoshow's large picture) and `_Small.swatchbin` (192 x 108, the car lists) from the pack, where it would read them in `RC1.zip`. The format is in [game-notes.md](game-notes.md#thumbnails). Keep the large one's top left empty, as the game's are: the Autoshow writes the make and model over it.
@@ -75,4 +86,4 @@ Any file under the pack's `media` is read where the game would read the same pat
 
 ## How it works
 
-At each start, before the game runs, the platform links each pack's `media` folder into `data\titles\1A96545B\tmp\fh2-platform\packs\<pack>` (hard links, so no space is used; copies when the pack is on another drive), writes the merged `zipmanifest.xml` into its layer, and builds the database with the packs' and the mods' statements. When the game first looks up a file, it mounts its layer and then each pack's folder ahead of `mediaoverride`. The game reads only through Azimuth's drives, so that's where its folders have to be ([game-notes.md](game-notes.md#azimuths-drives-and-this-folders-layer)).
+At each start, before the game runs, the platform links each pack's `media` folder into `data\titles\1A96545B\tmp\fh2-platform\packs\<pack>` (hard links, so no space is used; copies when the pack is on another drive), writes the merged `zipmanifest.xml` into its layer, and builds the database with the packs' and the mods' statements. A car zip with a `part-ids.txt` is a copy there, with the car's Ids set in its carbin; it's copied again only when the pack's zip changes. When the game first looks up a file, it mounts its layer and then each pack's folder ahead of `mediaoverride`. The game reads only through Azimuth's drives, so that's where its folders have to be ([game-notes.md](game-notes.md#azimuths-drives-and-this-folders-layer)).

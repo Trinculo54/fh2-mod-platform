@@ -12,7 +12,8 @@
 //   T:\fh2-platform\media\          what the platform writes: the Mods pages, string tables,
 //                                   file overrides, the merged zip manifest, the database
 //   T:\fh2-platform\packs\<pack>\   a pack's media folder, as hard links to its files (copies
-//                                   when the pack is on another drive)
+//                                   when the pack is on another drive, and for a car zip whose
+//                                   carbin gets the car's part Ids, place_car_ids)
 // and the packs themselves are in <Azimuth>\fh2-cars\<pack>\media\, laid out as under media
 // (cars\<name>.zip and so on). A pack's zips are added to the game's zipmanifest.xml (the line
 // for each, from the zip's own central directory), and its <pack>\*.sql run on the game
@@ -25,6 +26,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstring>
 #include <fstream>
@@ -291,6 +293,49 @@ void mirror_pack(const CarPack& pack) {
         note_car_pack_problem(pack.name, std::to_string(failed) + " of its files couldn't be put on the game's temp drive.");
 }
 
+uint32_t crc32(const std::string& s) {
+    static const auto table = [] {
+        std::array<uint32_t, 256> t{};
+        for (uint32_t i = 0; i < 256; ++i) {
+            uint32_t c = i;
+            for (int k = 0; k < 8; ++k) c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            t[i] = c;
+        }
+        return t;
+    }();
+    uint32_t c = 0xFFFFFFFFu;
+    for (const unsigned char b : s) c = table[(c ^ b) & 0xFF] ^ (c >> 8);
+    return ~c;
+}
+
+uint32_t u32_at(const std::string& s, std::size_t o) {
+    uint32_t v = 0;
+    if (o + 4 <= s.size()) std::memcpy(&v, s.data() + o, 4);
+    return v;
+}
+
+// A zip entry's data, uncompressed: stored, or deflated in stored blocks only (what make_car_pack.py
+// writes for a carbin whose bytes are set later). False for anything else.
+bool stored_data(const std::string& data, uint16_t method, std::string& out) {
+    out.clear();
+    if (method == 0) {
+        out = data;
+        return true;
+    }
+    if (method != 8) return false;
+    for (std::size_t p = 0;;) {
+        if (p + 5 > data.size() || (data[p] & 6) != 0) return false;
+        uint16_t len = 0, nlen = 0;
+        std::memcpy(&len, data.data() + p + 1, 2);
+        std::memcpy(&nlen, data.data() + p + 3, 2);
+        if ((len ^ nlen) != 0xFFFF || p + 5 + len > data.size()) return false;
+        out.append(data, p + 5, len);
+        const bool last = data[p] & 1;
+        p += 5 + len;
+        if (last) return p == data.size();
+    }
+}
+
 // A pack's folder name on the temp drive: its own when the game can spell it.
 std::string mirror_name(const std::string& name, std::size_t index) {
     const bool plain = !name.empty() && name.size() <= 40 && std::all_of(name.begin(), name.end(), [](char c) {
@@ -334,6 +379,113 @@ void car_packs_unavailable(const std::string& why) {
 }
 
 std::string car_packs_unread() { return g_unread; }
+
+// A car's carbin names its upgradeable parts' models by their rows' Ids. Its body's are shared with
+// the base car, but its rear wing's rows are its own, which its SQL numbers <car Id> * 1000 + n, so
+// those Ids can only be set once the car has its Id. make_car_pack.py stores the carbin so its bytes
+// are at fixed places and lists them in <car>.part-ids.txt ("zip <path under media>", "entry <local
+// header offset>", "at <offset> <n>" lines). They're set in the zip on the temp drive, which is then
+// a copy of the pack's rather than a link to it, with the entry's CRC made right; the copy keeps the
+// pack zip's time, so mirror_pack keeps it until the pack's zip changes.
+void place_car_ids(const CarPack& pack, const std::vector<std::pair<std::string, int64_t>>& cars) {
+    for (const auto& [car, id] : cars) {
+        std::error_code ec;
+        const fs::path list = pack.root / fs::path{car + ".part-ids.txt"};
+        if (!fs::is_regular_file(list, ec)) continue;
+        std::string zip_rel;
+        uint64_t entry = 0;
+        std::vector<std::pair<uint64_t, uint64_t>> at;
+        std::istringstream lines{read_all(list)};
+        for (std::string l; std::getline(lines, l);) {
+            std::istringstream w{l};
+            std::string key;
+            w >> key;
+            uint64_t a = 0, b = 0;
+            if (key == "zip") w >> zip_rel;
+            else if (key == "entry") w >> entry;
+            else if (key == "at" && w >> a >> b) at.emplace_back(a, b);
+        }
+        const auto fail = [&](const std::string& why) {
+            plog("car packs: " + pack.name + ": " + car + "'s rear wing parts: " + why);
+            note_car_pack_problem(pack.name, car + "'s rear wing may not show: " + why + ".");
+        };
+        if (zip_rel.empty() || at.empty()) {
+            fail(car + ".part-ids.txt lists nothing");
+            continue;
+        }
+        const fs::path from = pack.media / fs::path{zip_rel}, to = pack.mirror / fs::path{zip_rel};
+        bool copied = false;
+        if (fs::equivalent(from, to, ec)) { // a link: the Ids would go into the pack's own zip
+            fs::remove(to, ec);
+            if (!CopyFileW(from.c_str(), to.c_str(), FALSE)) {
+                fail("couldn't copy its zip to the temp drive (error " + std::to_string(GetLastError()) + ")");
+                continue;
+            }
+            copied = true;
+        }
+        const auto want = [&](uint64_t n) { return static_cast<uint32_t>(id * 1000 + static_cast<int64_t>(n)); };
+        // Most starts they're set already: look at those places only.
+        std::size_t set = 0;
+        {
+            std::ifstream in{to, std::ios::binary};
+            for (const auto& [o, n] : at) {
+                uint32_t v = 0;
+                in.seekg(static_cast<std::streamoff>(o));
+                in.read(reinterpret_cast<char*>(&v), 4);
+                set += !in || v != want(n);
+            }
+        }
+        if (set) {
+            std::string zip = read_all(to);
+            if (std::any_of(at.begin(), at.end(), [&](const auto& a) { return a.first + 4 > zip.size(); })) {
+                fail("its zip is shorter than " + car + ".part-ids.txt says");
+                continue;
+            }
+            set = 0;
+            for (const auto& [o, n] : at)
+                if (const uint32_t v = want(n); u32_at(zip, o) != v) std::memcpy(zip.data() + o, &v, 4), ++set;
+            uint16_t method = 0, nlen = 0, xlen = 0;
+            if (u32_at(zip, entry) != 0x04034B50 || entry + 30 > zip.size()) {
+                fail("no zip entry where " + car + ".part-ids.txt says");
+                continue;
+            }
+            std::memcpy(&method, zip.data() + entry + 8, 2);
+            std::memcpy(&nlen, zip.data() + entry + 26, 2);
+            std::memcpy(&xlen, zip.data() + entry + 28, 2);
+            const uint64_t data = entry + 30 + nlen + xlen, size = u32_at(zip, entry + 18);
+            std::string content;
+            if (data + size > zip.size() || !stored_data(zip.substr(data, size), method, content)) {
+                fail("its carbin isn't stored in its zip as make_car_pack.py stores it");
+                continue;
+            }
+            const uint32_t crc = crc32(content);
+            std::memcpy(zip.data() + entry + 14, &crc, 4);
+            ZipDir d;
+            bool listed = false;
+            if (zip_dir(to, d))
+                for (uint64_t q = d.start; q + 46 <= zip.size() && u32_at(zip, q) == 0x02014B50;) {
+                    if (u32_at(zip, q + 42) == entry) std::memcpy(zip.data() + q + 16, &crc, 4), listed = true;
+                    uint16_t n2 = 0, x2 = 0, c2 = 0;
+                    std::memcpy(&n2, zip.data() + q + 28, 2);
+                    std::memcpy(&x2, zip.data() + q + 30, 2);
+                    std::memcpy(&c2, zip.data() + q + 32, 2);
+                    q += 46 + n2 + x2 + c2;
+                }
+            if (!listed) {
+                fail("its zip's directory doesn't list the carbin");
+                continue;
+            }
+            if (!write_all(to, zip)) {
+                fail("couldn't write its zip on the temp drive (error " + std::to_string(GetLastError()) + ")");
+                continue;
+            }
+        }
+        if (set || copied) fs::last_write_time(to, fs::last_write_time(from, ec), ec);
+        if (set)
+            plog("car packs: " + pack.name + ": " + car + "'s rear wing part Ids set for car " + std::to_string(id) +
+                 " (" + std::to_string(set) + " place(s) in its carbin, in its zip on the temp drive)");
+    }
+}
 
 void note_car_pack_problem(const std::string& pack, const std::string& why) {
     std::scoped_lock lk{g_problem_mu};
