@@ -34,6 +34,12 @@ namespace fh2platform {
 void log_line(const std::string& who, const std::string& text);
 inline void plog(const std::string& text) { log_line("", text); }
 
+// The loader thread, before every fh2mod_init has returned (a mod's fh2mod_init is running).
+bool in_mod_init();
+// An interface the platform itself offers (the HUD layer preview's), there before any mod starts, so a
+// mod finds it from fh2mod_init on and can't publish the name. No log line.
+void publish_platform_interface(const char* name, uint32_t version, const void* iface, FH2Mod* owner);
+
 // Base of the mapped game exe, or nullptr (always, once Azimuth has started another game).
 void* find_game();
 constexpr uint32_t kGameSizeOfImage = 0x03A18000u;

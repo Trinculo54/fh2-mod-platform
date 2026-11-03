@@ -19,6 +19,7 @@
 #include <windows.h>
 #include <psapi.h>
 
+#include "hud_layer.hpp"
 #include "platform.hpp"
 #include "platform_version.h"
 #include "strings.hpp"
@@ -819,6 +820,8 @@ DWORD WINAPI load_mods(LPVOID) {
             }
         }
     }
+    // The HUD layer preview's interface, there from every mod's fh2mod_init on.
+    publish_platform_interface("FH2Platform.HudLayer", 1, hud_interface(), hud_layer_owner());
     for (const auto& f : files) {
         {
             std::scoped_lock lk{g_mu};
@@ -948,6 +951,7 @@ DWORD WINAPI load_mods(LPVOID) {
                 if (lower_w(f.file) == lower_w(l.file)) f.problem = problem;
     }
 
+    hud_layer_prepare(&g_api);
     // First write of everything edited so far, and the title notices.
     {
         std::scoped_lock lk{g_mu};
@@ -986,6 +990,13 @@ DWORD WINAPI load_mods(LPVOID) {
 }
 
 } // namespace
+
+bool in_mod_init() { return GetCurrentThreadId() == g_loader_thread && WaitForSingleObject(g_mods_ready, 0) != WAIT_OBJECT_0; }
+
+void publish_platform_interface(const char* name, uint32_t version, const void* iface, FH2Mod* owner) {
+    std::scoped_lock lk{g_mu};
+    g_interfaces[name] = {owner, version, iface};
+}
 
 // ---- the MODS tab's list of mods -----------------------------------------------------
 //

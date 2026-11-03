@@ -34,6 +34,7 @@
 //    the Mods page writes it with a space before the '=', which keeps them off it.
 //  - The message box is the one the options pages use for "Unsaved changes": see the popup
 //    section below.
+#include "hud_layer.hpp"
 #include "platform.hpp"
 #include "strings.hpp"
 #include "updates.hpp"
@@ -837,6 +838,7 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     for (int prop = 0; prop < kTileProps; ++prop)
         if (const int t = name_number(n, kTilePropNames[prop], static_cast<int>(kTileCount)); t >= 0) return tile_descriptor(prop, t);
     if (std::wcsncmp(n, L"FH2Mod_Slot_", 12) == 0) return slot_descriptor(n);
+    if (std::wcsncmp(n, L"FH2Mod_Hud_", 11) == 0) return hud_layer_find(n);
     Row* r = row_by_prop(n);
     return r ? descriptor_for(r) : nullptr;
 }
@@ -3392,9 +3394,16 @@ uint64_t d_hud_shown(void* page, void* b, void* c, void* d) {
     notify_changed(page, g_mod_notice_desc);
     return r;
 }
+// The HUD layer hooks this slot too (its page tracking), and its hook can go in first: the slot then
+// holds a platform stub, and hook_pointer joins that hook's site. So the slot is checked in the exe on
+// disk as well; a change made outside the platform is still refused by hook_pointer's own check.
+bool hud_shown_slot_ok(void** slot) {
+    const uint64_t original = 0x140000000ull + RVA_HUD_SHOWN;
+    return readable(slot, 8) && (*slot == reinterpret_cast<void*>(g_base + RVA_HUD_SHOWN) || disk_bytes_equal(slot, &original, 8));
+}
 void hook_hud_shown(FH2Mod* m) {
     void** slot = reinterpret_cast<void**>(g_base + RVA_HUD_SHOWN_SLOT);
-    if (!readable(slot, 8) || *slot != reinterpret_cast<void*>(g_base + RVA_HUD_SHOWN)) {
+    if (!hud_shown_slot_ok(slot)) {
         slog("the freeroam HUD's vtable doesn't look as expected; no notice about mods that didn't load");
         return;
     }
@@ -3736,9 +3745,15 @@ FH2Hook* hook_title(FH2Mod* m) {
 }
 
 // ---- hooking up ----------------------------------------------------------------------------
+// What the HUD layer waits for (settings_properties_state): 0 not yet, 1 FindProperty hooked, -1 it never will be.
+std::atomic<int> g_props_state{0};
+
 void hook_game() {
     void* base = g_api->wait_for_code(0xFFFFFFFFu);
-    if (!base) return;
+    if (!base) {
+        g_props_state = -1;
+        return;
+    }
     g_base = reinterpret_cast<uintptr_t>(base);
     struct Check {
         uintptr_t rva;
@@ -3764,6 +3779,7 @@ void hook_game() {
             std::snprintf(b, sizeof b, "%llX", static_cast<unsigned long long>(c.rva));
             slog(std::string("the game's code at game+") + b + " doesn't look as expected; no Mods tile");
             clear_file(&g_owner_mod, nullptr);
+            g_props_state = -1;
             return;
         }
     const Check slider_checks[] = {
@@ -3816,9 +3832,11 @@ void hook_game() {
         slog("hooking the Settings page failed; no Mods tile or MODS tab");
         g_api->disable_hooks(m, nullptr);
         clear_file(m, nullptr);
+        g_props_state = -1;
         return;
     }
     slog("ready");
+    g_props_state = 1;
     if (title) {
         g_title_ready = true;
         slog("title-screen entries ready");
@@ -4352,7 +4370,7 @@ bool write_hud_notice() {
     std::vector<std::string> names;
     for (const ModEntry& e : g_entries)
         if (!mod_problem(e).empty()) names.push_back(e.name);
-    if (names.empty()) {
+    if (names.empty() && !hud_layer_wants_page()) {
         remove_leftover_file("UI/Scenes/Anthem/A_Hud.xaml");   // last session's notice
         return true;
     }
@@ -4362,68 +4380,79 @@ bool write_hud_notice() {
     const std::size_t g = z == std::string::npos ? z : page.rfind("</Grid>", z);
     if (page.empty() || r == std::string::npos || g == std::string::npos) {
         slog("A_Hud.xaml doesn't look as expected; no notice about mods that didn't load");
+        hud_layer_splice(page);   // says why the HUD layer is left out too
         return false;
     }
-    std::string title = names.size() == 1 ? "A MOD DIDN'T LOAD" : std::to_string(names.size()) + " MODS DIDN'T LOAD";
-    std::string which;
-    for (std::size_t i = 0; i < names.size() && i < 3; ++i) which += (i ? ", " : "") + names[i];
-    if (names.size() > 3) which += " and " + std::to_string(names.size() - 3) + " more";
-    const std::string text = which + (names.size() == 1 ? " isn't" : " aren't") + " working. See MODS in the pause menu.";
-    auto key = [](double v, double t, bool ease_in) {
-        char b[256];
-        std::snprintf(b, sizeof b,
-                      "                                    <EasingDoubleKeyFrame KeyTime=\"0:0:%.2f\" Value=\"%.2f\">"
-                      "<EasingDoubleKeyFrame.EasingFunction><CircleEase EasingMode=\"%s\" /></EasingDoubleKeyFrame.EasingFunction>"
-                      "</EasingDoubleKeyFrame>\r\n",
-                      t, v, ease_in ? "EaseIn" : "EaseOut");
-        return std::string(b);
-    };
-    // in at 2s (0.5s, as the game's), held 9s, out (0.5s)
-    std::string fade = "                                <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"(UIElement.Opacity)\">\r\n" +
-                       key(0, 0, false) + key(0, 2.0, false) + key(1, 2.5, false) + key(1, 11.5, true) + key(0, 12.0, true) +
-                       "                                </DoubleAnimationUsingKeyFrames>\r\n";
-    std::string scale;
-    for (const char* axis : {"ScaleX", "ScaleY"})
-        scale += std::string("                                <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"(UIElement.RenderTransform).(TransformGroup.Children)[0].(ScaleTransform.") +
-                 axis + ")\">\r\n" + key(0.8, 0, false) + key(0.8, 2.0, false) + key(1, 2.5, false) + key(1, 11.5, true) +
-                 key(0.96, 12.0, true) + "                                </DoubleAnimationUsingKeyFrames>\r\n";
-    const std::string style =
-        "            <Style x:Key=\"FH2Mod_Style_ModNotice\" TargetType=\"StackPanel\">\r\n"
-        "                <Style.Triggers>\r\n"
-        "                    <DataTrigger Binding=\"{Binding FH2Mod_ModNotice}\" Value=\"True\">\r\n"
-        "                        <DataTrigger.EnterActions>\r\n"
-        "                            <BeginStoryboard>\r\n"
-        "                            <Storyboard>\r\n" + fade + scale +
-        "                            </Storyboard>\r\n"
-        "                            </BeginStoryboard>\r\n"
-        "                        </DataTrigger.EnterActions>\r\n"
-        "                    </DataTrigger>\r\n"
-        "                </Style.Triggers>\r\n"
-        "            </Style>\r\n        ";
-    const std::string notice =
-        "\r\n            <!-- FH2 Mod Platform: mods that didn't load -->\r\n"
-        "            <StackPanel Style=\"{StaticResource FH2Mod_Style_ModNotice}\" Opacity=\"0\" HorizontalAlignment=\"Center\" "
-        "VerticalAlignment=\"Top\" Margin=\"0,220,0,0\" RenderTransformOrigin=\"0.5,0.5\">\r\n"
-        "                <StackPanel.RenderTransform>\r\n"
-        "                    <TransformGroup>\r\n"
-        "                        <ScaleTransform ScaleX=\"0.8\" ScaleY=\"0.8\" />\r\n"
-        "                    </TransformGroup>\r\n"
-        "                </StackPanel.RenderTransform>\r\n"
-        "                <local:FZMaterial Preset=\"{DynamicResource A_FZMaterialPresetGlassRoundtangle_HudItem}\" Color=\"#99101418\">\r\n"
-        "                    <Border BorderThickness=\"2\" BorderBrush=\"#16FFFFFF\" CornerRadius=\"4\">\r\n"
-        "                        <StackPanel Orientation=\"Vertical\" HorizontalAlignment=\"Center\" Margin=\"16,8,16,8\">\r\n"
-        "                            <local:FZTextBlock Style=\"{StaticResource A_Style_FZTextBlock_HudLarge}\" Text=\"" + xml_escape(title) +
-        "\" Effect=\"{StaticResource A_DropShadowEffect_DefaultHud}\" HorizontalAlignment=\"Center\" TextAlignment=\"Center\" Margin=\"0,0,0,-3\" />\r\n"
-        "                            <local:FZTextBlock Style=\"{StaticResource A_Style_FZTextBlock_HudMedium}\" Text=\"" + xml_escape(text) +
-        "\" Effect=\"{StaticResource A_DropShadowEffect_DefaultHud}\" HorizontalAlignment=\"Center\" TextAlignment=\"Center\" />\r\n"
-        "                        </StackPanel>\r\n"
-        "                    </Border>\r\n"
-        "                </local:FZMaterial>\r\n"
-        "            </StackPanel>\r\n        ";
-    page.insert(g, notice);
-    page.insert(r, style);
-    g_hud_notice = set_file(&g_owner_mod, "UI/Scenes/Anthem/A_Hud.xaml", page.data(), page.size()) != 0;
-    return g_hud_notice;
+    if (!names.empty()) {   // the notice only when a mod didn't load (a HUD layer may need the page anyway)
+        std::string title = names.size() == 1 ? "A MOD DIDN'T LOAD" : std::to_string(names.size()) + " MODS DIDN'T LOAD";
+        std::string which;
+        for (std::size_t i = 0; i < names.size() && i < 3; ++i) which += (i ? ", " : "") + names[i];
+        if (names.size() > 3) which += " and " + std::to_string(names.size() - 3) + " more";
+        const std::string text = which + (names.size() == 1 ? " isn't" : " aren't") + " working. See MODS in the pause menu.";
+        auto key = [](double v, double t, bool ease_in) {
+            char b[256];
+            std::snprintf(b, sizeof b,
+                          "                                    <EasingDoubleKeyFrame KeyTime=\"0:0:%.2f\" Value=\"%.2f\">"
+                          "<EasingDoubleKeyFrame.EasingFunction><CircleEase EasingMode=\"%s\" /></EasingDoubleKeyFrame.EasingFunction>"
+                          "</EasingDoubleKeyFrame>\r\n",
+                          t, v, ease_in ? "EaseIn" : "EaseOut");
+            return std::string(b);
+        };
+        // in at 2s (0.5s, as the game's), held 9s, out (0.5s)
+        std::string fade = "                                <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"(UIElement.Opacity)\">\r\n" +
+                           key(0, 0, false) + key(0, 2.0, false) + key(1, 2.5, false) + key(1, 11.5, true) + key(0, 12.0, true) +
+                           "                                </DoubleAnimationUsingKeyFrames>\r\n";
+        std::string scale;
+        for (const char* axis : {"ScaleX", "ScaleY"})
+            scale += std::string("                                <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"(UIElement.RenderTransform).(TransformGroup.Children)[0].(ScaleTransform.") +
+                     axis + ")\">\r\n" + key(0.8, 0, false) + key(0.8, 2.0, false) + key(1, 2.5, false) + key(1, 11.5, true) +
+                     key(0.96, 12.0, true) + "                                </DoubleAnimationUsingKeyFrames>\r\n";
+        const std::string style =
+            "            <Style x:Key=\"FH2Mod_Style_ModNotice\" TargetType=\"StackPanel\">\r\n"
+            "                <Style.Triggers>\r\n"
+            "                    <DataTrigger Binding=\"{Binding FH2Mod_ModNotice}\" Value=\"True\">\r\n"
+            "                        <DataTrigger.EnterActions>\r\n"
+            "                            <BeginStoryboard>\r\n"
+            "                            <Storyboard>\r\n" + fade + scale +
+            "                            </Storyboard>\r\n"
+            "                            </BeginStoryboard>\r\n"
+            "                        </DataTrigger.EnterActions>\r\n"
+            "                    </DataTrigger>\r\n"
+            "                </Style.Triggers>\r\n"
+            "            </Style>\r\n        ";
+        const std::string notice =
+            "\r\n            <!-- FH2 Mod Platform: mods that didn't load -->\r\n"
+            "            <StackPanel Style=\"{StaticResource FH2Mod_Style_ModNotice}\" Opacity=\"0\" HorizontalAlignment=\"Center\" "
+            "VerticalAlignment=\"Top\" Margin=\"0,220,0,0\" RenderTransformOrigin=\"0.5,0.5\">\r\n"
+            "                <StackPanel.RenderTransform>\r\n"
+            "                    <TransformGroup>\r\n"
+            "                        <ScaleTransform ScaleX=\"0.8\" ScaleY=\"0.8\" />\r\n"
+            "                    </TransformGroup>\r\n"
+            "                </StackPanel.RenderTransform>\r\n"
+            "                <local:FZMaterial Preset=\"{DynamicResource A_FZMaterialPresetGlassRoundtangle_HudItem}\" Color=\"#99101418\">\r\n"
+            "                    <Border BorderThickness=\"2\" BorderBrush=\"#16FFFFFF\" CornerRadius=\"4\">\r\n"
+            "                        <StackPanel Orientation=\"Vertical\" HorizontalAlignment=\"Center\" Margin=\"16,8,16,8\">\r\n"
+            "                            <local:FZTextBlock Style=\"{StaticResource A_Style_FZTextBlock_HudLarge}\" Text=\"" + xml_escape(title) +
+            "\" Effect=\"{StaticResource A_DropShadowEffect_DefaultHud}\" HorizontalAlignment=\"Center\" TextAlignment=\"Center\" Margin=\"0,0,0,-3\" />\r\n"
+            "                            <local:FZTextBlock Style=\"{StaticResource A_Style_FZTextBlock_HudMedium}\" Text=\"" + xml_escape(text) +
+            "\" Effect=\"{StaticResource A_DropShadowEffect_DefaultHud}\" HorizontalAlignment=\"Center\" TextAlignment=\"Center\" />\r\n"
+            "                        </StackPanel>\r\n"
+            "                    </Border>\r\n"
+            "                </local:FZMaterial>\r\n"
+            "            </StackPanel>\r\n        ";
+        page.insert(g, notice);
+        page.insert(r, style);
+    }
+    // the HUD layer finds its own insertion points again, after the notice's
+    if (!hud_layer_splice(page) && names.empty()) {
+        remove_leftover_file("UI/Scenes/Anthem/A_Hud.xaml");   // nothing to write: the layer was left out
+        hud_layer_page_written(false, page);
+        return true;
+    }
+    const bool written = set_file(&g_owner_mod, "UI/Scenes/Anthem/A_Hud.xaml", page.data(), page.size()) != 0;
+    g_hud_notice       = written && !names.empty();
+    hud_layer_page_written(written, page);
+    return written;
 }
 
 // After every mod's fh2mod_init: write the pages (the MODS tab's, and Settings > Mods if any
@@ -4447,6 +4476,7 @@ void settings_start(const FH2ModApi* api) {
     if (game_mount().empty()) {
         slog("the game folder wasn't found; no Mods page or MODS tab");
         for (const char* f : files) remove_leftover_file(f);
+        hud_layer_start();
         return;
     }
     // the MODS tab
@@ -4489,7 +4519,7 @@ void settings_start(const FH2ModApi* api) {
     write_title_page();
     slog(std::to_string(n) + " row(s) on the Mods page, " + std::to_string(g_entries.size()) + " mod(s) on the MODS tab" +
          (g_hub_files ? "" : " (not shown)"));
-    if (g_hub_files || g_settings_tile || g_title_page) std::thread(hook_game).detach();
+    if (g_hub_files || g_settings_tile || g_title_page || hud_layer_wants_page()) std::thread(hook_game).detach();
     if (g_hub_files)
         // Update checks finish after this (from the cache, usually within a second or two): the
         // UPDATES tile's count is rewritten while the game is likely still to read the page.
@@ -4502,9 +4532,57 @@ void settings_start(const FH2ModApi* api) {
                 }
             }
         }).detach();
+    hud_layer_start();
 }
 
 FH2Mod* settings_owner() { return &g_owner_mod; }
+
+// ---- the HUD layer's way in (hud_layer.hpp) -----------------------------------------------------
+namespace {
+void __cdecl hud_set(void*, void*, uint8_t*) {}
+__attribute__((noinline)) void hud_play_sound_inner(const char* name) { play_sound_inner(name, RVA_UI_SOUNDS); }
+} // namespace
+
+uint8_t* settings_hud_descriptor(const char* name, void* getter, int kind) {
+    static const uint8_t string_type[] = {0x48, 0x8D, 0x05, 0x59, 0xB0, 0x02, 0x02, 0xC3};
+    std::scoped_lock lk{g_desc_mu};
+    switch (kind) {
+        case 0: return new_descriptor(name, getter, reinterpret_cast<void*>(&hud_set), nullptr);
+        case 1: return new_descriptor(name, getter, reinterpret_cast<void*>(&hud_set), reinterpret_cast<TypeFn>(g_base + RVA_BOOL_TYPE)(0));
+        case 2:
+            if (!g_sliders_ok) return nullptr;
+            return new_descriptor(name, getter, reinterpret_cast<void*>(&hud_set), nullptr, RVA_FLOAT_PROPERTY);
+        case 3:
+            if (!code_matches(RVA_BADGE_TYPE, string_type, sizeof string_type)) return nullptr;
+            return new_descriptor(name, getter, reinterpret_cast<void*>(&hud_set), reinterpret_cast<TypeFn>(g_base + RVA_BADGE_TYPE)(0));
+        default: return nullptr;
+    }
+}
+
+// notify_changed and play_sound swallow a fault; these report it, so the HUD layer can log it and turn
+// itself off. Only calls are inside the __try.
+bool settings_notify(void* obj, void* desc, uint32_t* code) {
+    __try {
+        reinterpret_cast<NotifyFn>(g_base + RVA_NOTIFY_PROP)(obj, desc);
+        return true;
+    } __except (*code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+bool settings_sounds_ok() { return g_sounds_ok; }
+bool settings_play_sound(const char* name, uint32_t* code) {
+    *code = 0;
+    if (!g_sounds_ok) return false;
+    __try {
+        hud_play_sound_inner(name);
+        return true;
+    } __except (*code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+bool settings_balanced(const std::string& xml, std::string& why) { return balanced_xml(xml, why); }
+std::string settings_read_ui(const char* name) { return read_ui(name); }
+int settings_properties_state() { return g_props_state.load(); }
 
 } // namespace fh2platform
 
