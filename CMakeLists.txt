@@ -22,6 +22,8 @@ set(FH2MOD_PLATFORM_VERSION_PATCH ${PROJECT_VERSION_PATCH})
 if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(FH2MOD_PLATFORM_VERSION_STRING ${PROJECT_VERSION} PARENT_SCOPE)
 endif()
+# The build's own name, in platform.log's first line, crash reports and ProductVersion.
+set(FH2MOD_PLATFORM_BUILD "${PROJECT_VERSION} + HUD layer preview 1")
 configure_file(cmake/platform_version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/platform_version.h)
 
 set(_warn)

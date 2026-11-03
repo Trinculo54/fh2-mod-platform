@@ -740,7 +740,7 @@ DWORD WINAPI load_mods(LPVOID) {
         g_log_copy = copy;
     }
     plog(std::string("FH2 Mod Platform ") + FH2MOD_PLATFORM_VERSION + " (API " + std::to_string(FH2MOD_API_VERSION) +
-         ") in " + narrow(g_azimuth.wstring()));
+         ") in " + narrow(g_azimuth.wstring()) + "; this is the " PLATFORM_BUILD_STR " build, not a release");
     plog("loaded as " + narrow(g_self_name) + (g_copies.empty() ? "" : "; " + g_copies));
     plog(session_line());
     plog(g_game.empty() ? "couldn't find the game's Mount folder; game text, file and database changes are off"
