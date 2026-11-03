@@ -8,7 +8,7 @@ A mod is a 64-bit Windows DLL, written in anything that can export a C function.
 
 To build, you need either [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) with CMake, which works on Linux and Windows and is what every FH2 mod uses so far, or Visual Studio with CMake. If you plan to use `__try`/`__except` around reads of game memory, llvm-mingw needs `-fms-extensions`, and GCC-based MinGW won't do at all.
 
-To test, you need Forza Horizon 2 running through Azimuth. The platform writes text, file and database changes to the game's `mediaoverride` folder. [Forza Horizon 2 Extra Options](https://github.com/RokkuDayo/forzahorizon2_extraoptions) makes the game read it, and most players have it already. When Extra Options isn't loaded, platform 2.7.3 and newer makes the game read the folder itself.
+To test, you need Forza Horizon 2 running through Azimuth. The platform writes text, file and database changes to the game's `mediaoverride` folder. [Forza Horizon 2 Extra Options](https://github.com/RokkuDayo/forzahorizon2_extraoptions) makes the game read it, and most players have it already. When Extra Options isn't loaded, platform 2.7.3 and newer makes the game read the folder itself. From 2.9.0, on Azimuth 1.0 or later without Extra Options, the changes go to the Azimuth folder's own layer instead, `data\titles\1A96545B\tmp\fh2-platform\media`, which the game reads ahead of `mediaoverride` ([car-packs.md](car-packs.md#this-azimuth-folders-own-files)).
 
 ## Set up the project
 

@@ -12,6 +12,8 @@ There's nothing to install by hand. Each mod's zip includes `d3dcompiler_47.dll`
 
 Azimuth 1.0.1 can run other Forza games too, such as Forza Motorsport 5 and 6, from the same launcher. From 2.8.0, when you start one of those, the platform and its mods leave it alone: nothing is hooked or patched in it, and `platform.log` says which game was started. Your FH2 mods are back as usual the next time you start Forza Horizon 2.
 
+**Car packs.** From 2.9.0 the platform loads new cars for the Autoshow from car packs, each pack a folder in `fh2-cars` next to `azimuth.exe`, with no installer and nothing written to the game folder. They need Azimuth 1.0 or later without Extra Options. On such an install the platform also keeps what it writes for the game (mods' text, files and database changes) in the Azimuth folder, so Azimuth folders sharing one game folder no longer see each other's mods. All of it is in [docs/car-packs.md](docs/car-packs.md).
+
 Mods can also put their main switches in the game itself. When one does, Pause > Settings gets a MODS tile next to the others, and the page behind it lists every mod's switches, with a description of each. A change takes effect straight away or, for switches that only work after a restart, the game offers to restart for you when you leave the page.
 
 The same spot on the title screen tells you when one of your mods has a new release on GitHub. Each mod decides whether it checks, and most let you turn it off in their settings.
@@ -22,7 +24,7 @@ Everything the platform does is logged to `fh2-mods\platform.log`: which mods it
 
 **On Linux (Wine or Proton).** The platform works as it is, but Extra Options needs a DLL override (`WINEDLLOVERRIDES="winmm=n,b"`), database changes need platform 2.7.1 or newer, and a few mods have limits there. Without the override, platform 2.7.3 or newer still gets mods' text, file and database changes to the game. On Azimuth 1.0.3 the platform is `DWrite.dll`, and Wine has its own copy of that, so if `fh2-mods\platform.log` never appears, add `dwrite` to the override. All of it is in [docs/linux.md](docs/linux.md).
 
-To remove the platform, delete `d3dcompiler_47.dll`, `DWrite.dll` and the `fh2-mods` folder. That removes every mod built on it.
+To remove the platform, delete `d3dcompiler_47.dll`, `DWrite.dll` and the `fh2-mods` folder (and `fh2-cars` and `data\titles\1A96545B\tmp\fh2-platform`, if you have them). That removes every mod and car pack built on it.
 
 ## For mod makers
 
@@ -42,7 +44,7 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
 
 The platform calls `fh2mod_init` on its own thread right after loading your DLL, and the API it passes in gives you:
 
-- **Game text.** Change any string in the game's string tables, by key or by matching text, in every language. The platform merges the edits from every mod and writes them to the game's override folder (`mediaoverride`), so two mods editing the same table don't overwrite each other.
+- **Game text.** Change any string in the game's string tables, by key or by matching text, in every language. The platform merges the edits from every mod and writes them to the game's override folder (`mediaoverride`, or from 2.9.0 the Azimuth folder's own), so two mods editing the same table don't overwrite each other.
 - **Title-screen notices.** Lines of your own under "PRESS (A) TO START", stacked with every other mod's.
 - **Title-screen entries.** From platform 2.8.0, a line with a button of its own there, like "(Y) START ON STORM ISLAND", that runs your code and can start the game for the player, and tells you afterwards that it did.
 - **Update checks.** Name your GitHub repo and the title screen tells players when you publish a newer release.
