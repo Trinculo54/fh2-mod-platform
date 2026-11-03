@@ -269,7 +269,8 @@ typedef struct FH2HudState {
     const char* tabs[FH2_HUD_MAX_TABS];        /* in capitals, 16 each; the first NULL or "" ends them */
     uint32_t tab;                              /* the selected one */
     const char* tab_keys[2];                   /* key caps for LB and RB with the keyboard: "Shift+Tab", "Tab",
-                                                  12 each, one cap each; NULL = the LB and RB pictures always */
+                                                  12 each, one cap each; give both or neither: with
+                                                  either NULL or "", the LB and RB pictures always */
     /* the middle */
     const char* line1;                         /* in capitals, 40: "CHECKPOINT 2 OF 3" */
     const char* line1_after;                   /* after it, in line1_after_style, 24: "MOVED" */
@@ -362,9 +363,10 @@ typedef struct FH2HudInterface {
        sound). Right after
        show_hud_layer is fine: "shown" means your latest show_hud_layer had
        parts, no other mod's came after it, and the platform hasn't hidden
-       it since (your lease running out, or on_status crashing). Any thread.
-       Returns 1, or 0 if you have no layer, it isn't shown, or the pulse is
-       unknown. */
+       it since (your lease running out, or on_status crashing). A pulse
+       sent while the HUD page is off screen (a menu, the map) is dropped if
+       the page isn't back within 0.4 s. Any thread. Returns 1, or 0 if you
+       have no layer, it isn't shown, or the pulse is unknown. */
     int (*pulse_hud)(FH2Mod* mod, int pulse);
 
     /* Your layer's FH2_HUD_ bits now. Any thread, cheap. Call it from the
