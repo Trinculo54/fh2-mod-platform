@@ -182,7 +182,7 @@ A mod can offer other mods a struct of function pointers. Publish it under a nam
 
 WheresMyBuddy publishes `WheresMyBuddy.Friends`, with the names on the Drivatars and the signed-in gamertag (see `include/wheresmybuddy.h` in its repo). FH2 Universal Radio publishes `FH2UniversalRadio.NowPlaying`, with the song that's playing (`include/fh2universalradio.h`).
 
-One test build of the platform, "2.8.0 + HUD layer preview 1", publishes an interface of its own, `FH2Platform.HudLayer` (`include/fh2mod_hud.h`): a bar, labels and prompts of a mod's own inside the game's free-roam HUD. The platform publishes it before any mod starts, so it's there from `fh2mod_init`. It isn't part of this API, released platforms return null for it, and it will change: see [`hud-layer-preview.md`](hud-layer-preview.md).
+One test build of the platform, "2.8.0 + HUD layer preview 2", publishes an interface of its own, `FH2Platform.HudLayer` (`include/fh2mod_hud.h`): a bar, labels and prompts of a mod's own inside the game's free-roam HUD. The platform publishes it before any mod starts, so it's there from `fh2mod_init`. It isn't part of this API, released platforms return null for it, and it will change: see [`hud-layer-preview.md`](hud-layer-preview.md).
 
 ## Hooks (API 3)
 

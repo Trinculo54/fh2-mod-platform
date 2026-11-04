@@ -460,6 +460,7 @@ struct HudEngine::Impl {
     uint32_t count_target = 0, count_shown = 0;
     bool pop_pending = false;
     double pop_until = 0;
+    uint64_t count_in_frame = 0;   // the frame the countdown last came in: its first pop waits two frames
     bool shutter_req = false, shutter_again = false;
     double shutter_req_at = 0, shutter_until = 0;
     bool shown_told = false, ever_shown = false;
@@ -571,10 +572,18 @@ struct HudEngine::Impl {
         else ++off_n;
         return true;
     }
+    // A retired String is let go once its slot has been told since and the game holds no reference of its
+    // own on it (we still hold ours, so its count is safe to read), or after kRetireMs. In demo run 1,
+    // letting go as soon as the slot was told counted most Strings as "left with the game": the game drops
+    // its reference a little after the notify, so waiting for that tells a real leak from timing.
+    bool retire_due(const Retired& r) {
+        if (now - r.at >= kRetireMs) return true;
+        return p[r.prop].told_n > r.told_n && env.game->refs(r.s) <= 1;
+    }
     void retire() {
         while (!retired.empty() && !strings_fault.load()) {
             const Retired& r = retired.front();
-            const bool due   = p[r.prop].told_n > r.told_n || now - r.at >= kRetireMs || retired.size() > kRetiredMax;
+            const bool due   = retired.size() > kRetiredMax || retire_due(r);
             if (!due) {
                 // the oldest isn't due: look for later ones that are (told since), keeping the order of the rest
                 break;
@@ -585,7 +594,7 @@ struct HudEngine::Impl {
         }
         // later entries whose slot has been told since
         for (auto it = retired.begin(); it != retired.end() && !strings_fault.load();) {
-            if (p[it->prop].told_n > it->told_n || now - it->at >= kRetireMs) {
+            if (retire_due(*it)) {
                 void* s = it->s;
                 it      = retired.erase(it);
                 if (!release(s)) return;
@@ -1091,8 +1100,13 @@ struct HudEngine::Impl {
             set_switch(ix.fade[k], true);
             if (p[ix.fade[k]].dirty && !tell(ix.fade[k])) return false;
             part[k].state = kIn;
-            if (k == kPartCount && pop_pending && !start_pop()) return false;   // its first number's pop, now it can be seen
+            if (k == kPartCount) count_in_frame = frame;   // its first number pops at step e
         }
+        // e: the first number's pop, two frames after the ring came in, once the page has laid it out (in demo
+        // run 1 a pop told in the frame the ring came in didn't run)
+        if (pop_pending && part[kPartCount].state == kIn && frame >= count_in_frame + 2 && valid(ix.CountText) &&
+            !p[ix.CountText].dirty && !start_pop())
+            return false;
         // f: what's left waits for the next frame
         dirty_content(on | coming, c);
         st.carried += c.size();

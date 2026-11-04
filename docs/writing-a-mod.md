@@ -131,7 +131,7 @@ If players will want to turn parts of your mod on and off, or tune a number, giv
 
 ## A HUD of your own (preview)
 
-A test build of the platform, "2.8.0 + HUD layer preview 1", lets a mod show a bar, labels and button prompts of its own in the game's free-roam HUD, drawn by the game's UI in its own look. It's only in that build, for the testers of a mod that needs it, and it will change before it joins the API. [`hud-layer-preview.md`](hud-layer-preview.md) has how to use it, and how to carry on without it everywhere else.
+A test build of the platform, "2.8.0 + HUD layer preview 2", lets a mod show a bar, labels and button prompts of its own in the game's free-roam HUD, drawn by the game's UI in its own look. It's only in that build, for the testers of a mod that needs it, and it will change before it joins the API. [`hud-layer-preview.md`](hud-layer-preview.md) has how to use it, and how to carry on without it everywhere else.
 
 ## Your own files
 

@@ -31,8 +31,8 @@ Checks:
  12. the layer block holds exactly one top element, the FH2HL_Root Grid;
  13. the page is UI.zip's Scenes/Anthem/A_Hud.xaml plus only the resources block, the layer block and, with
      a ring, the xmlns:ed line (and with --notice the platform's notice, where it puts it);
- 14. ed:Arc exactly when BAR or COUNTDOWN is a part, with xmlns:ed; no ControllerButtonControl and no
-     ExitActions;
+ 14. ed:Arc exactly when BAR or COUNTDOWN is a part, with xmlns:ed; no ControllerButtonControl; and
+     ExitActions only to stop the countdown pop's or the shutter's named storyboard, which the page has;
  15. every Style goes on an element of its target type: a Style="{StaticResource K}" names a Style whose
      TargetType is the element's own type, and an inline Style sits in an <X.Style> inside an X and
      targets X; the layer's keyed Styles are the only others;
@@ -418,12 +418,21 @@ if ok_marks and not same:
 check("13. the page is UI.zip's A_Hud.xaml plus only the resources and the layer%s%s"
       % (" and xmlns:ed" if ED_NS in page else "", " and the platform's notice" if args.notice else ""), same, detail)
 
-# ---- 14. the rings: ed:Arc exactly when BAR or COUNTDOWN is a part, with xmlns:ed
+# ---- 14. the rings: ed:Arc exactly when BAR or COUNTDOWN is a part, with xmlns:ed; the only ExitActions stop
+# the countdown pop's or the shutter's storyboard (the game's HUD pages' pattern, AR_BucketListActivation.xaml)
 arc = "<ed:Arc " in page
-check("14. ed:Arc and xmlns:ed exactly when BAR or COUNTDOWN is a part (%s)" % (", ".join(parts) or "none"),
+STOPPABLE = ("FH2HL_CountPopBegin", "FH2HL_ShutterBegin")
+exits = re.findall(r"<DataTrigger\.ExitActions>(.*?)</DataTrigger\.ExitActions>", page, re.S)
+bad_exits = []
+for body in exits:
+    m = re.fullmatch(r'\s*<StopStoryboard BeginStoryboardName="([^"]+)" />\s*', body)
+    if not m or m.group(1) not in STOPPABLE or ('<BeginStoryboard x:Name="%s">' % m.group(1)) not in page:
+        bad_exits.append(body.strip()[:80])
+check("14. ed:Arc and xmlns:ed exactly when BAR or COUNTDOWN is a part (%s); %d ExitActions, each a stop of a named storyboard"
+      % (", ".join(parts) or "none", len(exits)),
       arc == ring_wanted and (ED_NS in page) == ring_wanted and "<local:ControllerButtonControl " not in page
-      and "<DataTrigger.ExitActions>" not in page,
-      "in the page: ed:Arc %d, xmlns:ed %d" % (arc, ED_NS in page))
+      and page.count("<DataTrigger.ExitActions>") == len(exits) and not bad_exits,
+      "in the page: ed:Arc %d, xmlns:ed %d, other ExitActions: %s" % (arc, ED_NS in page, bad_exits))
 
 # ---- 15. every Style on an element of its target type
 parent = {c: p for p in root.iter() for c in p}

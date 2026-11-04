@@ -2,7 +2,7 @@
  * fh2mod_hud.h -- the HUD layer, a preview (MIT licensed, see LICENSE).
  *
  * PREVIEW. This isn't part of the API in fh2mod.h. Only the "2.8.0 + HUD
- * layer preview 1" build of the FH2 Mod Platform offers it, to a few testers
+ * layer preview 2" build of the FH2 Mod Platform offers it, to a few testers
  * of a mod that needs it; released platforms, 2.8.0 among them, don't. When
  * the layer moves into the API, its names, limits and behaviour may all
  * change, and this interface may go. Never make it the only way your mod

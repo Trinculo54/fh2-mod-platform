@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -94,6 +95,8 @@ struct FakeGame : HudGame {
     std::vector<int> free_order;   // serials, in the order they were freed
     bool fault_make = false, fault_release = false, no_memory = false, fault_notify = false;
     bool keep = false;                    // the bindings never let go of the Strings they read
+    int lag   = 0;                        // the bindings let go of the old String this many frames after the notify
+    std::deque<std::pair<uint64_t, void*>> late;   // (the frame it's let go before, the String)
     std::map<int, void*> held;            // what each String binding holds (the last String it read)
     std::vector<Told> told;
     std::function<void(int)> during_notify;   // called from inside notify, after the binding's read
@@ -149,7 +152,10 @@ struct FakeGame : HudGame {
             void* s = e->string(prop, false);   // inside PropertyChanged, on the same thread, as the game does
             if (s) t.text = strs[s].text;
             void*& h = held[prop];
-            if (h && !keep) drop(h, false);
+            if (h && !keep) {
+                if (lag > 0) late.push_back({*frm + static_cast<uint64_t>(lag), h});
+                else drop(h, false);
+            }
             h = s;
         } else {
             t.bits = e->value(prop, false);
@@ -227,6 +233,11 @@ struct Rig {
         HudEngine::FrameIn in;
         in.now       = t;
         in.frame     = ++f;
+        // the game's own work between ticks: lagging bindings let go of what they were due to
+        while (!g.late.empty() && g.late.front().first <= f) {
+            g.drop(g.late.front().second, false);
+            g.late.pop_front();
+        }
         in.live      = live;
         in.page      = &page;
         in.page_gen  = gen;
@@ -1159,6 +1170,30 @@ static void t3_strings() {
               "T3 a binding that never lets go: left with the game %llu -> %llu over 50 changes, and the line says so", l0.left, l.left);
     }
     {
+        // a binding that lets go a few frames after the notify (demo run 1): the platform waits for it, so
+        // every old String is freed, none left with the game
+        Rig r;
+        const int a = r.add("TrialEditor", FH2_HUD_PART_BAR, 60000);
+        r.build();
+        r.g.lag       = 3;
+        FH2HudState s = bar_frame();
+        r.e->set_state(a, &s);
+        r.e->show(a, FH2_HUD_PART_BAR);
+        r.steps(20);
+        const StringsLine l0 = strings_line(r.e->strings_line());
+        for (int i = 1; i <= 50; ++i) {
+            const std::string t = "Late " + std::to_string(i);
+            s.line2             = t.c_str();
+            r.e->set_state(a, &s);
+            r.steps(5);
+        }
+        r.steps(20);
+        const StringsLine l = strings_line(r.e->strings_line());
+        check(l.freed - l0.freed == 50 && l.left == l0.left && l.waiting == 0 && r.g.double_releases == 0,
+              "T3 a binding that lets go 3 frames late: freed %llu -> %llu over 50 changes, left with the game %llu -> %llu, "
+              "%llu waiting", l0.freed, l.freed, l0.left, l.left, l.waiting);
+    }
+    {
         // a String fault: nothing more released, and no Strings from the getter; the bar hidden once
         Rig r;
         const int a = r.add("TrialEditor", FH2_HUD_PART_BAR, 60000);
@@ -1943,24 +1978,27 @@ static void t9_pulses() {
             r.e->set_state(a, &s);
             if (n == 3) r.e->show(a, FH2_HUD_PART_COUNTDOWN);
             double pop_at = -1, off_at = -1;
+            int in_step = -1;
             for (int i = 0; i < 50; ++i) {   // a second
                 r.step();
                 const std::vector<Told> v = r.last();
                 for (std::size_t k = 0; k < v.size(); ++k) {
                     if (v[k].name == "CountText" && v[k].text == std::to_wstring(n)) {
                         if (n == 3) {
-                            // the first number came with the show: its pop once the ring is visible, in the same frame
+                            // the first number came with the show: CountVis and Count after it, and no pop yet
                             const int vis = index_of(v, "CountVis", 1), fade = index_of(v, "Count", 1), pop = index_of(v, "CountPop", 1);
-                            if (vis > static_cast<int>(k) && fade > vis && pop == fade + 1) pop_at = v[k].t;
+                            if (vis > static_cast<int>(k) && fade > vis && pop < 0) in_step = i;
                         } else if (k + 1 < v.size() && v[k + 1].name == "CountPop" && v[k + 1].bits == 1) {
                             pop_at = v[k].t;
                         }
                     }
+                    // its pop two frames after the ring came in, once the page has laid it out
+                    if (n == 3 && in_step >= 0 && i == in_step + 2 && v[k].name == "CountPop" && v[k].bits == 1) pop_at = v[k].t;
                     if (v[k].name == "CountPop" && v[k].bits == 0 && pop_at >= 0) off_at = v[k].t;
                 }
             }
             check(pop_at >= 0 && off_at - pop_at >= 400 && off_at - pop_at < 420,
-                  n == 3 ? "T9 countdown %u, with the show: CountText, CountVis and Count, then CountPop true in one frame, false %.0f ms later"
+                  n == 3 ? "T9 countdown %u, with the show: CountText, CountVis and Count, then CountPop true two frames later, false %.0f ms after that"
                          : "T9 countdown %u: CountText then CountPop true in one frame, false %.0f ms later",
                   n, off_at - pop_at);
             all_ok = all_ok && pop_at >= 0;

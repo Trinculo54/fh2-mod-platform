@@ -236,7 +236,11 @@ std::string VN(const std::string& x) {
     return " Visibility=\"{Binding FH2Mod_Hud_" + x + ", Converter={StaticResource A_FZBooleanToVisibilityConverter_Inverse}}\"";
 }
 std::string T(const std::string& x) { return " Text=\"{Binding FH2Mod_Hud_" + x + "}\""; }
-std::string TRIM(int w) { return " MaxWidth=\"" + std::to_string(w) + "\" TextTrimming=\"CharacterEllipsis\""; }
+// Stretch="None": FZTextBlock otherwise shrinks text to fit before it trims (demo run 1), and the game's own
+// pages set it on the text they trim.
+std::string TRIM(int w) {
+    return " MaxWidth=\"" + std::to_string(w) + "\" TextTrimming=\"CharacterEllipsis\" Stretch=\"None\"";
+}
 
 // Indented lines with \r\n, as the notice writes them.
 struct Xml {
@@ -463,7 +467,8 @@ void layer_panel(Xml& x) {
         x.line("<ColumnDefinition Width=\"*\" />");
         x.line("<ColumnDefinition Width=\"Auto\" />");
         x.close("Grid.ColumnDefinitions");
-        x.open("<local:FZTextBlock" + T(p + "Label") + " VerticalAlignment=\"Center\"" + TRIM(300) + ">");
+        // Left: with MaxWidth in a wider star column, a stretched label is centred in it (demo run 1)
+        x.open("<local:FZTextBlock" + T(p + "Label") + " HorizontalAlignment=\"Left\" VerticalAlignment=\"Center\"" + TRIM(300) + ">");
         text_style(x, "A_Style_FZTextBlock_HudSmall", p + "Style", "#FFF5F5F5", {{"1", "#99F5F5F5"}, {"2", "#FFFE5723"}});
         x.close("local:FZTextBlock");
         x.open("<StackPanel Grid.Column=\"1\" Orientation=\"Horizontal\" VerticalAlignment=\"Center\"" + V(p + "HasValue") + ">");
@@ -716,13 +721,15 @@ std::string hud_resources_markup(uint32_t parts) {
         // The countdown's pop: one key-frame animation on a ScaleTransform with no values of its own (the
         // shape of the game's repeatable pop, HUDSkillTokenControl.xaml 34-66), restarted by CountPop going
         // from False to True for each number. Its base size is in the style, so a number always shows at
-        // its size even if a pop doesn't run.
+        // its size even if a pop doesn't run. The exit stops the storyboard, as the game's HUD pages do
+        // (AR_BucketListActivation.xaml): in demo run 1 a finished pop that was left holding the scale let
+        // no later pop run.
         x.open("<Style x:Key=\"FH2HL_Count\" TargetType=\"{x:Type local:FZTextBlock}\" BasedOn=\"{StaticResource A_Style_FZTextBlock_HudVeryLarge}\">");
         x.line("<Setter Property=\"FontSize\" Value=\"152\" />");
         x.open("<Style.Triggers>");
         x.open("<DataTrigger Binding=\"{Binding FH2Mod_Hud_CountPop}\" Value=\"True\">");
         x.open("<DataTrigger.EnterActions>");
-        x.open("<BeginStoryboard>");
+        x.open("<BeginStoryboard x:Name=\"FH2HL_CountPopBegin\">");
         x.open("<Storyboard>");
         for (const char* axis : {"ScaleX", "ScaleY"}) {
             x.open(std::string("<DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"(UIElement.RenderTransform).(TransformGroup.Children)[0]."
@@ -735,6 +742,9 @@ std::string hud_resources_markup(uint32_t parts) {
         x.close("Storyboard");
         x.close("BeginStoryboard");
         x.close("DataTrigger.EnterActions");
+        x.open("<DataTrigger.ExitActions>");
+        x.line("<StopStoryboard BeginStoryboardName=\"FH2HL_CountPopBegin\" />");
+        x.close("DataTrigger.ExitActions");
         x.close("DataTrigger");
         x.close("Style.Triggers");
         x.close("Style");
@@ -744,7 +754,7 @@ std::string hud_resources_markup(uint32_t parts) {
     x.open("<Style.Triggers>");
     x.open("<DataTrigger Binding=\"{Binding FH2Mod_Hud_Shutter}\" Value=\"True\">");
     x.open("<DataTrigger.EnterActions>");
-    x.open("<BeginStoryboard>");
+    x.open("<BeginStoryboard x:Name=\"FH2HL_ShutterBegin\">");
     x.open("<Storyboard>");
     x.open("<DoubleAnimationUsingKeyFrames Storyboard.TargetProperty=\"(UIElement.Opacity)\" Duration=\"0:0:0.1\">");
     key_frame(x, "0", "0.9", nullptr);
@@ -753,6 +763,9 @@ std::string hud_resources_markup(uint32_t parts) {
     x.close("Storyboard");
     x.close("BeginStoryboard");
     x.close("DataTrigger.EnterActions");
+    x.open("<DataTrigger.ExitActions>");   // stopped as the countdown's pop is, so a second blink runs too
+    x.line("<StopStoryboard BeginStoryboardName=\"FH2HL_ShutterBegin\" />");
+    x.close("DataTrigger.ExitActions");
     x.close("DataTrigger");
     x.close("Style.Triggers");
     x.close("Style");
