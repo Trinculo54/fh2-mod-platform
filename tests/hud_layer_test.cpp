@@ -660,7 +660,7 @@ static void t1_template(const fs::path& out) {
             check(types[0] == 122 && types[1] == 64 && types[2] == 47 && types[3] == 83, "T1 ALL: %d bool, %d int, %d float, %d String (want 122, 64, 47, 83)",
                   types[0], types[1], types[2], types[3]);
             check(c.triggers == 290, "T1 ALL: %zu DataTriggers on the properties (want 290)", c.triggers);
-            check(c.used == 39, "T1 ALL: %zu resource keys used (want 39)", c.used);
+            check(c.used == 40, "T1 ALL: %zu resource keys used (want 40)", c.used);
             if (u.media) check(c.dicts == 43 && c.known == 1096, "T1 ALL: UI.zip's %d dictionaries and %zu keys (want 43 and 1096)", c.dicts, c.known);
         }
         const std::string table = hud_props_text(props);

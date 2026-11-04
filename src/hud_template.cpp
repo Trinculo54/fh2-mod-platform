@@ -689,14 +689,18 @@ void layer_count(Xml& x) {
     x.line("<SolidColorBrush Color=\"#FFFE5723\" />");
     x.close("ed:Arc.Fill");
     x.close("ed:Arc");
-    x.open("<local:FZTextBlock Style=\"{StaticResource FH2HL_Count}\"" + T("CountText") +
-           " HorizontalAlignment=\"Center\" VerticalAlignment=\"Center\" RenderTransformOrigin=\"0.5,0.5\">");
-    x.open("<local:FZTextBlock.RenderTransform>");
+    // The pop scales a Grid round the number, not the text block: in the preview 2 re-check a pop on the text
+    // block's own transform never ran, while the probe's Grid pop and the platform's own page zoom do
+    x.open("<Grid Style=\"{StaticResource FH2HL_CountPop}\" HorizontalAlignment=\"Center\" VerticalAlignment=\"Center\" "
+           "RenderTransformOrigin=\"0.5,0.5\">");
+    x.open("<Grid.RenderTransform>");
     x.open("<TransformGroup>");
     x.line("<ScaleTransform />");
     x.close("TransformGroup");
-    x.close("local:FZTextBlock.RenderTransform");
-    x.close("local:FZTextBlock");
+    x.close("Grid.RenderTransform");
+    x.line("<local:FZTextBlock Style=\"{StaticResource FH2HL_Count}\"" + T("CountText") +
+           " HorizontalAlignment=\"Center\" VerticalAlignment=\"Center\" />");
+    x.close("Grid");
     x.open(std::string("<local:FZMaterial") + kGlass + " Color=\"#CC101418\" HorizontalAlignment=\"Center\" VerticalAlignment=\"Center\" "
            "Margin=\"0,300,0,0\"" + V("CountLabelShown") + ">");
     x.line(std::string("<local:FZTextBlock") + kSmall + T("CountLabel") + " Margin=\"12,4,12,4\"" + TRIM(600) + " />");
@@ -718,14 +722,18 @@ std::string hud_resources_markup(uint32_t parts) {
     for (int k = 0; k < kHudParts; ++k)
         if (has(parts, k)) fade_style(x, kHudPartProps[k]);
     if (has(parts, kCount)) {
-        // The countdown's pop: one key-frame animation on a ScaleTransform with no values of its own (the
-        // shape of the game's repeatable pop, HUDSkillTokenControl.xaml 34-66), restarted by CountPop going
-        // from False to True for each number. Its base size is in the style, so a number always shows at
-        // its size even if a pop doesn't run. The exit stops the storyboard, as the game's HUD pages do
-        // (AR_BucketListActivation.xaml): in demo run 1 a finished pop that was left holding the scale let
-        // no later pop run.
+        // The countdown's number: its size only.
         x.open("<Style x:Key=\"FH2HL_Count\" TargetType=\"{x:Type local:FZTextBlock}\" BasedOn=\"{StaticResource A_Style_FZTextBlock_HudVeryLarge}\">");
         x.line("<Setter Property=\"FontSize\" Value=\"152\" />");
+        x.close("Style");
+        // The countdown's pop: one key-frame animation on the ScaleTransform of the Grid round the number, with
+        // no values of its own (the shape of the game's repeatable pop, HUDSkillTokenControl.xaml 34-66),
+        // restarted by CountPop going from False to True for each number, so a number always shows at its size
+        // even if a pop doesn't run. On a Grid, as the game only scales Grids and materials, never a text block
+        // (in the preview 2 re-check a pop on the FZTextBlock's own transform never ran). The exit stops the
+        // storyboard, as the game's HUD pages do (AR_BucketListActivation.xaml): in demo run 1 a finished pop
+        // left holding the scale let no later pop run.
+        x.open("<Style x:Key=\"FH2HL_CountPop\" TargetType=\"Grid\">");
         x.open("<Style.Triggers>");
         x.open("<DataTrigger Binding=\"{Binding FH2Mod_Hud_CountPop}\" Value=\"True\">");
         x.open("<DataTrigger.EnterActions>");

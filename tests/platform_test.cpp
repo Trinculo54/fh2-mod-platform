@@ -406,7 +406,7 @@ int wmain(int argc, wchar_t** argv) {
         for (const auto& e : fs::recursive_directory_iterator("."))
             if (e.path().filename() == L"A_Hud.xaml") hud_page = hud_page || has(slurp(e.path()), "FH2 Mod Platform: HUD layer");
         CHECK(!hud_page);
-        CHECK(has(log.substr(0, log.find('\n')), "; this is the 2.8.0 + HUD layer preview 2 build, not a release"));
+        CHECK(has(log.substr(0, log.find('\n')), "; this is the 2.8.0 + HUD layer preview 3 build, not a release"));
     } else if (hud_phase) {
         // HudTestMod adds a layer with every part; a second one and one after fh2mod_init are refused
         CHECK(has(log, "[HudTestMod] interface found"));
@@ -426,7 +426,7 @@ int wmain(int argc, wchar_t** argv) {
         for (std::size_t at = props.find("\r\n"); at != std::string::npos; at = props.find("\r\n", at + 2)) ++lines;
         CHECK(lines == 316 && props.rfind("FH2Mod_Hud_Shown\tbool\tfalse\t\r\n", 0) == 0);
         if (fs::exists(L"FH2\\Mount\\media\\UI.zip")) {
-            CHECK(has(log, "[HUD layer] check: 39 resource keys used, all in UI.zip's application dictionaries (43 dictionaries, 1096 keys)"));
+            CHECK(has(log, "[HUD layer] check: 40 resource keys used, all in UI.zip's application dictionaries (43 dictionaries, 1096 keys)"));
             CHECK(has(log, "[HUD layer] page: wrote A_Hud.xaml with the layer (BAR, CHIPS, TIP, PANEL, COUNTDOWN): 316 properties, 588 bindings (at "
                            "most 640), 290 DataTriggers, ") &&
                   has(log, " bytes; a copy is in fh2-mods\\platform-hudlayer-A_Hud.xaml"));
@@ -445,7 +445,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(log, "[HUD layer] page: the layer is left out: A_Hud.xaml couldn't be read from the game's UI.zip"));
             CHECK(!fs::exists("fh2-mods\\platform-hudlayer-A_Hud.xaml") && marker.empty());
         }
-        CHECK(has(slurp("fh2-mods\\platform-session.json"), "\"hud_layer\": \"preview 2: HudTestMod\""));
+        CHECK(has(slurp("fh2-mods\\platform-session.json"), "\"hud_layer\": \"preview 3: HudTestMod\""));
         if (argc > 2) {
             // the game mapped: the start thread checks the code and makes its hooks, or says why not
             const bool ready = has(log, "[HUD layer] hooks: 4 of 4 made and on; the HUD layer is ready");

@@ -1,6 +1,6 @@
 # The HUD layer (preview)
 
-**This is a preview, and it will change.** The HUD layer is only in one test build of the platform, "2.8.0 + HUD layer preview 2", for the testers of a mod that needs it. It isn't part of the API in `fh2mod.h`, released platforms don't have it, and when it moves into the API its names, limits and behaviour may all change, and this interface may go. Never make it the only way your mod works.
+**This is a preview, and it will change.** The HUD layer is only in one test build of the platform, "2.8.0 + HUD layer preview 3", for the testers of a mod that needs it. It isn't part of the API in `fh2mod.h`, released platforms don't have it, and when it moves into the API its names, limits and behaviour may all change, and this interface may go. Never make it the only way your mod works.
 
 The layer is a heads-up display of your own, drawn by the game's own UI inside its free-roam HUD page, in the game's look and fonts: a bar along the bottom of the screen with tabs, two status lines, a strip of marks and button prompts; small labels (chips) at the top; a tip card; a panel of rows; a countdown in the middle of the screen; and a white blink across the picture. You fill the parts with text and numbers; the platform owns the layout, so nothing you set can break the game's HUD page. The header, [`include/fh2mod_hud.h`](../include/fh2mod_hud.h), is the reference for every member; this page explains how it behaves. Testers: see [Installing the preview](#installing-the-preview) at the end.
 
@@ -92,7 +92,7 @@ The tip and the panel sit on top of the bar, so they move with its height: up by
 
 ### The countdown
 
-`countdown` is the number in the ring, 1 to 999 (two digits fit inside it; three are wider than the ring), and 0 shows no number while the part stays shown: hide it with `show_hud_layer`. Each new number is meant to pop in, from a third bigger to its size; a number set together with the `show_hud_layer` that brings the countdown in pops as the ring fades in. In preview 1 no number popped in game; preview 2 starts the pop differently, and that hasn't been seen in game yet. If it doesn't run, every number still shows at its full size, just without the pop. `countdown_label` is the line under the ring.
+`countdown` is the number in the ring, 1 to 999 (two digits fit inside it; three are wider than the ring), and 0 shows no number while the part stays shown: hide it with `show_hud_layer`. Each new number is meant to pop in, from a third bigger to its size; a number set together with the `show_hud_layer` that brings the countdown in pops as the ring fades in. In previews 1 and 2 no number popped in game; preview 3 scales the box round the number instead of the number's text, and that hasn't been seen in game yet. If it doesn't run, every number still shows at its full size, just without the pop. `countdown_label` is the line under the ring.
 
 ### Limits and text
 
@@ -378,7 +378,7 @@ For testers. The preview comes as one DLL under the platform's two names, `d3dco
 
 - **Put it in as both files, replacing both,** next to `azimuth.exe`. Azimuth before 1.0.1 loads only `d3dcompiler_47.dll`, and 1.0.3 and later only `DWrite.dll`.
 - **Released 2.8.0 has the same version number,** so where both are beside `azimuth.exe`, `DWrite.dll` wins the tie. Every mod's zip ships released 2.8.0 as both files, so unpacking one over the install afterwards silently puts 2.8.0 back, and the mod that needs the layer finds no interface. Install the preview again after it.
-- **To check which one runs,** look at line 1 of `fh2-mods\platform.log`: the preview's ends "this is the 2.8.0 + HUD layer preview 2 build, not a release". The file's Properties > Details show it as Product version "2.8.0 + HUD layer preview 2".
+- **To check which one runs,** look at line 1 of `fh2-mods\platform.log`: the preview's ends "this is the 2.8.0 + HUD layer preview 3 build, not a release". The file's Properties > Details show it as Product version "2.8.0 + HUD layer preview 3".
 - **Going back to 2.8.0:** put its two files back, and delete `fh2-mods\notices\HUD layer.txt` if it's there (it only is after a session the crash marker left the layer out of, and 2.8.0 wouldn't clear it). The preview's other files can stay; 2.8.0 removes its HUD page again at the next launch.
 
 What the preview writes while a mod has a layer:
@@ -392,7 +392,7 @@ What the preview writes while a mod has a layer:
 | `fh2-mods\platform-hudlayer.ini` | the Button prompts choice, made the first time the row is changed |
 | `fh2-mods\notices\HUD layer.txt` | the title-screen line, after a session the crash marker left the layer out of |
 
-`fh2-mods\platform-session.json` gets `"hud_layer": "preview 2: <mods with a layer>"`, and every crash report a line `platform: FH2 Mod Platform 2.8.0 + HUD layer preview 2` after the CRASH line, plus a `HUD layer:` line saying what the layer was doing.
+`fh2-mods\platform-session.json` gets `"hud_layer": "preview 3: <mods with a layer>"`, and every crash report a line `platform: FH2 Mod Platform 2.8.0 + HUD layer preview 3` after the CRASH line, plus a `HUD layer:` line saying what the layer was doing.
 
 **What to send back:** `fh2-mods\platform.log` from the session (the platform also keeps each session's copy in `fh2-mods\platform-logs\`, so an older one isn't lost when the game starts again), any `fh2-mods\crashes\crash-*.txt` from it, and the log of the mod that uses the layer.
 

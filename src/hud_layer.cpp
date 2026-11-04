@@ -546,7 +546,7 @@ void add_row(FH2Mod* m) {
     s.key         = "HudButtonPrompts";
     s.label       = "Button prompts";
     s.description = "What the HUD bar's button prompts show. Automatic: the controller or the keyboard and mouse, whichever you used last "
-                    "(Xbox-style controllers only; choose Controller for others). This is the 2.8.0 + HUD layer preview 2 build of the FH2 "
+                    "(Xbox-style controllers only; choose Controller for others). This is the 2.8.0 + HUD layer preview 3 build of the FH2 "
                     "Mod Platform.";
     s.kind         = FH2_SETTING_CHOICE;
     s.choices      = kChoices;
@@ -1555,7 +1555,7 @@ std::string hud_layer_session_text() {
     if (!g_active.load()) return "";
     std::string mods;
     for (int i = 0; i < g_eng.layer_count(); ++i) mods += (i ? ", " : "") + g_eng.layer_name(i);
-    return "preview 2: " + mods;
+    return "preview 3: " + mods;
 }
 
 void hud_layer_sweep_check() {
