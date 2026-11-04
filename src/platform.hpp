@@ -82,12 +82,21 @@ struct CarPack {
     std::string title, version;               // pack.ini's [pack] name and version
     std::vector<std::string> cars;            // the cars it adds: pack.ini's [car <media name>] sections
     std::vector<std::string> car_names;       // and each one's name= there ("" for none), for the MODS tab
+    // A car's engine sound of its own (pack.ini's [car] engine_sound, engine_sound_base, engine_synth): its engine's
+    // MediaName (set by the pack's SQL) names a bank the platform links from the base car's, and an engine sound
+    // mod (SynthWrapper) is told about it in fh2-mods\platform-engine-synths.txt.
+    struct EngineSound {
+        std::string car, sound, base, synth; // media name; PG_ bank names without "PG_"; .synth file under the pack
+    };
+    std::vector<EngineSound> engine_sounds;
 };
 // <Azimuth>\data\titles\1A96545B\tmp, the folder Azimuth gives the game as its T:\ drive.
 std::filesystem::path temp_drive();
 // How the game spells a folder under temp_drive(): "T:\...\".
 std::string temp_drive_spelling(const std::filesystem::path& folder);
 std::filesystem::path instance_media(); // temp_drive()\fh2-platform\media
+// fh2-mods\platform-engine-synths.txt: the car packs' own engine sounds (car_packs.cpp).
+void write_engine_synths();
 // The platform mounts its own folders (no Extra Options, Azimuth 1.0 or later): what it writes goes
 // to instance_media(), which only this Azimuth folder's game sees.
 bool instance_layer();

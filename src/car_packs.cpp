@@ -20,6 +20,13 @@
 // database with the mods' SQL (database.cpp), each pack in a transaction of its own, so packs
 // never write over each other's files. A pack's pack.ini lists the cars it adds; their Ids are
 // given when the database is built (its SQL says {car:<media name>} where one goes), and kept.
+//
+// A car can have an engine sound of its own (pack.ini [car]: engine_sound, engine_sound_base, engine_synth): its SQL
+// gives its engine a MediaName of its own (the sound's name), and the game loads PG_<MediaName>.bank only if there is
+// one. The platform links the base car's PG_<engine_sound_base>.bank into the pack's temp-drive folder under the new
+// name, and lists the car in fh2-mods\platform-engine-synths.txt for an engine sound mod: SynthWrapper plays the
+// pack's engine_synth for that name and gives the game the base car's name for its events. Without such a mod the
+// car simply sounds like its base car; a real base car keeps its own sound either way.
 #include "platform.hpp"
 #include "updates.hpp"
 
@@ -214,6 +221,26 @@ void read_pack_ini(CarPack& pack) {
             pack.cars.push_back(car);
             GetPrivateProfileStringW(s, L"name", L"", buf, 1024, ini.c_str());
             pack.car_names.push_back(narrow(buf));
+            CarPack::EngineSound es;
+            es.car = car;
+            GetPrivateProfileStringW(s, L"engine_sound", L"", buf, 1024, ini.c_str());
+            es.sound = narrow(buf);
+            GetPrivateProfileStringW(s, L"engine_sound_base", L"", buf, 1024, ini.c_str());
+            es.base = narrow(buf);
+            GetPrivateProfileStringW(s, L"engine_synth", L"", buf, 1024, ini.c_str());
+            es.synth = narrow(buf);
+            const auto plain = [](const std::string& n) {
+                return !n.empty() && n.size() <= 64 && std::all_of(n.begin(), n.end(), [](char c) {
+                    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+                });
+            };
+            if (!es.base.empty()) {
+                if (!plain(es.sound) || !plain(es.base) || lower(es.sound) == lower(es.base))
+                    plog("car packs: " + pack.name + ": " + car + "'s engine_sound / engine_sound_base aren't two different "
+                         "plain names; its engine sound is left as its SQL has it");
+                else
+                    pack.engine_sounds.push_back(es);
+            }
         } else {
             plog("car packs: " + pack.name + ": pack.ini's [" + section + "] isn't a car's media name; left out");
         }
@@ -282,15 +309,51 @@ void mirror_pack(const CarPack& pack) {
                  std::to_string(GetLastError()) + ")");
         }
     }
+    std::vector<std::string> banks; // the engine sound banks link_engine_sounds() puts here
+    for (const auto& es : pack.engine_sounds) banks.push_back(lower("audio\\fmodanthem\\durango\\pg_" + es.sound + ".bank"));
     for (const auto& [key, rel] : files_under(pack.mirror))
         if (std::none_of(want.begin(), want.end(), [&](const auto& w) { return w.first == key; }) &&
-            fs::remove(pack.mirror / rel, ec))
+            std::find(banks.begin(), banks.end(), key) == banks.end() && fs::remove(pack.mirror / rel, ec))
             ++removed;
     plog("car packs: " + pack.name + " on the temp drive: " + std::to_string(kept) + " file(s) as they were, " +
          std::to_string(linked) + " linked, " + std::to_string(copied) + " copied, " + std::to_string(removed) +
          " removed" + (failed ? ", " + std::to_string(failed) + " FAILED" : std::string{}));
     if (failed)
         note_car_pack_problem(pack.name, std::to_string(failed) + " of its files couldn't be put on the game's temp drive.");
+}
+
+// A car's engine sound bank: the base car's bank, linked (or copied) into the pack's temp-drive folder under the car's
+// own sound name, where the game looks for media\Audio\FmodAnthem\DURANGO\PG_<name>.bank.
+void link_engine_sounds(const CarPack& pack) {
+    for (const auto& es : pack.engine_sounds) {
+        std::error_code ec;
+        fs::path from;
+        for (const char* dir : {"mediaoverride", "mediapc", "media"})
+            if (const fs::path f = game_mount() / dir / "audio" / "fmodanthem" / "durango" / fs::path{"PG_" + es.base + ".bank"};
+                fs::is_regular_file(f, ec)) {
+                from = f;
+                break;
+            }
+        const fs::path to = pack.mirror / "audio" / "fmodanthem" / "durango" / fs::path{"PG_" + es.sound + ".bank"};
+        if (from.empty()) {
+            plog("car packs: " + pack.name + ": " + es.car + "'s engine_sound_base " + es.base + " has no PG_" + es.base +
+                 ".bank in the game; the car has no engine sound");
+            note_car_pack_problem(pack.name, es.car + " has no engine sound: the game has no " + es.base + " sound.");
+            fs::remove(to, ec);
+            continue;
+        }
+        if (same_file(from, to)) continue;
+        fs::create_directories(to.parent_path(), ec);
+        fs::remove(to, ec);
+        if (CreateHardLinkW(to.c_str(), from.c_str(), nullptr) || CopyFileW(from.c_str(), to.c_str(), FALSE))
+            plog("car packs: " + pack.name + ": " + es.car + "'s engine sound PG_" + es.sound + ".bank is " + es.base +
+                 "'s, on the temp drive");
+        else {
+            plog("car packs: " + pack.name + ": couldn't put PG_" + es.sound + ".bank on the temp drive (error " +
+                 std::to_string(GetLastError()) + ")");
+            note_car_pack_problem(pack.name, es.car + "'s engine sound couldn't be put on the game's temp drive.");
+        }
+    }
 }
 
 uint32_t crc32(const std::string& s) {
@@ -527,9 +590,41 @@ void prepare_car_packs() {
                  (pack.cars.empty() ? ", no new car" : ", adds " + cars));
         }
         mirror_pack(pack);
+        link_engine_sounds(pack);
         pack.sql = read_sql(pack);
     }
     write_manifest();
+    write_engine_synths();
+}
+
+// <sound name> TAB <base car's sound name> TAB <folder> TAB <.synth name without extension> TAB <pack>, one car a line,
+// with "PG_" on the names (as the game's events use them). Rewritten at every start; gone when no pack has one.
+void write_engine_synths() {
+    std::string text;
+    for (const auto& pack : g_packs)
+        for (const auto& es : pack.engine_sounds) {
+            if (es.synth.empty()) continue;
+            std::error_code ec;
+            const fs::path synth = pack.root / fs::path{es.synth};
+            if (!fs::is_regular_file(synth, ec)) {
+                plog("car packs: " + pack.name + ": " + es.car + "'s engine_synth " + es.synth + " isn't there");
+                note_car_pack_problem(pack.name, es.car + "'s engine sound file " + es.synth + " is missing.");
+                continue;
+            }
+            text += "PG_" + es.sound + "\tPG_" + es.base + "\t" + narrow(synth.parent_path().wstring()) + "\t" +
+                    narrow(synth.stem().wstring()) + "\t" + pack.name + "\r\n";
+        }
+    const fs::path out = azimuth_dir() / "fh2-mods" / "platform-engine-synths.txt";
+    std::error_code ec;
+    if (text.empty()) {
+        if (fs::remove(out, ec)) plog("car packs: no pack has an engine sound of its own; removed platform-engine-synths.txt");
+        return;
+    }
+    if (read_all(out) != text && !write_all(out, text))
+        plog("car packs: couldn't write platform-engine-synths.txt (error " + std::to_string(GetLastError()) + ")");
+    else
+        plog("car packs: platform-engine-synths.txt lists " + std::to_string(std::count(text.begin(), text.end(), '\n')) +
+             " car(s) with an engine sound of their own");
 }
 
 } // namespace fh2platform
