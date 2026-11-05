@@ -95,31 +95,45 @@ int wmain(int argc, wchar_t** argv) {
     DWORD old = 0;
     VirtualProtect(game + 0x365D7C8, 8, PAGE_READWRITE, &old);
     *reinterpret_cast<unsigned char**>(game + 0x365D7C8) = mgr;
-    auto& held  = *reinterpret_cast<uint64_t*>(slot + 0x78);
-    auto& taken = *reinterpret_cast<uint64_t*>(slot + 0x1E8);
+    // Slot 8 as a second copy of the same pad (the game keeps one pad in more than one slot): it's hidden
+    // there too, but its presses mustn't count twice.
+    unsigned char* mirror = mgr + 0x10 + 8 * 0x1300;
     auto release = reinterpret_cast<void (*)(void*)>(game + 0x10768D0);
-    auto frame   = [&](uint64_t controls) {
-        held = controls;
-        release(slot);
-        const uint64_t t = taken;
+    struct After {
+        uint64_t taken, held;
+        uint16_t raw;
+    };
+    auto frame = [&](uint64_t controls) {
+        for (unsigned char* s : {slot, mirror}) {
+            *reinterpret_cast<uint64_t*>(s + 0x78) = controls;   // what the game's reading builder left
+            *reinterpret_cast<uint16_t*>(s + 0xC0) = static_cast<uint16_t>(controls & 0xF3FF);
+            release(s);
+        }
+        const After a{*reinterpret_cast<uint64_t*>(slot + 0x1E8), *reinterpret_cast<uint64_t*>(slot + 0x78),
+                      *reinterpret_cast<uint16_t*>(slot + 0xC0)};
         Sleep(60);   // a slow frame, so a press reaches the mod (and its buttons() call) before the next one
-        return t;
+        return a;
+    };
+    auto is = [](const After& a, uint64_t taken, uint64_t held) {
+        return a.taken == taken && a.held == held && a.raw == static_cast<uint16_t>(held & 0xF3FF);
     };
 
     const int kUp = 0, kLeft = 2, kRight = 3, kLB = 8, kA = 12;
-    CHECK(frame(C(kLeft)) == 0);                          // Left alone: the game has it
-    CHECK(frame(0) == 0);
-    CHECK(frame(C(kLB)) == 0);                            // LB alone: nothing taken
-    CHECK(frame(C(kLB) | C(kLeft)) == C(kLeft));          // LB held, Left pressed: taken
-    CHECK(frame(C(kLB) | C(kLeft)) == C(kLeft));          // still held: still taken, no second press
-    CHECK(frame(C(kLeft)) == C(kLeft));                   // LB let go first: the game keeps Left taken...
-    CHECK(frame(0) == 0);                                 // ...until Left goes up (the game's own clear)
-    CHECK(frame(C(kLB) | C(kA)) == 0);                    // A isn't the layer's
-    CHECK(frame(C(kLB) | C(34)) == C(34));                // Up+Right, the diagonal control 34: taken
-    CHECK(frame(C(kLB)) == 0);                            // and cleared by the game when let go
-    taken = C(kA);                                        // something the game itself took...
-    CHECK(frame(C(kLB) | C(kA)) == C(kA));                // ...stays taken while held
-    CHECK(frame(C(kLB)) == 0);                            // ...and goes when let go
+    (void)kUp; (void)kRight;
+    CHECK(is(frame(C(kLeft)), 0, C(kLeft)));                         // Left alone: the game has it
+    CHECK(is(frame(0), 0, 0));
+    CHECK(is(frame(C(kLB)), 0, C(kLB)));                             // LB alone: nothing hidden
+    CHECK(is(frame(C(kLB) | C(kLeft)), C(kLeft), C(kLB)));           // LB held, Left pressed: hidden and taken
+    CHECK(is(frame(C(kLB) | C(kLeft)), C(kLeft), C(kLB)));           // still held: still hidden, no second press
+    CHECK(is(frame(C(kLeft)), C(kLeft), 0));                         // LB let go first: Left stays hidden...
+    CHECK(is(frame(0), 0, 0));                                       // ...until it goes up (the game clears taken)
+    CHECK(is(frame(C(kLeft)), 0, C(kLeft)));                         // pressed again without LB: the game's
+    CHECK(is(frame(C(kLB) | C(kA)), 0, C(kLB) | C(kA)));             // A isn't the layer's
+    CHECK(is(frame(C(kLB) | C(34)), C(34), C(kLB)));                 // Up+Right, the diagonal control 34: hidden
+    CHECK(is(frame(C(kLB)), 0, C(kLB)));                             // and cleared by the game when let go
+    *reinterpret_cast<uint64_t*>(slot + 0x1E8) = C(kA);             // something the game itself took...
+    CHECK(is(frame(C(kLB) | C(kA)), C(kA), C(kLB) | C(kA)));         // ...stays taken while held, untouched
+    CHECK(is(frame(C(kLB)), 0, C(kLB)));                             // ...and goes when let go
 
     Sleep(500);
     log = slurp(L"fh2-mods\\platform.log");

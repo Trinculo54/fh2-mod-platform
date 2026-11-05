@@ -59,13 +59,19 @@ int main() {
         o = step(s, C(kLB) | C(kLeft), chat, 1);
         check(o.hide == C(kLeft) && o.pressed[0] == 0, "Left still held: hidden, no second press");
         o = step(s, C(kLeft), chat, 1);
-        check(o.hide == 0 && o.pressed[0] == 0, "LB let go first: not hidden by the layer (the game keeps it taken until Left goes up)");
+        check(o.hide == C(kLeft) && o.pressed[0] == 0, "LB let go first: Left stays hidden while it's held");
+        o = step(s, 0, chat, 1);
+        check(o.hide == 0 && o.hide_pad == 0, "Left up: the layer lets go of it");
+        o = step(s, C(kLeft), chat, 1);
+        check(o.hide == 0 && o.pressed[0] == 0, "Left pressed again without LB: the game's");
     }
     {
         SlotState s;
         step(s, C(kLB), chat, 1);
         StepOut o = step(s, C(kLB) | C(34), chat, 1);
-        check(o.hide == C(34) && o.pressed[0] == (FH2_PAD_DPAD_UP | FH2_PAD_DPAD_RIGHT), "a diagonal is hidden, and both directions are presses");
+        check(o.hide == C(34) && o.hide_pad == (FH2_PAD_DPAD_UP | FH2_PAD_DPAD_RIGHT) &&
+                  o.pressed[0] == (FH2_PAD_DPAD_UP | FH2_PAD_DPAD_RIGHT),
+              "a diagonal is hidden, and both directions are presses");
         o = step(s, C(kLB) | C(kA), chat, 1);
         check(o.hide == 0 && o.pressed[0] == 0, "A isn't the layer's: the game has it");
         o = step(s, C(kLB) | C(kRB) | C(kDown), chat, 1);

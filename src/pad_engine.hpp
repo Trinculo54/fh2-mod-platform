@@ -71,30 +71,36 @@ struct LayerView {
 
 // One controller's memory between steps.
 struct SlotState {
-    uint32_t held = 0;   // every FH2_PAD_ bit held, last step
+    uint32_t held  = 0;   // every FH2_PAD_ bit held, last step
+    uint32_t owned = 0;   // buttons hidden last step: hidden until they go up, modifier or not
 };
 
 struct StepOut {
-    uint64_t hide = 0;                 // game controls to mark as taken
+    uint64_t hide     = 0;             // game controls to hide (clear from the current reading, mark as taken)
+    uint32_t hide_pad = 0;             // the same as FH2_PAD_ bits (for the raw button word)
     uint32_t pressed[kMaxLayers] = {}; // per layer: buttons newly pressed while it was open
 };
 
-// One frame of one controller: `controls` is the game's current mask. Layers whose modifier is held
-// take their held buttons. A press is a button that wasn't held at all last step, so one already held
-// when the modifier goes down (the game has had it) isn't one.
+// One frame of one controller: `controls` is the game's current mask, as the game built it. Layers
+// whose modifier is held take their held buttons, and a button once taken stays hidden until it goes
+// up, so letting go of the modifier first doesn't hand it to the game mid-press. A press is a button
+// that wasn't held at all last step, so one already held when the modifier goes down (the game has
+// had it) isn't one.
 inline StepOut step(SlotState& s, uint64_t controls, const LayerView* layers, int n) {
     StepOut out;
     const uint32_t held = pad_from_controls(controls);
-    uint32_t hide_pad   = 0;
+    uint32_t take       = s.owned & held;
     for (int i = 0; i < n && i < kMaxLayers; ++i) {
         const LayerView& l = layers[i];
         uint32_t now       = 0;
         if (l.modifier && (held & l.modifier) == l.modifier) now = l.buttons & held;
         out.pressed[i] = now & ~s.held;
-        hide_pad |= now;
+        take |= now;
     }
-    s.held   = held;
-    out.hide = controls_for(hide_pad) & controls;
+    s.held       = held;
+    s.owned      = take;
+    out.hide     = controls_for(take) & controls;
+    out.hide_pad = take;
     return out;
 }
 

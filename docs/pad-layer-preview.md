@@ -61,7 +61,7 @@ if (pad->buttons(&held) && (held & FH2_PAD_LB)) ...
 
 ## How it works
 
-The game keeps, for each controller, a mask of controls it has taken: a control in it counts as not pressed for every action, until it's let go. That's how a button that closed a menu doesn't also act in the game behind it. The platform hooks the game's function that clears that mask each frame (game+0x10768D0), and after the game has cleared what it clears, it marks the held buttons of each open layer. The game clears them again itself when they go up. Everything runs on the game's own thread, in the game's own order.
+Each frame the game builds a reading of every controller: a mask of the controls held, and the pad's raw buttons. The platform hooks the function the game calls straight after that (game+0x10768D0), and takes the held buttons of each open layer out of the reading, so every part of the game that reads the controller sees them as not pressed. It also marks them in the game's own mask of taken controls, the one that stops a button that closed a menu from acting in the game behind it. A button the layer has taken stays out of the reading until it goes up. The game keeps the same pad in more than one slot, so presses only count from the slot the game is using. Everything runs on the game's own thread, in the game's own order.
 
 If the game's code doesn't match, `platform.log` says "pad layers are off: the game code doesn't match at ...", `add_layer` still succeeds, and no presses come. If no mod adds a layer, nothing is hooked.
 

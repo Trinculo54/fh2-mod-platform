@@ -11,9 +11,13 @@
 // reads a control in that mask as not pressed: it's how the game makes a button that opened a menu
 // stop counting until it's let go.
 //
-// The pad layer hooks game+0x10768D0. After the game has cleared what it clears, it adds the bits of
-// the layers' buttons held while their modifier is held. The game then clears them itself once the
-// button goes up, so letting go of the modifier first can't give the game a press it didn't get.
+// The pad layer hooks game+0x10768D0, which runs right after the reading is built. After the game has
+// cleared what it clears, the layers' buttons held while their modifier is held are hidden: taken out
+// of the reading's mask (+0x78) and its raw button word (+0xC0), and marked as taken. Not only taken:
+// the first in-game run showed the game still acting on the d-pad, and the game's value query
+// (game+0x106F040) reads the mask without looking at the taken one. A button once hidden stays hidden
+// until it goes up, so letting go of the modifier first can't give the game a press it didn't get.
+// The same pad is in more than one slot, so presses only count from the slot the game is using.
 // Everything runs on the game's thread, in the game's own order; no game memory is written anywhere
 // else. Presses go to a platform thread, which calls the mods.
 #include "pad_engine.hpp"
@@ -43,6 +47,7 @@ constexpr uintptr_t SLOT_SIZE      = 0x1300;
 constexpr uintptr_t OFF_ACTIVE     = 0xAB28;      // manager: the slot in use
 constexpr uintptr_t OFF_CONTROLS   = 0x78;        // slot: held controls (the current reading +0x70, its mask +8)
 constexpr uintptr_t OFF_TAKEN      = 0x1E8;       // slot: taken controls
+constexpr uintptr_t OFF_RAW        = 0xC0;        // slot: the pad's raw buttons (XInput bits), as HonkHonk reads them
 
 struct CodeCheck {
     uintptr_t rva;
@@ -90,6 +95,7 @@ std::atomic<bool> g_live{false};    // the hook is in and the checks passed
 bool g_started = false;
 
 SlotState g_slots[kSlots];          // game thread only
+std::atomic<uint32_t> g_held[kSlots];   // per slot: the buttons held before the layers hid any (for buttons())
 
 // Presses, from the game's thread to the delivery thread.
 struct Press {
@@ -144,7 +150,9 @@ void push_press(int layer, uint32_t button) {
     else SetEvent(g_wake);
 }
 
-// One slot's frame. No objects with destructors here (__try).
+// One slot's frame: true when its presses count (it's the slot the game is using; the game keeps the
+// same pad in more than one slot, so presses from the others would come twice). No objects with
+// destructors here (__try).
 bool step_slot(unsigned char* slot, StepOut* out) {
     const uintptr_t base = g_base.load(std::memory_order_relaxed);
     LayerView views[kMaxLayers];
@@ -156,10 +164,18 @@ bool step_slot(unsigned char* slot, StepOut* out) {
         const uintptr_t first = reinterpret_cast<uintptr_t>(mgr) + OFF_SLOTS, at = reinterpret_cast<uintptr_t>(slot);
         if (at < first || at >= first + kSlots * SLOT_SIZE || (at - first) % SLOT_SIZE) return false;
         const auto idx         = static_cast<int>((at - first) / SLOT_SIZE);
-        const uint64_t controls = *reinterpret_cast<const uint64_t*>(slot + OFF_CONTROLS);
+        auto& controls         = *reinterpret_cast<uint64_t*>(slot + OFF_CONTROLS);
         *out                   = step(g_slots[idx], controls, views, n);
-        if (out->hide) *reinterpret_cast<uint64_t*>(slot + OFF_TAKEN) |= out->hide;
-        return true;
+        g_held[idx].store(g_slots[idx].held, std::memory_order_relaxed);
+        if (out->hide) {
+            // Not just taken: some of the game's readers (the value query, game+0x106F040) don't look at
+            // the taken mask, so the buttons go from the reading itself, and from its raw button word.
+            controls &= ~out->hide;
+            *reinterpret_cast<uint16_t*>(slot + OFF_RAW) &= static_cast<uint16_t>(~out->hide_pad);
+            *reinterpret_cast<uint64_t*>(slot + OFF_TAKEN) |= out->hide;
+        }
+        const auto* active = *reinterpret_cast<unsigned char* const*>(mgr + OFF_ACTIVE);
+        return active ? active == slot : idx == 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
@@ -346,7 +362,9 @@ bool read_held(uint32_t* held) {
         const auto* slot      = *reinterpret_cast<unsigned char* const*>(mgr + OFF_ACTIVE);
         const uintptr_t first = reinterpret_cast<uintptr_t>(mgr) + OFF_SLOTS, at = reinterpret_cast<uintptr_t>(slot);
         if (!slot || at < first || at >= first + kSlots * SLOT_SIZE || (at - first) % SLOT_SIZE) return false;
+        // with layers on, the reading has their buttons taken out: what was held before that
         *held = pad_from_controls(*reinterpret_cast<const uint64_t*>(slot + OFF_CONTROLS));
+        if (g_live.load(std::memory_order_acquire)) *held |= g_held[(at - first) / SLOT_SIZE].load(std::memory_order_relaxed);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
