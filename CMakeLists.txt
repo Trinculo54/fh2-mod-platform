@@ -53,7 +53,7 @@ set_source_files_properties(${_sqlite_src} PROPERTIES
     COMPILE_DEFINITIONS "SQLITE_OMIT_LOAD_EXTENSION;SQLITE_DEFAULT_MEMSTATUS=0")
 
 add_library(fh2mod_platform SHARED src/platform.cpp src/strings.cpp src/updates.cpp src/files.cpp
-            src/database.cpp src/media_overrides.cpp src/titles.cpp src/session.cpp src/hotkeys.cpp src/commands.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
+            src/database.cpp src/media_overrides.cpp src/titles.cpp src/session.cpp src/hotkeys.cpp src/commands.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/pad_layer.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
 target_include_directories(fh2mod_platform PRIVATE third_party/minhook/include ${_minhook} third_party/sqlite)
 if(NOT MSVC)
     # InterlockedCompareExchange128, for rewriting call sites atomically.
@@ -155,5 +155,17 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         target_link_libraries(hud_mod PRIVATE fh2mod_api)
         set_target_properties(hud_mod PROPERTIES OUTPUT_NAME HudTestMod PREFIX "")
         target_link_options(hud_mod PRIVATE -static)
+        # The pad layer preview's rules (src/pad_engine.hpp), with no game: run pad_engine_test.exe.
+        add_executable(pad_engine_test tests/pad_engine_test.cpp)
+        target_include_directories(pad_engine_test PRIVATE include src)
+        target_link_options(pad_engine_test PRIVATE -static)
+        # The pad layer against the real game exe: tests/run_pad_test.sh <forza_durango_release_final.exe>
+        add_executable(pad_hook_test tests/pad_hook_test.cpp)
+        target_compile_definitions(pad_hook_test PRIVATE UNICODE _UNICODE)
+        target_link_options(pad_hook_test PRIVATE -municode -static -Wl,--image-base=0x10000000)
+        add_library(pad_mod SHARED tests/pad_mod.cpp)
+        target_link_libraries(pad_mod PRIVATE fh2mod_api)
+        set_target_properties(pad_mod PROPERTIES OUTPUT_NAME PadMod PREFIX "")
+        target_link_options(pad_mod PRIVATE -static)
     endif()
 endif()

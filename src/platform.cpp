@@ -822,6 +822,8 @@ DWORD WINAPI load_mods(LPVOID) {
     }
     // The HUD layer preview's interface, there from every mod's fh2mod_init on.
     publish_platform_interface("FH2Platform.HudLayer", 1, hud_interface(), hud_layer_owner());
+    // The pad layer preview's interface, there from every mod's fh2mod_init on.
+    publish_platform_interface("FH2Platform.PadLayer", 1, pad_interface(), pad_layer_owner());
     for (const auto& f : files) {
         {
             std::scoped_lock lk{g_mu};
@@ -961,6 +963,7 @@ DWORD WINAPI load_mods(LPVOID) {
     apply_all();
     build_database();
     settings_start(&g_api);
+    pad_layer_start(&g_api);
     plog(std::to_string(loaded.size()) + " mod(s) loaded");
     start_save_snapshot();
     write_session_status();

@@ -704,6 +704,8 @@ mark.on_rebind = [](void*, const char*, uint32_t vk, uint32_t mods, uint32_t cho
 api->add_hotkey(g_mod, &mark);
 ```
 
+**Using buttons while driving.** A hotkey never stops the game seeing its buttons. To have the d-pad (or other buttons) to yourself while a modifier is held, see the pad layer preview, [pad-layer-preview.md](pad-layer-preview.md).
+
 ## Commands (API 9)
 
 ```c
