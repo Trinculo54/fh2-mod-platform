@@ -34,6 +34,12 @@ namespace fh2platform {
 void log_line(const std::string& who, const std::string& text);
 inline void plog(const std::string& text) { log_line("", text); }
 
+// The loader thread, before every fh2mod_init has returned (a mod's fh2mod_init is running).
+bool in_mod_init();
+// An interface the platform itself offers (the HUD layer preview's), there before any mod starts, so a
+// mod finds it from fh2mod_init on and can't publish the name. No log line.
+void publish_platform_interface(const char* name, uint32_t version, const void* iface, FH2Mod* owner);
+
 // Base of the mapped game exe, or nullptr (always, once Azimuth has started another game).
 void* find_game();
 constexpr uint32_t kGameSizeOfImage = 0x03A18000u;
@@ -85,6 +91,9 @@ void apply_database(const std::vector<FH2Mod*>& mods);
 std::filesystem::path extra_options_dir();
 void fill_hook_api(FH2ModApi& api);
 bool hook_at(const void* p, char* out, std::size_t n); // p is in a hook's trampoline or stub
+// Whether the exe on disk holds `expect` at game address p, n <= 256 bytes (the HUD layer's code checks).
+bool disk_bytes_equal(const void* p, const void* expect, std::size_t n);
+bool disk_image_readable();   // the exe on disk could be opened for disk_bytes_equal
 int hook_count();
 const char* hook_line(int i, bool* enabled);
 

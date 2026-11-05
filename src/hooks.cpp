@@ -1594,6 +1594,40 @@ void* api_wait_for_code(uint32_t timeout_ms) {
 
 } // namespace
 
+// The HUD layer's code checks (hud_layer.cpp): whether the exe on disk holds `expect` at game address p,
+// n <= 256 bytes. Only the file's raw bytes are read, never memory, so a patch another mod made in
+// memory can't make a check pass or fail.
+bool disk_bytes_equal(const void* p, const void* expect, std::size_t n) {
+    if (!p || !expect || n == 0 || n > 256) return false;
+    {
+        std::scoped_lock lk{g_mu};
+        open_disk_image();
+    }
+    const char* base = game_base();
+    if (g_disk.file == INVALID_HANDLE_VALUE || !base || !in_game(p)) return false;
+    const auto rva = static_cast<uint32_t>(static_cast<const char*>(p) - base);
+    for (const auto& s : g_disk.sections) {
+        if (rva < s.VirtualAddress || rva + n > s.VirtualAddress + s.SizeOfRawData) continue;
+        unsigned char disk[256];
+        OVERLAPPED ov{};
+        const uint64_t off = s.PointerToRawData + (rva - s.VirtualAddress);
+        ov.Offset          = static_cast<DWORD>(off);
+        ov.OffsetHigh      = static_cast<DWORD>(off >> 32);
+        DWORD got          = 0;
+        if (!ReadFile(g_disk.file, disk, static_cast<DWORD>(n), &got, &ov) || got != n) return false;
+        return std::memcmp(disk, expect, n) == 0;
+    }
+    return false;
+}
+
+// Whether the exe on disk could be opened for those checks, so the HUD layer can say it couldn't be read
+// rather than log every check as a mismatch.
+bool disk_image_readable() {
+    std::scoped_lock lk{g_mu};
+    open_disk_image();
+    return g_disk.file != INVALID_HANDLE_VALUE;
+}
+
 void fill_hook_api(FH2ModApi& api) {
     watch_for_code();
     api.hook_function = api_hook_function;

@@ -7,7 +7,8 @@
 // phase "full": everything installed; "removed": TestMod.dll deleted;
 // "crash": AaaMod crashes on purpose; then, with an FH2MP.dll, OfflineMod.dll and FH2MP's
 // session file: "online-first", "online", "online-chosen" (the player's choices) and
-// "fh2mp-off" (FH2MP turned off on the MODS tab).
+// "fh2mp-off" (FH2MP turned off on the MODS tab); last, "hud": HudTestMod.dll adds a HUD
+// layer (the HUD layer preview, include/fh2mod_hud.h).
 #include "strings.hpp"
 #include "updates.hpp"
 
@@ -67,6 +68,13 @@ static int db_xp(int id) {
 }
 
 static bool has(const std::string& log, const char* s) { return log.find(s) != std::string::npos; }
+
+// The HUD layer preview's start thread has finished, one way or another ("hud" phase).
+static bool hud_started(const std::string& log) {
+    return has(log, "[HUD layer] hooks: 4 of 4 made and on; the HUD layer is ready") || has(log, "[HUD layer] the Mods page's hooks didn't go in") ||
+           has(log, "[HUD layer] the HUD layer is off: ") || has(log, " refused (see the line above); the HUD layer is off") ||
+           has(log, "[HUD layer] the game's code never became ready");
+}
 
 // fh2mod.exe with these arguments: its exit code and what it printed (platform 2.8.0's commands).
 static int run_cli(const std::wstring& args, std::string& out) {
@@ -140,6 +148,35 @@ static char* map_image(const wchar_t* path) {
     return base;
 }
 
+// All of the exe, as the hook test maps it: sections at their addresses, code read/execute, read-only data
+// read-only, the headers last so the platform only finds the game once it's all there. The "hud" phase, so
+// the HUD layer's code checks and hooks run against it.
+static char* map_game(const wchar_t* path) {
+    std::ifstream in{path, std::ios::binary};
+    std::vector<char> file((std::istreambuf_iterator<char>(in)), {});
+    if (file.size() < 4096) return nullptr;
+    auto* dos  = reinterpret_cast<IMAGE_DOS_HEADER*>(file.data());
+    auto* nt   = reinterpret_cast<IMAGE_NT_HEADERS64*>(file.data() + dos->e_lfanew);
+    auto* base = static_cast<char*>(VirtualAlloc(reinterpret_cast<void*>(nt->OptionalHeader.ImageBase),
+                                                 nt->OptionalHeader.SizeOfImage, MEM_RESERVE | MEM_COMMIT,
+                                                 PAGE_READWRITE));
+    if (!base) return nullptr;
+    auto* sec = IMAGE_FIRST_SECTION(nt);
+    for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i)
+        std::memcpy(base + sec[i].VirtualAddress, file.data() + sec[i].PointerToRawData,
+                    std::min(sec[i].SizeOfRawData, sec[i].Misc.VirtualSize ? sec[i].Misc.VirtualSize : sec[i].SizeOfRawData));
+    for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
+        const DWORD c = sec[i].Characteristics;
+        DWORD prot    = c & IMAGE_SCN_MEM_EXECUTE ? PAGE_EXECUTE_READ : c & IMAGE_SCN_MEM_WRITE ? PAGE_READWRITE : PAGE_READONLY;
+        DWORD old     = 0;
+        VirtualProtect(base + sec[i].VirtualAddress, std::max(sec[i].Misc.VirtualSize, sec[i].SizeOfRawData), prot, &old);
+    }
+    DWORD old = 0;
+    std::memcpy(base, file.data(), nt->OptionalHeader.SizeOfHeaders);
+    VirtualProtect(base, nt->OptionalHeader.SizeOfHeaders, PAGE_READONLY, &old);
+    return base;
+}
+
 int wmain(int argc, wchar_t** argv) {
     const std::wstring phase = argc > 1 ? argv[1] : L"full";
     // Update-check cache: 6 hours, for the same version, never older than it.
@@ -162,17 +199,21 @@ int wmain(int argc, wchar_t** argv) {
     }
     HMODULE p = LoadLibraryW(L"d3dcompiler_47.dll"); // what azimuth.exe does at startup
     CHECK(p != nullptr);
-    if (argc > 2) map_image(argv[2]); // "press Play"
+    if (argc > 2) phase == L"hud" ? map_game(argv[2]) : map_image(argv[2]); // "press Play"
     // the online phases (platform 2.8.0): run after "removed", with OfflineMod and an FH2MP.dll
     const bool online_phase = phase.rfind(L"online", 0) == 0 || phase == L"fh2mp-off";
+    // the HUD layer preview's phase: run last, with HudTestMod.dll added
+    const bool hud_phase = phase == L"hud";
     std::string log;
     for (int i = 0; i < 250; ++i) {
         Sleep(100);
         log = slurp(L"fh2-mods\\platform.log");
-        if (online_phase ? has(log, "mod(s) loaded")
-                         : has(log, "mod(s) loaded") && has(log, "TestMod version") &&
-                               (phase == L"full" ? has(log, "late edit applied") && has(log, "save snapshot:")
-                                                 : has(log, "removed AIPlayers.str") && has(log, "keep.xml override")))
+        if (hud_phase ? has(log, "mod(s) loaded") && has(log, "[HudTestMod] after init:") && has(log, "[HUD layer] page:") &&
+                            (argc <= 2 || hud_started(log))
+            : online_phase ? has(log, "mod(s) loaded")
+                           : has(log, "mod(s) loaded") && has(log, "TestMod version") &&
+                                 (phase == L"full" ? has(log, "late edit applied") && has(log, "save snapshot:")
+                                                   : has(log, "removed AIPlayers.str") && has(log, "keep.xml override")))
             break;
     }
     if (phase == L"crash") {
@@ -355,6 +396,65 @@ int wmain(int argc, wchar_t** argv) {
                   has(mods, "<Setter TargetName=\"RightArrow\" Property=\"Visibility\" Value=\"Hidden\" />"));
             CHECK(!has(installed, "Load when playing online"));   // no FH2MP here: no such row
         }
+        // No mod adds a HUD layer here, so the preview behaves as 2.8.0: nothing of the layer in the log,
+        // no file of its own, no layer in any A_Hud.xaml written; only line 1 names the build.
+        CHECK(!has(log, "[HUD layer]"));
+        bool hud_files = false;
+        for (const auto& e : fs::directory_iterator("fh2-mods")) hud_files = hud_files || e.path().filename().wstring().rfind(L"platform-hudlayer", 0) == 0;
+        CHECK(!hud_files);
+        bool hud_page = false;
+        for (const auto& e : fs::recursive_directory_iterator("."))
+            if (e.path().filename() == L"A_Hud.xaml") hud_page = hud_page || has(slurp(e.path()), "FH2 Mod Platform: HUD layer");
+        CHECK(!hud_page);
+        CHECK(has(log.substr(0, log.find('\n')), "; this is the 2.8.0 + HUD layer preview 3 build, not a release"));
+    } else if (hud_phase) {
+        // HudTestMod adds a layer with every part; a second one and one after fh2mod_init are refused
+        CHECK(has(log, "[HudTestMod] interface found"));
+        CHECK(has(log, "[HudTestMod] HUD layer added: BAR, CHIPS, TIP, PANEL, COUNTDOWN; lease 2000 ms") && has(log, "[HudTestMod] add_hud_layer: 1"));
+        CHECK(has(log, "[HudTestMod] add_hud_layer: this mod already has one; no HUD layer") && has(log, "[HudTestMod] add_hud_layer again: 0"));
+        CHECK(has(log, "[HudTestMod] add_hud_layer: it was called after fh2mod_init: the HUD page is written once every mod's fh2mod_init has "
+                       "returned; no HUD layer") &&
+              has(log, "[HudTestMod] after init: 0"));
+        CHECK(has(log, "[HudTestMod] set_hud_state: 1"));
+        CHECK(has(log, "[HUD layer] 1 mod(s) asked for a HUD layer: HudTestMod; the HUD page gets BAR, CHIPS, TIP, PANEL, COUNTDOWN"));
+        CHECK(has(log, "[HUD layer] button prompts: Automatic (fh2-mods\\platform-hudlayer.ini)"));
+        CHECK(has(log, "[HudTestMod] Mods page row: Button prompts"));   // settings_add's own line, as the hotkeys' rows
+        CHECK(has(log, "[HUD layer] crash marker: none from last session"));
+        const std::string props  = slurp("fh2-mods\\platform-hudlayer-props.txt");
+        const std::string marker = slurp("fh2-mods\\platform-hudlayer-marker.txt");
+        std::size_t lines = 0;
+        for (std::size_t at = props.find("\r\n"); at != std::string::npos; at = props.find("\r\n", at + 2)) ++lines;
+        CHECK(lines == 316 && props.rfind("FH2Mod_Hud_Shown\tbool\tfalse\t\r\n", 0) == 0);
+        if (fs::exists(L"FH2\\Mount\\media\\UI.zip")) {
+            CHECK(has(log, "[HUD layer] check: 40 resource keys used, all in UI.zip's application dictionaries (43 dictionaries, 1096 keys)"));
+            CHECK(has(log, "[HUD layer] page: wrote A_Hud.xaml with the layer (BAR, CHIPS, TIP, PANEL, COUNTDOWN): 316 properties, 588 bindings (at "
+                           "most 640), 290 DataTriggers, ") &&
+                  has(log, " bytes; a copy is in fh2-mods\\platform-hudlayer-A_Hud.xaml"));
+            const std::string copy = slurp("fh2-mods\\platform-hudlayer-A_Hud.xaml");
+            CHECK(has(copy, "<!-- FH2 Mod Platform: HUD layer -->") && has(copy, "FH2HL_Root"));
+            // The page as the game reads it: on 2.8.0 set_file's target is the test folder's mediaoverride (if
+            // set_file writes elsewhere later, this check follows it). With the game mapped, only if the Mods
+            // page's hooks went in: the platform removes its pages when they don't.
+            if (argc <= 2 || has(log, "[HUD layer] hooks: 4 of 4 made and on; the HUD layer is ready")) {
+                const std::string page = slurp(L"FH2\\Mount\\mediaoverride\\UI\\Scenes\\Anthem\\A_Hud.xaml");
+                CHECK(has(page, "<!-- FH2 Mod Platform: HUD layer -->") && has(page, "FH2HL_Root") && page == copy);
+            }
+            CHECK(has(marker, "state written"));
+            CHECK(has(log, "[HUD layer] crash marker: written"));
+        } else {
+            CHECK(has(log, "[HUD layer] page: the layer is left out: A_Hud.xaml couldn't be read from the game's UI.zip"));
+            CHECK(!fs::exists("fh2-mods\\platform-hudlayer-A_Hud.xaml") && marker.empty());
+        }
+        CHECK(has(slurp("fh2-mods\\platform-session.json"), "\"hud_layer\": \"preview 3: HudTestMod\""));
+        if (argc > 2) {
+            // the game mapped: the start thread checks the code and makes its hooks, or says why not
+            const bool ready = has(log, "[HUD layer] hooks: 4 of 4 made and on; the HUD layer is ready");
+            const bool no_props = has(log, "[HUD layer] the Mods page's hooks didn't go in, so the game can't read the layer's values; the HUD layer is off");
+            std::printf("HUD layer start: %s\n", ready ? "ready (L18)" : no_props ? "the Mods page's hooks didn't go in (L17)" : hud_started(log) ? "off (see the log)" : "not finished");
+            CHECK(ready || no_props);
+        }
+        // no fault of the layer's in any case
+        CHECK(!has(log, "crashed in the game's code") && !has(log, "[HUD layer] notify crashed"));
     } else if (online_phase) {
         const auto known = slurp("fh2-mods\\platform-mods.txt");
         const bool pages = fs::exists(L"FH2\\Mount\\media\\UI.zip") && argc <= 2;

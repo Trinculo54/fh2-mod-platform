@@ -22,6 +22,8 @@ set(FH2MOD_PLATFORM_VERSION_PATCH ${PROJECT_VERSION_PATCH})
 if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(FH2MOD_PLATFORM_VERSION_STRING ${PROJECT_VERSION} PARENT_SCOPE)
 endif()
+# The build's own name, in platform.log's first line, crash reports and ProductVersion.
+set(FH2MOD_PLATFORM_BUILD "${PROJECT_VERSION} + HUD layer preview 3")
 configure_file(cmake/platform_version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/platform_version.h)
 
 set(_warn)
@@ -65,6 +67,8 @@ target_compile_options(fh2mod_platform PRIVATE ${_warn} "$<$<AND:$<NOT:$<BOOL:${
 target_compile_definitions(fh2mod_platform PRIVATE _WIN32_WINNT=0x0A00 WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
                            FH2MOD_PLATFORM_VERSION="${PROJECT_VERSION}")
 target_include_directories(fh2mod_platform PRIVATE include src ${CMAKE_CURRENT_BINARY_DIR}/generated)
+# The HUD layer preview (include/fh2mod_hud.h): the interface, its template and its state.
+target_sources(fh2mod_platform PRIVATE src/hud_layer.cpp src/hud_state.cpp src/hud_template.cpp)
 # Only kernel32/user32 (and the C runtime) at load time: azimuth.exe loads
 # this DLL very early, and an app-folder version.dll or winhttp.dll proxy
 # from some other mod must not get pulled in by us. WinHTTP is loaded from
@@ -141,5 +145,15 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         target_link_libraries(db_mod PRIVATE fh2mod_api)
         set_target_properties(db_mod PROPERTIES OUTPUT_NAME DbMod PREFIX "")
         target_link_options(db_mod PRIVATE -static)
+        # The HUD layer preview: its template and state on their own (tests/run_hud_layer_test.sh), and the
+        # mod the platform test's "hud" phase loads.
+        add_executable(hud_layer_test tests/hud_layer_test.cpp src/hud_state.cpp src/hud_template.cpp src/strings.cpp)
+        target_include_directories(hud_layer_test PRIVATE include src third_party/sqlite)
+        target_compile_definitions(hud_layer_test PRIVATE UNICODE _UNICODE)
+        target_link_options(hud_layer_test PRIVATE -municode -static)
+        add_library(hud_mod SHARED tests/hud_mod.cpp)
+        target_link_libraries(hud_mod PRIVATE fh2mod_api)
+        set_target_properties(hud_mod PROPERTIES OUTPUT_NAME HudTestMod PREFIX "")
+        target_link_options(hud_mod PRIVATE -static)
     endif()
 endif()

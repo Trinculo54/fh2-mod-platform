@@ -228,7 +228,8 @@
 #define FH2_GAME_HUD_NOTIFICATION_DTOR_AT 0x73F046
 #define FH2_GAME_HUD_NOTIFICATION_DTOR_AT_BYTES "\x48\x89\x41\x28\x48\x81\xC1\xA0\x01\x00\x00"
 
-/* An instruction in the AchievementsModule's tick. Achievements. */
+/* An instruction in the AchievementsModule's tick. Achievements; also the platform's HUD layer pump, when
+ * a mod has a layer (instruction hooks there chain). */
 #define FH2_GAME_ACHIEVEMENTSMODULE_TICK_AT 0x3FCD84
 #define FH2_GAME_ACHIEVEMENTSMODULE_TICK_AT_BYTES "\x8B\x81\xA8\x00\x00\x00"
 
@@ -264,6 +265,55 @@
 /* Calls MSVCR110's rand (import slot 0x141DD0A90). */
 #define FH2_GAME_RAND 0x1259200
 #define FH2_GAME_RAND_BYTES "\x48\x83\xEC\x28\xFF\x15\x86\x78\xB7\x00"
+
+/* ---- The free-roam HUD (the platform's HUD layer preview) ---------------------------------------- */
+
+/* The free-roam HUD page's vtable (the Hud class); slot 0 is its deleting destructor, 0x140D244C0, +0x488
+ * runs each time the page is shown and +0x4F8 when it's hidden. Used by the platform's HUD layer
+ * (preview). */
+#define FH2_GAME_HUD_VTABLE 0x2DEF9C8
+#define FH2_GAME_HUD_VTABLE_BYTES "\xC0\x44\xD2\x40\x01\x00\x00\x00"
+
+/* The free-roam HUD page shown (its vtable +0x488): sets page+0x410 = 1. Used by the platform's HUD layer
+ * (preview). */
+#define FH2_GAME_HUD_SHOWN 0xD38DD0
+#define FH2_GAME_HUD_SHOWN_BYTES "\x40\x55\x53\x56\x57\x41\x54\x41\x56\x41\x57\x48"
+
+/* The free-roam HUD page hidden (its vtable +0x4F8): sets page+0x410 = 0. Used by the platform's HUD layer
+ * (preview). */
+#define FH2_GAME_HUD_HIDDEN 0xD41540
+#define FH2_GAME_HUD_HIDDEN_BYTES "\x48\x8B\xC4\x55\x48\x8D\x68\xA1\x48\x81\xEC\xF0"
+
+/* void(HUDModule*): suspends the game's own HUD (its HUDStatusPrioritiserModule's +0xA8 = 1). Used by
+ * the platform's HUD layer (preview) for hold_game_hud. */
+#define FH2_GAME_HUD_SUSPEND 0x78B0F0
+#define FH2_GAME_HUD_SUSPEND_BYTES "\x40\x57\x48\x83\xEC\x50\x48\xC7\x44\x24\x20\xFE"
+
+/* void(HUDModuleAR*): the same for the game's other HUD module. Used by the platform's HUD layer
+ * (preview). */
+#define FH2_GAME_HUD_SUSPEND_AR 0x78B1A0
+#define FH2_GAME_HUD_SUSPEND_AR_BYTES "\x40\x57\x48\x83\xEC\x50\x48\xC7\x44\x24\x20\xFE"
+
+/* void(module): resumes either HUD module (clears the prioritiser's +0xA8). Used by the platform's HUD
+ * layer (preview). */
+#define FH2_GAME_HUD_RESUME 0x785CD0
+#define FH2_GAME_HUD_RESUME_BYTES "\x40\x53\x48\x83\xEC\x30\x48\x8D\x54\x24\x20\x48"
+
+/* void*(size, type): allocates an AVUI object (the game's UI framework). Used by the platform's HUD layer
+ * (preview) for its Strings. */
+#define FH2_GAME_AVUI_ALLOC 0x14424E0
+#define FH2_GAME_AVUI_ALLOC_BYTES "\x48\x89\x5C\x24\x08\x57\x48\x83\xEC\x20\x48\x8B"
+
+/* String(obj, const wchar_t*, length): makes an AVUI String, with one reference. Used by the platform's
+ * HUD layer (preview). */
+#define FH2_GAME_AVUI_STRING_WIDE 0x1663340
+#define FH2_GAME_AVUI_STRING_WIDE_BYTES "\x48\x89\x4C\x24\x08\x57\x41\x56\x41\x57\x48\x83"
+
+/* void(obj, descriptor): raises PropertyChanged, so a page's bindings read the property again. Used by
+ * the platform's Mods page and its HUD layer (preview). */
+#define FH2_GAME_AVUI_PROPERTY_CHANGED 0xCF9C60
+#define FH2_GAME_AVUI_PROPERTY_CHANGED_BYTES "\x40\x57\x48\x83\xEC\x60\x48\xC7\x44\x24\x20\xFE"
+
 /* ---- The platform's own ----------------------------------------------------------------------- */
 
 /* Hooked by the platform for the Mods page, its own pages, the MODS tab and the title-screen
@@ -271,7 +321,8 @@
  * 0xD9FC10, 0xDC8A60, 0xDC6C40, 0xDC6E30 and 0xD9F9F0; the HUD options page 0xB3A3E0 and
  * 0xB0B990; the Marketplace handlers 0xDBD720, 0xDBDD00, 0xDBDD60 and 0xDBFE40; the
  * Achievements tile's calls 0xDBD635 and 0xDBF185; and the title screen's buttons (Splash vtable
- * +0x578, game+0x2E53940). Don't hook them: use the platform's settings, pages and title-screen
- * entries instead. */
+ * +0x578, game+0x2E53940); and, when a mod has a HUD layer (preview), the free-roam HUD's vtable slots
+ * +0x488, +0x4F8 and 0 (game+0x2DEFE50, 0x2DEFEC0, 0x2DEF9C8). Don't hook them: use the platform's
+ * settings, pages and title-screen entries instead. */
 
 #endif /* FH2GAME_H */
