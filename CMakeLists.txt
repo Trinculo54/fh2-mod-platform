@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 # Bump VERSION before tagging a release (the tag build checks they match).
-project(fh2_mod_platform VERSION 2.8.0 LANGUAGES C CXX RC)
+project(fh2_mod_platform VERSION 2.9.0 LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,7 +23,7 @@ if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(FH2MOD_PLATFORM_VERSION_STRING ${PROJECT_VERSION} PARENT_SCOPE)
 endif()
 # The build's own name, in platform.log's first line, crash reports and ProductVersion.
-set(FH2MOD_PLATFORM_BUILD "${PROJECT_VERSION} + HUD layer preview 3")
+set(FH2MOD_PLATFORM_BUILD "${PROJECT_VERSION} dev")
 configure_file(cmake/platform_version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/platform_version.h)
 
 set(_warn)

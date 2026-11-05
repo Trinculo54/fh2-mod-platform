@@ -226,7 +226,7 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("---- platform.log\n%s----\n", log.c_str());
 
     if (phase == L"full") {
-        CHECK(has(log, "FH2 Mod Platform 2.8.0 (API 9)"));
+        CHECK(has(log, "FH2 Mod Platform 2.9.0 (API 9)"));
         CHECK(has(log, "media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride"));
         CHECK(log.find("loaded HelloMod.dll") != std::string::npos);
         CHECK(log.find("Legacy.dll has no fh2mod_init") != std::string::npos);
@@ -339,7 +339,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(id.size() >= 17 && id[8] == '-' && id[15] == '-' && id.substr(16) == std::to_string(GetCurrentProcessId()));
             CHECK(has(log, ("session " + id + ": started ").c_str()));
             const std::string copy = slurp(fs::path(L"fh2-mods\\platform-logs") / ("platform-" + id + ".log"));
-            CHECK(has(copy, "FH2 Mod Platform 2.8.0 (API 9)") && has(copy, "[TestMod] session id "));
+            CHECK(has(copy, "FH2 Mod Platform 2.9.0 (API 9)") && has(copy, "[TestMod] session id "));
             CHECK(slurp(fs::path(L"TestModData\\logs") / (id + ".log")) == "test mod's own log\n");
             CHECK(has(log, ("[TestMod] session log: TestModData\\logs\\" + id + ".log (the newest 3 kept)").c_str()));
             CHECK(has(log, "[TestMod] bad log folder refused") &&
@@ -353,7 +353,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(slurp(fs::path(L"fh2-mods\\save-snapshots") / id / L"1A96545B" / L"test.sav") == "save data");
             CHECK(slurp(L"data\\titles\\1A96545B\\saves\\1A96545B\\test.sav") == "save data");
             CHECK(has(status, ("\"session\": \"" + id + "\"").c_str()) && has(status, "\"state\": \"running\"") &&
-                  has(status, "\"platform\": \"2.8.0\"") && has(status, "\"TestMod\": \"1.0.0\""));
+                  has(status, "\"platform\": \"2.9.0\"") && has(status, "\"TestMod\": \"1.0.0\""));
         }
         // The game's menus were given: the pages are written. (Not with the game mapped: this
         // test's copy of it doesn't pass the menus' code checks, so the platform takes them out.)
@@ -406,7 +406,7 @@ int wmain(int argc, wchar_t** argv) {
         for (const auto& e : fs::recursive_directory_iterator("."))
             if (e.path().filename() == L"A_Hud.xaml") hud_page = hud_page || has(slurp(e.path()), "FH2 Mod Platform: HUD layer");
         CHECK(!hud_page);
-        CHECK(has(log.substr(0, log.find('\n')), "; this is the 2.8.0 + HUD layer preview 3 build, not a release"));
+        CHECK(has(log.substr(0, log.find('\n')), "; this is the 2.9.0 dev build, not a release"));
     } else if (hud_phase) {
         // HudTestMod adds a layer with every part; a second one and one after fh2mod_init are refused
         CHECK(has(log, "[HudTestMod] interface found"));
