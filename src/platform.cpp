@@ -819,6 +819,8 @@ DWORD WINAPI load_mods(LPVOID) {
             }
         }
     }
+    // The pad layer preview's interface, there from every mod's fh2mod_init on.
+    publish_platform_interface("FH2Platform.PadLayer", 1, pad_interface(), pad_layer_owner());
     for (const auto& f : files) {
         {
             std::scoped_lock lk{g_mu};
@@ -957,6 +959,7 @@ DWORD WINAPI load_mods(LPVOID) {
     apply_all();
     build_database();
     settings_start(&g_api);
+    pad_layer_start(&g_api);
     plog(std::to_string(loaded.size()) + " mod(s) loaded");
     start_save_snapshot();
     write_session_status();
@@ -986,6 +989,13 @@ DWORD WINAPI load_mods(LPVOID) {
 }
 
 } // namespace
+
+bool in_mod_init() { return GetCurrentThreadId() == g_loader_thread && WaitForSingleObject(g_mods_ready, 0) != WAIT_OBJECT_0; }
+
+void publish_platform_interface(const char* name, uint32_t version, const void* iface, FH2Mod* owner) {
+    std::scoped_lock lk{g_mu};
+    g_interfaces[name] = {owner, version, iface};
+}
 
 // ---- the MODS tab's list of mods -----------------------------------------------------
 //
