@@ -66,6 +66,20 @@ int main() {
         check(o.hide == 0 && o.pressed[0] == 0, "Left pressed again without LB: the game's");
     }
     {
+        // the d-pad as one control (30, axes 31 and 32), set by the game with each direction
+        SlotState s;
+        StepOut o = step(s, C(kLeft) | C(30) | C(31), chat, 1);
+        check(o.hide == 0 && !o.dpad_idle, "Left without LB: the d-pad as one control is the game's");
+        o = step(s, C(kLB) | C(kRight) | C(30) | C(31), chat, 1);
+        check(o.hide == (C(kRight) | C(30) | C(31)) && o.take == C(kRight) && o.dpad_idle,
+              "LB + Right: Right and the d-pad as one control are hidden; only Right is marked taken");
+        const LayerView up_only[1] = {{FH2_PAD_LB, FH2_PAD_DPAD_UP}};
+        SlotState t;
+        step(t, C(kLB), up_only, 1);
+        o = step(t, C(kLB) | C(34) | C(30) | C(31) | C(32), up_only, 1);
+        check(o.hide == C(34) && !o.dpad_idle, "a layer with only Up, Up+Right held: Right is still the game's, so is the d-pad as one");
+    }
+    {
         SlotState s;
         step(s, C(kLB), chat, 1);
         StepOut o = step(s, C(kLB) | C(34), chat, 1);

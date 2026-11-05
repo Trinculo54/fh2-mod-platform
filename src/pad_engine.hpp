@@ -75,9 +75,16 @@ struct SlotState {
     uint32_t owned = 0;   // buttons hidden last step: hidden until they go up, modifier or not
 };
 
+// The d-pad as one control: 30 is the d-pad itself (a direction, with values in the reading), 31 its
+// left-right axis and 32 its up-down axis. The game sets them with the direction bits, so the radio,
+// which reads the d-pad this way, still saw it in the first two runs.
+constexpr uint64_t kDpadAsOne = (1ull << 30) | (1ull << 31) | (1ull << 32);
+
 struct StepOut {
-    uint64_t hide     = 0;             // game controls to hide (clear from the current reading, mark as taken)
-    uint32_t hide_pad = 0;             // the same as FH2_PAD_ bits (for the raw button word)
+    uint64_t hide     = 0;             // game controls to clear from the current reading
+    uint64_t take     = 0;             // of those, the ones to mark as taken (digital ones: the game unmarks them itself)
+    uint32_t hide_pad = 0;             // the hidden buttons as FH2_PAD_ bits (for the raw button word)
+    bool dpad_idle    = false;         // the d-pad as one control goes too: write the reading's idle d-pad
     uint32_t pressed[kMaxLayers] = {}; // per layer: buttons newly pressed while it was open
 };
 
@@ -100,7 +107,14 @@ inline StepOut step(SlotState& s, uint64_t controls, const LayerView* layers, in
     s.held       = held;
     s.owned      = take;
     out.hide     = controls_for(take) & controls;
+    out.take     = out.hide;
     out.hide_pad = take;
+    // Every held d-pad direction hidden: the d-pad as one control is idle too. With a direction still
+    // the game's (a layer that takes only some), it stays as the game built it.
+    if ((held & kDpad) && !(held & kDpad & ~take)) {
+        out.hide |= kDpadAsOne & controls;
+        out.dpad_idle = true;
+    }
     return out;
 }
 

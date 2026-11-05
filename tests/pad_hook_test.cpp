@@ -102,15 +102,18 @@ int wmain(int argc, wchar_t** argv) {
     struct After {
         uint64_t taken, held;
         uint16_t raw;
+        uint32_t dpad_dir;   // the reading's d-pad as one control: 8 = idle
     };
     auto frame = [&](uint64_t controls) {
         for (unsigned char* s : {slot, mirror}) {
             *reinterpret_cast<uint64_t*>(s + 0x78) = controls;   // what the game's reading builder left
             *reinterpret_cast<uint16_t*>(s + 0xC0) = static_cast<uint16_t>(controls & 0xF3FF);
+            // with the d-pad as one control (30) set, the builder gives it a direction (2) and values
+            *reinterpret_cast<uint64_t*>(s + 0x80) = controls & C(30) ? 0x3F80000000000002ull : 8;
             release(s);
         }
         const After a{*reinterpret_cast<uint64_t*>(slot + 0x1E8), *reinterpret_cast<uint64_t*>(slot + 0x78),
-                      *reinterpret_cast<uint16_t*>(slot + 0xC0)};
+                      *reinterpret_cast<uint16_t*>(slot + 0xC0), *reinterpret_cast<uint32_t*>(slot + 0x80)};
         Sleep(60);   // a slow frame, so a press reaches the mod (and its buttons() call) before the next one
         return a;
     };
@@ -134,6 +137,14 @@ int wmain(int argc, wchar_t** argv) {
     *reinterpret_cast<uint64_t*>(slot + 0x1E8) = C(kA);             // something the game itself took...
     CHECK(is(frame(C(kLB) | C(kA)), C(kA), C(kLB) | C(kA)));         // ...stays taken while held, untouched
     CHECK(is(frame(C(kLB)), 0, C(kLB)));                             // ...and goes when let go
+    // the d-pad as one control (30, its left-right axis 31): the radio reads that
+    After a = frame(C(kRight) | C(30) | C(31));
+    CHECK(is(a, 0, C(kRight) | C(30) | C(31)) && a.dpad_dir == 2);   // without LB: the game's
+    CHECK(is(frame(0), 0, 0));
+    a = frame(C(kLB) | C(kRight) | C(30) | C(31));
+    CHECK(is(a, C(kRight), C(kLB)) && a.dpad_dir == 8);              // LB + Right: all of it hidden, the d-pad idle
+    a = frame(C(kLB));
+    CHECK(is(a, 0, C(kLB)) && a.dpad_dir == 8);
 
     Sleep(500);
     log = slurp(L"fh2-mods\\platform.log");
@@ -142,9 +153,10 @@ int wmain(int argc, wchar_t** argv) {
     CHECK(has(log, "[PadMod] press Chat 0x0004 (buttons 1 0x010"));
     CHECK(has(log, "[PadMod] press Chat 0x0001 (buttons 1 0x0109)"));
     CHECK(has(log, "[PadMod] press Chat 0x0008 (buttons 1 0x0109)"));
+    CHECK(has(log, "[PadMod] press Chat 0x0008 (buttons 1 0x0108)"));   // the Right with the d-pad as one
     std::size_t presses = 0;
     for (std::size_t at = 0; (at = log.find("[PadMod] press ", at)) != std::string::npos; ++at) ++presses;
-    CHECK(presses == 3);
+    CHECK(presses == 4);
     CHECK(!has(log, "crashed in its on_press"));
     std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
     return fails;

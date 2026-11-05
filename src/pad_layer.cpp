@@ -15,7 +15,10 @@
 // cleared what it clears, the layers' buttons held while their modifier is held are hidden: taken out
 // of the reading's mask (+0x78) and its raw button word (+0xC0), and marked as taken. Not only taken:
 // the first in-game run showed the game still acting on the d-pad, and the game's value query
-// (game+0x106F040) reads the mask without looking at the taken one. A button once hidden stays hidden
+// (game+0x106F040) reads the mask without looking at the taken one. Run 2 then had telemetry stopped but the radio
+// still changing stations: with each direction the game also sets the d-pad as one control (30, axes 31
+// and 32, with a direction and values in the reading), and the radio reads that. When a layer has every
+// held direction, that goes too, and the reading's d-pad is written as the builder leaves it idle. A button once hidden stays hidden
 // until it goes up, so letting go of the modifier first can't give the game a press it didn't get.
 // The same pad is in more than one slot, so presses only count from the slot the game is using.
 // Everything runs on the game's thread, in the game's own order; no game memory is written anywhere
@@ -48,6 +51,8 @@ constexpr uintptr_t OFF_ACTIVE     = 0xAB28;      // manager: the slot in use
 constexpr uintptr_t OFF_CONTROLS   = 0x78;        // slot: held controls (the current reading +0x70, its mask +8)
 constexpr uintptr_t OFF_TAKEN      = 0x1E8;       // slot: taken controls
 constexpr uintptr_t OFF_RAW        = 0xC0;        // slot: the pad's raw buttons (XInput bits), as HonkHonk reads them
+constexpr uintptr_t OFF_DPAD       = 0x80;        // slot: the reading's d-pad as one control (+0x10: direction, then 4 floats);
+                                                  // game+0x1074436 sets it idle (8, then zeros) each frame
 
 struct CodeCheck {
     uintptr_t rva;
@@ -65,6 +70,9 @@ const CodeCheck kChecks[] = {
      {0x41, 0xF6, 0x06, 0x01, 0x74, 0x12, 0x48, 0x8B, 0xC6, 0x48, 0xF7, 0xD0, 0x48, 0x21, 0x83, 0xE8, 0x01, 0x00, 0x00}, 19},
     {0x106EF10, "game+0x106EF10 (the press query reads a taken control as not pressed)",
      {0x4C, 0x85, 0x87, 0xE8, 0x01, 0x00, 0x00, 0x0F, 0x85, 0x09, 0x01, 0x00, 0x00, 0x4C, 0x85, 0x87, 0x30, 0x01, 0x00, 0x00}, 20},
+    {0x1074436, "game+0x1074436 (the reading builder sets the d-pad idle: direction 8)",
+     {0x48, 0xC7, 0x41, 0x10, 0x08, 0x00, 0x00, 0x00, 0x48, 0x89, 0x69, 0x18}, 12},
+    {0x1074755, "game+0x1074755 (d-pad up also sets controls 30 and 32)", {0x48, 0xB8, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 0x00}, 10},
     {0x1075AD5, "game+0x1075AD5 (the pads' update calls game+0x10768D0)", {0xE8, 0xF6, 0x0D, 0x00, 0x00}, 5},
     {0x1075F12, "game+0x1075F12 (slot 8's update calls game+0x10768D0)", {0xE8, 0xB9, 0x09, 0x00, 0x00}, 5},
 };
@@ -172,7 +180,12 @@ bool step_slot(unsigned char* slot, StepOut* out) {
             // the taken mask, so the buttons go from the reading itself, and from its raw button word.
             controls &= ~out->hide;
             *reinterpret_cast<uint16_t*>(slot + OFF_RAW) &= static_cast<uint16_t>(~out->hide_pad);
-            *reinterpret_cast<uint64_t*>(slot + OFF_TAKEN) |= out->hide;
+            *reinterpret_cast<uint64_t*>(slot + OFF_TAKEN) |= out->take;
+            if (out->dpad_idle) {   // the reading's d-pad as the builder leaves it with nothing held
+                *reinterpret_cast<uint64_t*>(slot + OFF_DPAD) = 8;   // direction 8 (none), magnitude 0
+                *reinterpret_cast<uint64_t*>(slot + OFF_DPAD + 8) = 0;
+                *reinterpret_cast<uint32_t*>(slot + OFF_DPAD + 16) = 0;
+            }
         }
         const auto* active = *reinterpret_cast<unsigned char* const*>(mgr + OFF_ACTIVE);
         return active ? active == slot : idx == 0;

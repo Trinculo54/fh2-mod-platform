@@ -33,6 +33,7 @@ pad->add_layer(mod, &chat);
 - **Clashes.** Two layers clash when both could be open at once and they take a button in common. LB with the d-pad and LB+RB with Up clash (holding LB+RB opens both); LB and RB with the same buttons don't. The second layer is refused, and the log names the first. 16 layers at most, across all mods.
 - **`on_press`** runs on a platform thread, not the game's, once per press of one of the layer's buttons while its modifier is held. Keep it short. A press only counts when the button goes down while the layer is open: a button already held when the modifier goes down isn't one, because the game has had it.
 - **Diagonals.** The game turns two d-pad directions held together into one diagonal control. A layer that takes either direction takes the diagonal too, and both directions count as presses.
+- **The d-pad as one control.** Some of the game (the radio, for one) reads the d-pad as a single control with a direction rather than four buttons. While a layer has every d-pad direction held, that control is idle too. A layer that takes only some directions leaves it to the game whenever a direction it doesn't take is held, so for the d-pad, take all four.
 
 ## What the player sees
 
