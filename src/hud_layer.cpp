@@ -1383,8 +1383,11 @@ int i_add_hud_layer(FH2Mod* m, const FH2HudLayer* layer) {
         add_row(m);
     }
     const uint32_t lease = g_eng.layer_lease(i);
-    log_line(m->name, "HUD layer added: " + hud_parts_text(g_eng.layer_parts(i)) + "; lease " + std::to_string(lease) + " ms" +
-                          (layer->lease_ms == 0 ? " (the default)" : ""));
+    if (g_eng.layer_parts(i) == FH2_HUD_PART_FEED)   // a feed-only layer never takes the screen: no lease to keep
+        log_line(m->name, "HUD layer added: FEED (shared, so no lease)");
+    else
+        log_line(m->name, "HUD layer added: " + hud_parts_text(g_eng.layer_parts(i)) + "; lease " + std::to_string(lease) + " ms" +
+                              (layer->lease_ms == 0 ? " (the default)" : ""));
     return 1;
 }
 int i_set_hud_state(FH2Mod* m, const FH2HudState* s) {
