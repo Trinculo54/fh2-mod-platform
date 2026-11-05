@@ -821,7 +821,7 @@ DWORD WINAPI load_mods(LPVOID) {
         }
     }
     // The HUD layer preview's interface, there from every mod's fh2mod_init on.
-    publish_platform_interface("FH2Platform.HudLayer", 1, hud_interface(), hud_layer_owner());
+    publish_platform_interface("FH2Platform.HudLayer", 2, hud_interface(), hud_layer_owner());   // 2: the feed (2.9.0)
     // The pad layer preview's interface, there from every mod's fh2mod_init on.
     publish_platform_interface("FH2Platform.PadLayer", 1, pad_interface(), pad_layer_owner());
     for (const auto& f : files) {

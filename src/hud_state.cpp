@@ -407,12 +407,22 @@ struct Ix {
     int CShown[5], C[5], CD[5][5];
     int RShown[8], RSel[8], RLabel[8], RStyle[8], RHasValue[8], RValue[8];
     int PanelFooter = -1, CountText = -1, CountPop = -1, CountLabel = -1, CountLabelShown = -1;
+    int FShown[kHudFeedLines], FHasName[kHudFeedLines], FName[kHudFeedLines], FText[kHudFeedLines], FStyle[kHudFeedLines];
     int fade[kHudParts], vis[kHudParts];
 };
 
+// A feed line: staged by post_feed, then the pump's own while it's on screen.
+struct FeedLine {
+    std::wstring name, text;
+    int style     = 0;
+    double remain = 0;   // ms of time with the HUD page live left
+};
+constexpr std::size_t kFeedStaged = 16;   // posted lines waiting for the pump; more drops the oldest
+
 constexpr int kOff = 0, kIn = 1, kOut = 2;
-constexpr int kPartBar = 0, kPartTip = 2, kPartPanel = 3, kPartCount = 4;   // FH2_HUD_PART_ bit order
-static_assert(kPartCount == kHudParts - 1, "the countdown is the last part");
+constexpr int kPartBar = 0, kPartTip = 2, kPartPanel = 3, kPartCount = 4, kPartFeed = 5;   // FH2_HUD_PART_ bit order
+static_assert(kPartFeed == kHudParts - 1, "the feed is the last part");
+static_assert((1u << kPartFeed) == FH2_HUD_PART_FEED, "the feed's bit");
 struct Part {
     bool declared = false;
     int state     = kOff;
@@ -468,6 +478,14 @@ struct HudEngine::Impl {
     double now = 0, last_now = -1;
     int ndirty = 0;
     bool allowed[kHudParts] = {}, pending[kHudParts] = {};
+    // the feed: posted lines (feed_mu), the pump's lines on screen (newest at the back), and whether it's kept
+    // out of the way (a show_hud_layer with FH2_HUD_PART_INSTANT, until the next one without)
+    std::mutex feed_mu;
+    std::deque<FeedLine> feed_staged;   // feed_mu
+    std::atomic<uint64_t> feed_posts{0};
+    uint64_t feed_seen = 0;
+    std::deque<FeedLine> feed;
+    bool feed_changed = true, feed_quiet = false;
     std::deque<QSound> pq;
     uint32_t notified = 0;
     bool teardown_done = false, last_hide_done = false, off_status_done = false;
@@ -770,6 +788,7 @@ struct HudEngine::Impl {
         }
         const uint32_t want = best >= 0 ? layers[best].show_parts.load() & FH2_HUD_PART_ALL & layers[best].parts : 0;
         const bool inst     = force_instant || (newest_layer >= 0 && (layers[newest_layer].show_parts.load() & FH2_HUD_PART_INSTANT));
+        if (newest_layer >= 0) feed_quiet = (layers[newest_layer].show_parts.load() & FH2_HUD_PART_INSTANT) != 0;
         force_instant       = false;
         if (best != owner_ || (best >= 0 && best_seq != owner_seq)) {
             if (best >= 0) {
@@ -929,6 +948,51 @@ struct HudEngine::Impl {
         setb(ix.CountLabelShown, !s.countdown_label.empty());
     }
 
+    // The feed, once a frame after the owner is chosen: takes the posted lines, ages the lines while the page
+    // is live, drops the expired, and adds the feed to what's wanted while it has lines and isn't kept out of
+    // the way. The bottom slot (F0) is the newest line.
+    void feed_step(const FrameIn& in, double dt) {
+        if (!part[kPartFeed].declared) return;
+        const uint64_t posts = feed_posts.load();
+        if (posts != feed_seen) {
+            std::unique_lock lk{feed_mu, std::try_to_lock};
+            if (lk.owns_lock()) {
+                feed_seen = posts;
+                while (!feed_staged.empty()) {
+                    feed.push_back(std::move(feed_staged.front()));
+                    feed_staged.pop_front();
+                    if (feed.size() > static_cast<std::size_t>(kHudFeedLines)) feed.pop_front();
+                    feed_changed = true;
+                }
+            }
+        }
+        if (in.live && dt > 0)
+            for (FeedLine& f : feed) f.remain -= dt;
+        while (!feed.empty() && feed.front().remain <= 0) {
+            feed.pop_front();
+            feed_changed = true;
+        }
+        const bool covered = (wanted & (FH2_HUD_PART_BAR | FH2_HUD_PART_PANEL)) != 0 || in.game_hidden || feed_quiet;
+        if (!feed.empty() && !covered) {
+            wanted |= FH2_HUD_PART_FEED;
+        } else if (feed_quiet && part[kPartFeed].state != kOff) {
+            part[kPartFeed].instant = true;   // a clean frame: out at once, as the owner's parts go
+        }
+        if (!feed_changed) return;
+        feed_changed  = false;
+        const int n   = static_cast<int>(feed.size());
+        for (int i = 0; i < kHudFeedLines; ++i) {
+            const bool on = i < n;
+            setb(ix.FShown[i], on);
+            if (!on) continue;   // a slot going out keeps its words (not told)
+            const FeedLine& f = feed[static_cast<std::size_t>(n - 1 - i)];
+            setb(ix.FHasName[i], !f.name.empty());
+            sets(ix.FName[i], f.name);
+            sets(ix.FText[i], f.text);
+            seti(ix.FStyle[i], f.style);
+        }
+    }
+
     void frame_values(float playhead, float hold) {
         if (std::isnan(playhead)) playhead = 0;
         if (std::isnan(hold)) hold = 0;
@@ -942,7 +1006,7 @@ struct HudEngine::Impl {
     // frame that card clears.
     void screen() {
         bool any = false;
-        static const int kOrder[kHudParts] = {1, 2, 3, 4, kPartBar};
+        static const int kOrder[kHudParts] = {1, 2, 3, 4, kPartFeed, kPartBar};
         for (const int k : kOrder) {
             Part& pt = part[k];
             if (!pt.declared) continue;
@@ -996,7 +1060,7 @@ struct HudEngine::Impl {
         const int ct = ix.CountText;
         if (!valid(ct)) return;
         if (pubb(ix.CountPop) && now >= pop_until) set_switch(ix.CountPop, false);
-        if (!allowed[kHudParts - 1]) return;
+        if (!allowed[kPartCount]) return;
         const uint32_t m = std::min<uint32_t>(count_target, 999);
         if (m == count_shown) return;
         if (m == 0) {
@@ -1007,7 +1071,7 @@ struct HudEngine::Impl {
             count_shown = m;
             pop_pending = true;
         }
-        if (m != count_shown) pending[kHudParts - 1] = true;
+        if (m != count_shown) pending[kPartCount] = true;
     }
 
     void publish() {   // also the countdown's number (countdown())
@@ -1244,8 +1308,8 @@ int HudEngine::add_layer(void* mod, const std::string& name, const FH2HudLayer* 
         return -1;
     };
     if (!l || l->size < sizeof(FH2HudLayer)) return refuse("its FH2HudLayer is too small: set size = sizeof(FH2HudLayer)");
-    if (l->parts & ~FH2_HUD_PART_ALL && d.env.log) d.env.log(name, fmt("add_hud_layer: unknown part bits 0x%X; ignored", l->parts & ~FH2_HUD_PART_ALL));
-    const uint32_t parts = l->parts & FH2_HUD_PART_ALL;
+    if (l->parts & ~kHudPartsKnown && d.env.log) d.env.log(name, fmt("add_hud_layer: unknown part bits 0x%X; ignored", l->parts & ~kHudPartsKnown));
+    const uint32_t parts = l->parts & kHudPartsKnown;
     if (!parts) return refuse("it asks for no parts");
     const int n = d.count.load(std::memory_order_acquire);
     for (int i = 0; i < n; ++i)
@@ -1538,6 +1602,55 @@ int HudEngine::play_sound(int layer, uint32_t sound) {
     return 1;
 }
 
+int HudEngine::post_feed(int layer, const FH2HudFeedLine* line) {
+    Impl& d  = *d_;
+    Layer& L = d.layers[layer];
+    d.call(L);
+    if (!(L.parts & FH2_HUD_PART_FEED)) {
+        if (d.once_l(layer, "feed none")) d.mlog(layer, "post_hud_feed: this mod's layer has no FH2_HUD_PART_FEED; not shown");
+        return 0;
+    }
+    if (d.off_now()) {
+        if (d.once_l(layer, "feed off")) d.mlog(layer, "post_hud_feed: the HUD layer is off this session (see the lines above)");
+        return 0;
+    }
+    if (!line || line->size < sizeof(FH2HudFeedLine)) {
+        if (d.once_l(layer, "feed size")) d.mlog(layer, "post_hud_feed: the FH2HudFeedLine is too small: set size = sizeof(FH2HudFeedLine); not shown");
+        return 0;
+    }
+    const auto text = [&](const char* field, const char* utf8, std::size_t limit) {
+        unsigned f = 0;
+        uint32_t o = 0;
+        std::wstring w = hud_text(utf8, limit, false, &f, &o);
+        if ((f & kHudTextControl) && d.once_l(layer, std::string("feed control ") + field))
+            d.mlog(layer, std::string("post_hud_feed: ") + field + " has a line break or another control character; shown as a space");
+        if ((f & kHudTextCut) && d.once_l(layer, std::string("feed cut ") + field))
+            d.mlog(layer, std::string("post_hud_feed: ") + field + " is longer than " + std::to_string(limit) + " characters; the rest is cut");
+        if ((f & kHudTextOdd) && d.once_l(layer, "feed odd"))
+            d.mlog(layer, fmt("post_hud_feed: %s has letters outside the set seen working in the HUD's fonts (U+%04X); they may show as boxes", field, o));
+        return w;
+    };
+    FeedLine f;
+    f.text = text("text", line->text, 64);
+    if (f.text.empty()) {
+        if (d.once_l(layer, "feed empty")) d.mlog(layer, "post_hud_feed: the line has no text; not shown");
+        return 0;
+    }
+    f.name = text("name", line->name, 24);
+    f.style = line->style <= FH2_HUD_FEED_YELLOW ? static_cast<int>(line->style) : 0;
+    if (line->style > FH2_HUD_FEED_YELLOW && d.once_l(layer, "feed style"))
+        d.mlog(layer, "post_hud_feed: style " + std::to_string(line->style) + " isn't one of its values; FH2_HUD_FEED_PLAIN used");
+    const uint32_t ms = line->ms ? std::clamp<uint32_t>(line->ms, 2000, 30000) : 8000;
+    f.remain = static_cast<double>(ms);
+    {
+        std::scoped_lock lk{d.feed_mu};
+        d.feed_staged.push_back(std::move(f));
+        if (d.feed_staged.size() > kFeedStaged) d.feed_staged.pop_front();
+    }
+    d.feed_posts.fetch_add(1);
+    return 1;
+}
+
 uint32_t HudEngine::parts() const {
     uint32_t u  = 0;
     const int n = d_->count.load(std::memory_order_acquire);
@@ -1604,6 +1717,11 @@ void HudEngine::build(const std::vector<HudProp>& props) {
     }
     x.PanelFooter = at("PanelFooter"), x.CountText = at("CountText"), x.CountPop = at("CountPop"), x.CountLabel = at("CountLabel");
     x.CountLabelShown = at("CountLabelShown");
+    for (int i = 0; i < kHudFeedLines; ++i) {
+        const std::string f = "F" + std::to_string(i);
+        x.FShown[i] = at(f + "Shown"), x.FHasName[i] = at(f + "HasName"), x.FName[i] = at(f + "Name"), x.FText[i] = at(f + "Text");
+        x.FStyle[i] = at(f + "Style");
+    }
     for (int k = 0; k < kHudParts; ++k) {
         x.fade[k]          = at(kHudPartProps[k]);
         x.vis[k]           = at(std::string(kHudPartProps[k]) + "Vis");
@@ -1653,6 +1771,7 @@ HudEngine::FrameOut HudEngine::frame(const FrameIn& in) {
     d.collect(n);
     d.choose_owner(n);
     if (d.leases(in, n, dt)) d.choose_owner(n);
+    d.feed_step(in, dt);
     // the owner's pulses; the others' are dropped (pulse_hud only says 1 to the owner)
     for (int i = 0; i < n; ++i) {
         Layer& L         = d.layers[i];

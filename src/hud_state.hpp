@@ -139,6 +139,7 @@ public:
     uint32_t status(int layer);
     int hold(int layer, int hold);
     int play_sound(int layer, uint32_t sound);
+    int post_feed(int layer, const FH2HudFeedLine* line);   // interface version 2
 
     // ---- the session (the loader thread, after every fh2mod_init) -----------------------------------
     uint32_t parts() const;                              // the union of the layers' parts

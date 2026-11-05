@@ -56,7 +56,9 @@ static_assert(sizeof(FH2HudRow) == 32, "FH2HudRow moved");
 static_assert(sizeof(FH2HudLayer) == 32, "FH2HudLayer moved");
 static_assert(sizeof(FH2HudState) == 1000, "FH2HudState moved");
 static_assert(offsetof(FH2HudState, countdown_label) == 992, "FH2HudState moved");
-static_assert(sizeof(FH2HudInterface) == 72, "FH2HudInterface moved");
+static_assert(sizeof(FH2HudFeedLine) == 32, "FH2HudFeedLine moved");
+static_assert(offsetof(FH2HudInterface, play_ui_sound) == 64, "FH2HudInterface moved");   // version 1 ends here
+static_assert(sizeof(FH2HudInterface) == 80, "FH2HudInterface moved");
 
 // ---- game addresses (game+RVA; the full address in each comment) ------------------------------------
 constexpr uintptr_t kImageBase = 0x140000000;
@@ -546,7 +548,7 @@ void add_row(FH2Mod* m) {
     s.key         = "HudButtonPrompts";
     s.label       = "Button prompts";
     s.description = "What the HUD bar's button prompts show. Automatic: the controller or the keyboard and mouse, whichever you used last "
-                    "(Xbox-style controllers only; choose Controller for others). This is the 2.8.0 + HUD layer preview 3 build of the FH2 "
+                    "(Xbox-style controllers only; choose Controller for others). This is a development build of the FH2 "
                     "Mod Platform.";
     s.kind         = FH2_SETTING_CHOICE;
     s.choices      = kChoices;
@@ -1371,8 +1373,12 @@ int i_add_hud_layer(FH2Mod* m, const FH2HudLayer* layer) {
     }
     const int i = g_eng.add_layer(m, m->name, layer);
     if (i < 0) return 0;
-    if (i == 0) {
-        g_layer_mod.dll = m->dll;   // the title notice goes when that mod is removed
+    if (i == 0) g_layer_mod.dll = m->dll;   // the title notice goes when that mod is removed
+    // the Button prompts row: in the part of the first mod whose layer shows prompts (the bar or the tip); a mod
+    // with only the feed or other parts without prompts doesn't get it
+    static bool row_added = false;
+    if (!row_added && (g_eng.layer_parts(i) & (FH2_HUD_PART_BAR | FH2_HUD_PART_TIP))) {
+        row_added = true;
         read_ini();
         add_row(m);
     }
@@ -1409,9 +1415,18 @@ int i_play_ui_sound(FH2Mod* m, uint32_t sound) {
     const int i = g_eng.layer_of(m);
     return i < 0 ? 0 : g_eng.play_sound(i, sound);
 }
+int i_post_hud_feed(FH2Mod* m, const FH2HudFeedLine* line) {
+    const int i = g_eng.layer_of(m);
+    if (i < 0 && m) {
+        static std::atomic<bool> told{false};
+        if (!told.exchange(true)) log_line(m->name, "post_hud_feed: this mod has no HUD layer; add one with FH2_HUD_PART_FEED in fh2mod_init");
+    }
+    return i < 0 ? 0 : g_eng.post_feed(i, line);
+}
 
 const FH2HudInterface g_iface = {sizeof(FH2HudInterface), FH2_HUD_INTERFACE_VERSION, i_add_hud_layer, i_set_hud_state, i_set_hud_value,
-                                 i_show_hud_layer,        i_pulse_hud,               i_hud_status,    i_hold_game_hud, i_play_ui_sound};
+                                 i_show_hud_layer,        i_pulse_hud,               i_hud_status,    i_hold_game_hud, i_play_ui_sound,
+                                 i_post_hud_feed};
 
 std::atomic<bool> g_pump_late_logged{false};
 

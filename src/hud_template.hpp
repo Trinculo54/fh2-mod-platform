@@ -11,10 +11,15 @@
 
 namespace fh2platform {
 
-// The parts, in FH2_HUD_PART_ bit order (fh2mod_hud.h): BAR, CHIPS, TIP, PANEL, COUNTDOWN.
-constexpr int kHudParts = 5;
-extern const char* const kHudPartNames[kHudParts];   // "BAR", "CHIPS", "TIP", "PANEL", "COUNTDOWN"
-extern const char* const kHudPartProps[kHudParts];   // their fade properties: "Bar", "Chips", "Tip", "Panel", "Count"
+// The parts, in FH2_HUD_PART_ bit order (fh2mod_hud.h): BAR, CHIPS, TIP, PANEL, COUNTDOWN, FEED.
+constexpr int kHudParts = 6;
+extern const char* const kHudPartNames[kHudParts];   // "BAR", "CHIPS", "TIP", "PANEL", "COUNTDOWN", "FEED"
+extern const char* const kHudPartProps[kHudParts];   // their fade properties: "Bar", "Chips", "Tip", "Panel", "Count", "Feed"
+constexpr uint32_t kHudPartsKnown = 0x3Fu;           // every part bit, the feed's included (FH2_HUD_PART_ALL leaves it out)
+constexpr int kHudFeedLines = 5;                     // FH2_HUD_MAX_FEED
+// Where the feed's bottom line sits: its foot this far above the bottom of the 1920 x 1080 page, its left at
+// the HUD's 108 px margin, over the game's minimap.
+constexpr int kHudFeedBottom = 360;
 std::string hud_parts_text(uint32_t parts);          // "BAR, CHIPS", or "none"
 
 // What a property is for, which says when the runtime publishes and tells it.
@@ -39,7 +44,8 @@ struct HudProp {
     HudRole role = HudRole::content;
 };
 
-// The table for the declared parts (FH2_HUD_PART_ bits), in template order: 316 properties with every part.
+// The table for the declared parts (FH2_HUD_PART_ bits), in template order: 316 properties with the five
+// parts before the feed, 338 with the feed.
 std::vector<HudProp> hud_build_props(uint32_t parts);
 // fh2-mods\platform-hudlayer-props.txt: "name<TAB>type<TAB>default<TAB>values", one a line, \r\n.
 std::string hud_props_text(const std::vector<HudProp>& props);

@@ -23,7 +23,7 @@ Checks:
      bound where its type goes (Angle, EndAngle, X, ScaleX: float; Text: String; Visibility through the
      boolean converter and True/False triggers: bool; numeric triggers: int, on one of its values); every
      int value has its trigger; every property is bound;
-  9. no literal Text= in the layer but the platform's "+", "<" and ">";
+  9. no literal Text= in the layer but the platform's "+", "<", ">" and ":";
  10. FH2HL_Root is the last child of the Grid inside LayoutRoot; the layer's resources are in
      Page.Resources' dictionary;
  11. FH2HL_Root's Style is exactly Visibility Collapsed plus one trigger, FH2Mod_Hud_Shown True -> Visible,
@@ -60,7 +60,7 @@ MARKS = [("<!-- FH2 Mod Platform: HUD layer resources -->",
 FLOAT_ATTRS = {"ScaleX", "ScaleY", "X", "Y", "EndAngle", "Angle"}
 KINDS = {"bool": "b", "int": "i", "float": "f", "String": "s"}
 WORD = {"b": "bool", "i": "int", "f": "float", "s": "String", "?": "?"}
-PART_PROP = {"BAR": "Bar", "CHIPS": "Chips", "TIP": "Tip", "PANEL": "Panel", "COUNTDOWN": "Count"}
+PART_PROP = {"BAR": "Bar", "CHIPS": "Chips", "TIP": "Tip", "PANEL": "Panel", "COUNTDOWN": "Count", "FEED": "Feed"}
 q = lambda ns, tag: "{%s}%s" % (ns, tag)
 XKEY, XNAME = q(NS_X, "Key"), q(NS_X, "Name")
 PREFIX = {NS_P: "", NS_X: "x:", NS_L: "local:", NS_ED: "ed:"}
@@ -339,10 +339,10 @@ if outside:
 check("8. bindings: names, kinds, trigger values and coverage (%d properties in the table, %d bound, %d bindings, %d DataTriggers)"
       % (len(props), len(bound), n_bindings, n_triggers), props and not problems, "; ".join(problems[:6]))
 
-# ---- 9. no literal Text but the platform's +, < and >
+# ---- 9. no literal Text but the platform's +, <, > and :
 literal = ["%s Text=%r" % (short(e.tag), e.get("Text")) for e in layer_els
-           if e.get("Text") is not None and not e.get("Text").startswith("{Binding FH2Mod_Hud_") and e.get("Text") not in ("+", "<", ">")]
-check("9. no literal Text= in the layer's elements but the platform's +, < and >", not literal, "; ".join(literal[:5]))
+           if e.get("Text") is not None and not e.get("Text").startswith("{Binding FH2Mod_Hud_") and e.get("Text") not in ("+", "<", ">", ":")]
+check("9. no literal Text= in the layer's elements but the platform's +, <, > and :", not literal, "; ".join(literal[:5]))
 
 # ---- 10. placement
 check("10. FH2HL_Root is the last child of the Grid inside LayoutRoot; the %d resources are in Page.Resources' dictionary"

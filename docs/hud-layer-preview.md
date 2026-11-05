@@ -94,6 +94,16 @@ The tip and the panel sit on top of the bar, so they move with its height: up by
 
 `countdown` is the number in the ring, 1 to 999 (two digits fit inside it; three are wider than the ring), and 0 shows no number while the part stays shown: hide it with `show_hud_layer`. Each new number is meant to pop in, from a third bigger to its size; a number set together with the `show_hud_layer` that brings the countdown in pops as the ring fades in. In previews 1 and 2 no number popped in game; preview 3 scales the box round the number instead of the number's text, and that hasn't been seen in game yet. If it doesn't run, every number still shows at its full size, just without the pop. `countdown_label` is the line under the ring.
 
+### The feed (2.9.0)
+
+`FH2_HUD_PART_FEED` is a few lines of text at the left of the screen, over the game's minimap, newest at the bottom, like a chat log: each line a name in white with a colon after it, then the text in white, green, orange or yellow. It needs interface version 2.
+
+- **It's shared.** Every mod whose layer has the feed posts lines with `post_hud_feed`, and they go into one feed of five lines; the oldest makes room. The feed is on screen while it has lines, whichever layer owns the screen, and it's never shown with `show_hud_layer`: `FH2_HUD_PART_ALL` leaves it out.
+- **A layer with only the feed** never takes the screen, has no lease to keep, and doesn't get the Button prompts row: that goes to the first layer with a bar or a tip.
+- **Each line stays** for its `ms` (8 s if 0, 2 to 30 s) of time with the HUD page on screen, so a line posted while the pause menu or the map is open waits for the HUD.
+- **It stays out of the way.** It's hidden while a layer shows its bar or its panel (they cover the bottom left), while the game's own HUD is held hidden, and from a `show_hud_layer` with `FH2_HUD_PART_INSTANT` (a clean frame: it goes in that frame) until the next show without it. Its lines keep their time meanwhile.
+- **Place:** the left edge is the HUD's 108 px margin and the bottom line's foot 360 px above the bottom of the 1920 x 1080 page, lines 36 px tall, the text trimmed at 720 px.
+
 ### Limits and text
 
 Every text is UTF-8, converted once when you set it. Each is cut to its limit (counted in UTF-16 units, as Windows counts them, and never between the two halves of a surrogate pair), and the game also trims it with an ellipsis where its place is too narrow:
@@ -115,6 +125,8 @@ Every text is UTF-8, converted once when you set it. Each is cut to its limit (c
 | a row's `value` | 32 | | 200 px |
 | `panel_footer` | 96 | | 488 px |
 | `countdown_label` | 48 | | 600 px |
+| a feed line's `name` | 24 | | 300 px |
+| a feed line's `text` | 64 | | 720 px |
 
 - **Line breaks, tabs and other control characters** (U+0000 to 001F, 007F to 009F, 2028 and 2029) become spaces: a line break would make a line twice as tall and push it off the bar.
 - **Out of range:** counts over the limits use the first ones (`mark_count` 16, `prompt_count` 5, `row_count` 8); numbers over 999 show as 999; more than 5 chip dots show 5, and `dots_filled` past `dots` fills them all; and a value that isn't one of its field's (an unknown `strip` or `glyph`, say) counts as 0. Each kind of oddity is logged once for each kind of field, whatever the index (a long `tabs[1]` after a long `tabs[0]` is cut too, but not logged again), and so is a `reserved` member that isn't zero.

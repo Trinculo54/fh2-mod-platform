@@ -189,6 +189,7 @@ struct Rig {
     int page   = 0;
     uint64_t gen = 1;
     bool kbd     = false;
+    bool game_hidden = false;   // the platform's hold on the game's HUD is in force
     int crash_status = -1;   // this layer's on_status "crashes"
     std::vector<std::string> lines;
     std::vector<StatusCall> st;
@@ -243,6 +244,7 @@ struct Rig {
         in.page_gen  = gen;
         in.kbd       = kbd;
         in.available = true;
+        in.game_hidden = game_hidden;
         mark         = g.told.size();
         const HudEngine::FrameOut out = e->frame(in);
         carried[f] = e->take_stats().carried;
@@ -513,7 +515,7 @@ static const char* section_of(const std::string& n) {
     const auto digit_after = [&](char c) { return n.size() > 1 && n[0] == c && std::isdigit(static_cast<unsigned char>(n[1])); };
     if (n == "Shown") return "root";
     if (n == "Shutter") return "shutter";
-    for (const char* p : {"Bar", "BarVis", "Chips", "ChipsVis", "Tip", "TipVis", "Panel", "PanelVis", "Count", "CountVis"})
+    for (const char* p : {"Bar", "BarVis", "Chips", "ChipsVis", "Tip", "TipVis", "Panel", "PanelVis", "Count", "CountVis", "Feed", "FeedVis"})
         if (n == p) return "fades";
     if (digit_after('P') || n == "HoldWord" || n == "HoldAngle" || n == "HoldFill") return "prompts";
     if (n.rfind("Mark", 0) == 0 || n == "StripRow" || n == "Rail" || n == "RailLeft" || n == "RailRight" || n == "RowAfter" ||
@@ -525,6 +527,7 @@ static const char* section_of(const std::string& n) {
     if (n.rfind("Tip", 0) == 0) return "tip";
     if (digit_after('R') || n == "PanelFooter") return "panel";
     if (n.rfind("Count", 0) == 0) return "countdown";
+    if (digit_after('F')) return "feed";
     return "?";
 }
 
@@ -607,13 +610,14 @@ static void t1_template(const fs::path& out) {
     struct PartCount {
         int bindings, props;
     };
-    const PartCount per[kHudParts] = {{405, 205}, {60, 37}, {37, 15}, {65, 51}, {4, 6}};
+    // the feed (2.9.0): five lines, each Shown, HasName, Name, Text and Style's three colours
+    const PartCount per[kHudParts] = {{405, 205}, {60, 37}, {37, 15}, {65, 51}, {4, 6}, {35, 27}};
     const std::map<std::string, int> sections = {{"prompts", 215}, {"strip", 103}, {"tabs", 55}, {"middle", 32}, {"chips", 60},
-                                                 {"tip", 37},      {"panel", 65},   {"countdown", 4}};
-    const char* const section_part[] = {"prompts", "strip", "tabs", "middle", "chips", "tip", "panel", "countdown"};
-    const int section_bits[]          = {1, 1, 1, 1, 2, 4, 8, 16};
+                                                 {"tip", 37},      {"panel", 65},   {"countdown", 4}, {"feed", 35}};
+    const char* const section_part[] = {"prompts", "strip", "tabs", "middle", "chips", "tip", "panel", "countdown", "feed"};
+    const int section_bits[]          = {1, 1, 1, 1, 2, 4, 8, 16, 32};
     std::string pages;
-    for (const uint32_t parts : {0x1Fu, 0x01u, 0x02u, 0x04u, 0x08u, 0x10u, 0x11u, 0x0Du}) {
+    for (const uint32_t parts : {0x1Fu, 0x01u, 0x02u, 0x04u, 0x08u, 0x10u, 0x11u, 0x0Du, 0x20u, 0x3Fu}) {
         char nm[64];
         std::snprintf(nm, sizeof nm, "%02X (%s)", parts, hud_parts_text(parts).c_str());
         const std::string name = nm;
@@ -635,7 +639,7 @@ static void t1_template(const fs::path& out) {
               c.bindings, total, want_b);
         check(c.bindings <= kHudMaxBindings, "T1 %s: %zu bindings, at most 640", name.c_str(), c.bindings);
         // the tally, section by section, so a difference can be traced
-        for (int s = 0; s < 8; ++s) {
+        for (int s = 0; s < 9; ++s) {
             const int want = (parts & static_cast<uint32_t>(section_bits[s])) ? sections.at(section_part[s]) : 0;
             check(t[section_part[s]] == want, "T1 %s: %s %d bindings (want %d)", name.c_str(), section_part[s], t[section_part[s]], want);
         }
@@ -662,6 +666,13 @@ static void t1_template(const fs::path& out) {
             check(c.triggers == 290, "T1 ALL: %zu DataTriggers on the properties (want 290)", c.triggers);
             check(c.used == 40, "T1 ALL: %zu resource keys used (want 40)", c.used);
             if (u.media) check(c.dicts == 43 && c.known == 1096, "T1 ALL: UI.zip's %d dictionaries and %zu keys (want 43 and 1096)", c.dicts, c.known);
+        }
+        if (parts == 0x3F) {   // every part with the feed: the feed adds 12 bools, 5 ints and 10 Strings, and 17 triggers
+            check(types[0] == 134 && types[1] == 69 && types[2] == 47 && types[3] == 93,
+                  "T1 ALL+FEED: %d bool, %d int, %d float, %d String (want 134, 69, 47, 93)", types[0], types[1], types[2], types[3]);
+            check(c.triggers == 307, "T1 ALL+FEED: %zu DataTriggers on the properties (want 307)", c.triggers);
+            check(has(layer, "Margin=\"108,0,0," + std::to_string(kHudFeedBottom) + "\"") && count_of(layer, "Text=\":\"") == 5,
+                  "T1 ALL+FEED: the feed sits at the left over the minimap, each line with its colon");
         }
         const std::string table = hud_props_text(props);
         check(count_of(table, "\r\n") == props.size() && table.rfind("FH2Mod_Hud_Shown\tbool\tfalse\t\r\n", 0) == 0,
@@ -758,7 +769,7 @@ static void t1_template(const fs::path& out) {
             {"a listed value without a trigger", res, replace_first(layer, l1s2, "Binding=\"{Binding FH2Mod_Hud_L1Style}\" Value=\"1\""), all, 640,
              "no trigger shows FH2Mod_Hud_L1Style = 2, one of its values"},
             {"Text=\"HELLO\"", res, replace_first(layer, "Text=\"+\"", "Text=\"HELLO\""), all, 640,
-             "Text=\"HELLO\" is a literal text, and only the platform's +, < and > may be"},
+             "Text=\"HELLO\" is a literal text, and only the platform's +, <, > and : may be"},
             {"two top elements", res, replace_first(layer, end, "<Grid x:Name=\"FH2HL_Root\" Style=\"{StaticResource FH2HL_Root}\" />\r\n" + end), all, 640,
              "the layer block holds 2 top elements, not one (FH2HL_Root)"},
             {"a second top element of another kind", res, replace_first(layer, end, "<Grid />\r\n" + end), all, 640,
@@ -2112,6 +2123,113 @@ static void t9_pulses() {
 
 // ---- T10: sounds ----------------------------------------------------------------------------------------
 
+
+// ---- T11 the feed (2.9.0) ---------------------------------------------------------------------------
+
+static int post(Rig& r, int layer, const char* name, const char* text, uint32_t style = FH2_HUD_FEED_GREEN, uint32_t ms = 0) {
+    FH2HudFeedLine l{};
+    l.size  = sizeof l;
+    l.name  = name;
+    l.text  = text;
+    l.style = style;
+    l.ms    = ms;
+    return r.e->post_feed(layer, &l);
+}
+
+static void t11_feed() {
+    std::printf("\n== T11 the feed\n");
+    {
+        Rig r;
+        const int a = r.add("QuickChat", FH2_HUD_PART_FEED);
+        check(a == 0 && r.e->layer_parts(a) == FH2_HUD_PART_FEED, "T11 a layer with only the feed is added");
+        r.build();
+        r.steps(3);
+        check(r.val("FeedVis") == 0 && r.val("Shown") == 0, "T11 no lines: nothing shown");
+        check(post(r, a, "Trinculo54", "Nice race!") == 1, "T11 post_hud_feed takes a line");
+        r.steps(3);
+        check(r.val("FeedVis") == 1 && r.val("Feed") == 1 && r.val("Shown") == 1, "T11 the feed comes in with its first line");
+        check(r.text("F0Name") == L"Trinculo54" && r.text("F0Text") == L"Nice race!" && r.val("F0Style") == 1 && r.val("F0HasName") == 1 &&
+                  r.val("F0Shown") == 1 && r.val("F1Shown") == 0,
+              "T11 the line is the bottom slot: name, text and green");
+        check((r.bits(a) & FH2_HUD_SHOWN) == 0, "T11 the feed doesn't make its layer the screen's owner");
+        post(r, a, "", "Joined the session", FH2_HUD_FEED_PLAIN);
+        r.steps(3);
+        check(r.text("F0Text") == L"Joined the session" && r.val("F0HasName") == 0 && r.val("F0Style") == 0 && r.text("F1Text") == L"Nice race!",
+              "T11 a newer line takes the bottom; one with no name has no name");
+        for (int i = 0; i < 6; ++i) {
+            const std::string t = "Line " + std::to_string(i);
+            post(r, a, "P", t.c_str());
+        }
+        r.steps(10);   // each text changes at most every 100 ms: the bottom slot changed 60 ms ago
+        check(r.text("F0Text") == L"Line 5" && r.text("F4Text") == L"Line 1" && r.val("F4Shown") == 1, "T11 five lines at most: the oldest make room");
+        // 10 s with no other call: no lease for a feed
+        r.steps(500);
+        check(r.lines_with("no call for") == 0, "T11 a feed-only layer has no lease");
+    }
+    {
+        Rig r;
+        const int a = r.add("QuickChat", FH2_HUD_PART_FEED);
+        r.build();
+        r.step();
+        post(r, a, "A", "Short", FH2_HUD_FEED_GREEN, 2000);
+        r.steps(3);
+        check(r.val("FeedVis") == 1, "T11 a 2 s line shows");
+        // the page off screen (a menu) for 5 s: the line waits
+        r.steps(250, false);
+        r.steps(3);
+        check(r.val("FeedVis") == 1 && r.text("F0Text") == L"Short", "T11 time with the HUD page off screen doesn't count");
+        r.steps(100);   // 2 s live
+        r.steps(20);
+        check(r.val("Feed") == 0 && r.val("FeedVis") == 0 && r.val("Shown") == 0, "T11 its time up, the feed fades out and the root goes");
+        check(post(r, a, "A", "", FH2_HUD_FEED_GREEN) == 0 && r.lines_with("the line has no text") == 1, "T11 a line with no text is refused");
+        check(post(r, a, "A", "x", 9) == 1 && r.lines_with("isn't one of its values") == 1, "T11 an unknown style is plain, logged once");
+        r.steps(3);
+        check(r.val("F0Style") == 0, "T11 ... and shown plain");
+        FH2HudFeedLine small{};
+        small.size = 4;
+        small.text = "x";
+        check(r.e->post_feed(a, &small) == 0, "T11 a too-small FH2HudFeedLine is refused");
+    }
+    {
+        Rig r;
+        const int bar  = r.add("Director", FH2_HUD_PART_BAR | FH2_HUD_PART_TIP, 60000);
+        const int chat = r.add("QuickChat", FH2_HUD_PART_FEED);
+        check(post(r, bar, "x", "y") == 0 && r.lines_with("has no FH2_HUD_PART_FEED") == 1, "T11 a layer without the feed can't post");
+        r.build();
+        r.step();
+        post(r, chat, "A", "Hello!", FH2_HUD_FEED_GREEN, 30000);
+        r.steps(5);
+        check(r.val("FeedVis") == 1, "T11 the feed shows with no layer on screen");
+        FH2HudState s = full_frame();
+        r.e->set_state(bar, &s);
+        r.e->show(bar, FH2_HUD_PART_TIP);
+        r.steps(20);
+        check(r.val("FeedVis") == 1 && r.val("TipVis") == 1, "T11 a tip alone leaves the feed");
+        r.e->show(bar, FH2_HUD_PART_BAR);
+        r.steps(20);
+        check(r.val("FeedVis") == 0 && r.val("BarVis") == 1, "T11 a bar shown: the feed gives way");
+        r.e->show(bar, 0);
+        r.steps(20);
+        check(r.val("FeedVis") == 1, "T11 the bar gone: the feed is back");
+        r.game_hidden = true;
+        r.steps(20);
+        check(r.val("FeedVis") == 0, "T11 the game's HUD held hidden: the feed goes with it");
+        r.game_hidden = false;
+        r.steps(20);
+        check(r.val("FeedVis") == 1, "T11 the hold let go: the feed is back");
+        // a clean frame: the feed collapses with the owner's parts, in the same frame
+        r.e->show(bar, FH2_HUD_PART_INSTANT);
+        r.step();
+        check(told_in(r.last(), "FeedVis", 0) && told_in(r.last(), "Shown", 0), "T11 show(INSTANT): the feed collapses in the same frame");
+        r.steps(10);
+        check(r.val("FeedVis") == 0, "T11 ... and stays out after the clean frame");
+        r.e->show(bar, FH2_HUD_PART_TIP);
+        r.steps(5);
+        r.e->show(bar, 0);
+        r.steps(20);
+        check(r.val("FeedVis") == 1, "T11 the next show without INSTANT lets it back");
+    }
+}
 static void t10_sounds() {
     std::printf("\n== T10 sounds\n");
     Rig r;
@@ -2177,6 +2295,7 @@ int wmain(int argc, wchar_t** argv) {
     t8_device();
     t9_pulses();
     t10_sounds();
+    t11_feed();
     std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
     std::fflush(stdout);
     return fails;

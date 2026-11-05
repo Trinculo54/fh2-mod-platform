@@ -101,7 +101,7 @@ extern "C" {
 #endif
 
 #define FH2_HUD_INTERFACE         "FH2Platform.HudLayer"
-#define FH2_HUD_INTERFACE_VERSION 1
+#define FH2_HUD_INTERFACE_VERSION 2   /* 2: post_hud_feed and FH2_HUD_PART_FEED (2.9.0) */
 
 /* Limits. Text longer than its limit (given with each field below, in
    UTF-16 characters) is cut by the platform; the HUD also trims text that
@@ -114,6 +114,7 @@ extern "C" {
 #define FH2_HUD_MAX_CHIPS     4    /* at the top left; FH2HudState.corner is the fifth, at the top right */
 #define FH2_HUD_MAX_CHIP_DOTS 5
 #define FH2_HUD_MAX_ROWS      8
+#define FH2_HUD_MAX_FEED      5    /* feed lines on screen at once, from every mod together */
 
 /* Parts (FH2HudLayer.parts, show_hud_layer). Only the parts a layer has are
    written into the HUD page. */
@@ -122,8 +123,26 @@ extern "C" {
 #define FH2_HUD_PART_TIP       0x04u        /* the tip card, just above the bar */
 #define FH2_HUD_PART_PANEL     0x08u        /* the rows, over the left of the bar */
 #define FH2_HUD_PART_COUNTDOWN 0x10u        /* the number in a ring, in the middle */
-#define FH2_HUD_PART_ALL       0x1Fu
+#define FH2_HUD_PART_ALL       0x1Fu        /* the parts show_hud_layer shows: every one but the feed */
+/* The feed (interface version 2): a few lines of text at the left, above the
+   game's minimap, newest at the bottom, like a chat log. Unlike the other
+   parts it's shared and never shown with show_hud_layer: every mod whose
+   layer has it posts lines (post_hud_feed), and the feed is on screen while
+   it has lines, whichever layer owns the screen. A layer can have only the
+   feed: then it never takes the screen, has no lease, and gets no Button
+   prompts row. The feed stays out of the way: it's hidden while a layer shows
+   its bar or its panel, while the game's own HUD is held hidden, and from a
+   show_hud_layer with FH2_HUD_PART_INSTANT (a clean frame) until the next
+   show without it. */
+#define FH2_HUD_PART_FEED      0x20u
 #define FH2_HUD_PART_INSTANT   0x80000000u  /* show_hud_layer: parts going out go at once instead of fading */
+
+/* FH2HudFeedLine.style: the colour of the line's text (its name is always
+   white). */
+#define FH2_HUD_FEED_PLAIN  0               /* white */
+#define FH2_HUD_FEED_GREEN  1               /* the HUD's green, as for a message from a player */
+#define FH2_HUD_FEED_ORANGE 2               /* the menus' orange */
+#define FH2_HUD_FEED_YELLOW 3               /* the HUD's yellow, for a warning */
 
 /* set_hud_value. */
 #define FH2_HUD_PLAYHEAD 1                  /* 0 to 1 along the timeline */
@@ -307,6 +326,15 @@ typedef struct FH2HudState {
     const char* countdown_label;               /* under the ring, 48: "TEST RUN" */
 } FH2HudState;
 
+/* A feed line (post_hud_feed, version 2). */
+typedef struct FH2HudFeedLine {
+    uint32_t size;               /* sizeof(FH2HudFeedLine) */
+    const char* name;            /* who: "Trinculo54"; NULL or "" for none */
+    const char* text;            /* what: "Nice race!" */
+    uint32_t style;              /* FH2_HUD_FEED_ */
+    uint32_t ms;                 /* how long it stays: 0 for 8000 */
+} FH2HudFeedLine;
+
 /* The interface: get_interface(FH2_HUD_INTERFACE, FH2_HUD_INTERFACE_VERSION). */
 typedef struct FH2HudInterface {
     uint32_t size;               /* sizeof(FH2HudInterface) as the platform knows it */
@@ -398,6 +426,17 @@ typedef struct FH2HudInterface {
        session, an unknown sound, a repeat, or one that can't play where the
        player is (each logged once, apart from a repeat). */
     int (*play_ui_sound)(FH2Mod* mod, uint32_t sound);
+
+    /* ---- version 2 (2.9.0): check version >= 2 (or size) before using these. ---- */
+
+    /* Adds a line to the feed, at the bottom; the oldest of FH2_HUD_MAX_FEED
+       lines makes room. `name` (24, may be NULL) shows in white with a colon
+       after it, `text` (64) in `style`'s colour, on one line trimmed at 720
+       pixels. A line stays for `ms` (0: 8000; 2000 to 30000) of time with the
+       HUD page on screen, so a line posted in a menu waits for the HUD. Needs a
+       layer with FH2_HUD_PART_FEED. Any thread. Returns 1, or 0 if you have no
+       feed, the text is empty, or the layer is off this session (logged once). */
+    int (*post_hud_feed)(FH2Mod* mod, const FH2HudFeedLine* line);
 } FH2HudInterface;
 
 #ifdef __cplusplus

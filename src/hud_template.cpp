@@ -19,8 +19,8 @@
 
 namespace fh2platform {
 
-const char* const kHudPartNames[kHudParts] = {"BAR", "CHIPS", "TIP", "PANEL", "COUNTDOWN"};
-const char* const kHudPartProps[kHudParts] = {"Bar", "Chips", "Tip", "Panel", "Count"};
+const char* const kHudPartNames[kHudParts] = {"BAR", "CHIPS", "TIP", "PANEL", "COUNTDOWN", "FEED"};
+const char* const kHudPartProps[kHudParts] = {"Bar", "Chips", "Tip", "Panel", "Count", "Feed"};
 
 std::string hud_parts_text(uint32_t parts) {
     std::string s;
@@ -33,7 +33,7 @@ const char* hud_type_word(char t) { return t == 'b' ? "bool" : t == 'i' ? "int" 
 
 namespace {
 
-constexpr int kBar = 0, kChips = 1, kTip = 2, kPanel = 3, kCount = 4;
+constexpr int kBar = 0, kChips = 1, kTip = 2, kPanel = 3, kCount = 4, kFeed = 5;
 bool has(uint32_t parts, int k) { return (parts & (1u << k)) != 0; }
 bool ring_parts(uint32_t parts) { return has(parts, kBar) || has(parts, kCount); }
 
@@ -202,6 +202,19 @@ std::vector<HudProp> hud_build_props(uint32_t parts) {
         t.add("CountPop", 'b', HudRole::count_pop);
         t.add("CountLabel", 's');
         t.add("CountLabelShown", 'b');
+    }
+    if (has(parts, kFeed)) {
+        t.part = kFeed;
+        t.add("Feed", 'b', HudRole::part_fade);
+        t.add("FeedVis", 'b', HudRole::part_vis);
+        for (int i = 0; i < kHudFeedLines; ++i) {   // F0 is the bottom line, the newest
+            const std::string f = "F" + num(i);
+            t.add(f + "Shown", 'b');
+            t.add(f + "HasName", 'b');
+            t.add(f + "Name", 's');
+            t.add(f + "Text", 's');
+            t.add(f + "Style", 'i', HudRole::content, {1, 2, 3});
+        }
     }
     return t.props;
 }
@@ -681,6 +694,29 @@ void layer_bar(Xml& x) {
     x.close("Grid");
 }
 
+// The feed: up to five lines at the left, over the game's minimap, the newest at the bottom (F0). Each is the
+// name in white with a colon, then the text in its colour, as a chat log. No backing: the HUD's own text style
+// carries its shadow, as the game's HUD texts over the world do.
+void layer_feed(Xml& x) {
+    x.open("<Grid Style=\"{StaticResource FH2HL_Fade_Feed}\"" + V("FeedVis") + " HorizontalAlignment=\"Left\" VerticalAlignment=\"Bottom\" Margin=\"108,0,0," +
+           num(kHudFeedBottom) + "\" Width=\"760\">");
+    x.open("<StackPanel VerticalAlignment=\"Bottom\">");
+    for (int i = kHudFeedLines - 1; i >= 0; --i) {   // top to bottom: F4 (oldest) ... F0 (newest)
+        const std::string f = "F" + num(i);
+        x.open("<StackPanel Orientation=\"Horizontal\" Height=\"36\"" + V(f + "Shown") + ">");
+        x.open("<StackPanel Orientation=\"Horizontal\" VerticalAlignment=\"Center\"" + V(f + "HasName") + ">");
+        x.line(std::string("<local:FZTextBlock") + kMedium + T(f + "Name") + " Color=\"#FFF5F5F5\" VerticalAlignment=\"Center\"" + TRIM(300) + " />");
+        x.line(std::string("<local:FZTextBlock") + kMedium + " Text=\":\" Color=\"#FFF5F5F5\" Margin=\"0,0,10,0\" VerticalAlignment=\"Center\" />");
+        x.close("StackPanel");
+        x.open("<local:FZTextBlock" + T(f + "Text") + " VerticalAlignment=\"Center\"" + TRIM(720) + ">");
+        text_style(x, "A_Style_FZTextBlock_HudMedium", f + "Style", "#FFF5F5F5", {{"1", "#FF52D273"}, {"2", "#FFFE5723"}, {"3", "#FFFFD400"}});
+        x.close("local:FZTextBlock");
+        x.close("StackPanel");
+    }
+    x.close("StackPanel");
+    x.close("Grid");
+}
+
 void layer_count(Xml& x) {
     x.open("<Grid Style=\"{StaticResource FH2HL_Fade_Count}\"" + V("CountVis") + ">");
     x.open("<ed:Arc Width=\"220\" Height=\"220\" ArcThickness=\"4\" ArcThicknessUnit=\"Pixel\" StartAngle=\"0\" EndAngle=\"360\" "
@@ -799,6 +835,7 @@ std::string hud_layer_markup(uint32_t parts) {
         x.close("Grid");
     }
     if (has(parts, kCount)) layer_count(x);
+    if (has(parts, kFeed)) layer_feed(x);
     x.line(std::string("<local:FZMaterial") + kRt + " Color=\"#FFFFFFFF\" Style=\"{StaticResource FH2HL_Shutter}\" />");
     x.close("Grid");
     x.line("<!-- FH2 Mod Platform: end of the HUD layer -->");
@@ -1191,8 +1228,8 @@ bool hud_check_markup(const std::string& res, const std::string& layer, uint32_t
             std::string bad;
             each_attr(t.text, [&](std::string_view an, std::string_view av) {
                 if (!bad.empty()) return;
-                if (an == "Text" && av.rfind("{Binding ", 0) != 0 && av != "+" && av != "&lt;" && av != "&gt;") {
-                    bad = "Text=\"" + std::string(av) + "\" is a literal text, and only the platform's +, < and > may be";
+                if (an == "Text" && av.rfind("{Binding ", 0) != 0 && av != "+" && av != "&lt;" && av != "&gt;" && av != ":") {
+                    bad = "Text=\"" + std::string(av) + "\" is a literal text, and only the platform's +, <, > and : may be";
                     return;
                 }
                 if (av.find("FH2Mod_Hud_") == std::string_view::npos) return;
