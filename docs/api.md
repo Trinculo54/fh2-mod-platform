@@ -5,7 +5,7 @@ Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes throu
 ## Rules that apply everywhere
 
 - **Threads:** every function is thread-safe and can be called from any thread.
-- **Strings:** strings passed in are copied, so you can free yours straight after. Names, versions, log lines and notices are UTF-8 (`const char*`). Game text is UTF-16 (`const wchar_t*`), because that's what the game uses.
+- **Strings:** strings passed in are copied, so you can free yours straight after. Names, versions, log lines and notices are UTF-8 (`const char*`). Game text is UTF-16 (`const wchar_t*`), because that's what the game uses. Text the platform puts into its pages (Mods page rows and choices, your pages' titles and rows, the MODS tab) is UTF-8 too. From 2.9.0, letters beyond ASCII reach the game as they are, as long as its font has them: before, the game read those pages as Windows-1252, so a `·` showed as `Â·`. Bytes that aren't valid UTF-8 are still read as Windows-1252, so text written that way looks the same as before.
 - **Memory:** nothing the platform returns needs freeing, and the `FH2ModApi` pointer stays valid until the process ends.
 - **Compatibility:** members are only ever added at the end of `FH2ModApi`. If you use one added after version 1, check `api->api_version` (or `api->size`) first, so your mod still runs on an older platform.
 

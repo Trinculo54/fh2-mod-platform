@@ -482,7 +482,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(installed, "Content=\"TEST STATS\"") && has(installed, "{Binding FH2Mod_ViewIn_") && has(installed, "{Binding FH2Mod_Bar_3"));
             CHECK(has(installed, "The pause menu's Achievements tile opens it too."));
             CHECK(has(installed, "FH2Mod_InfoRow_Heading") && has(installed, "FH2Mod_InfoRow_Dim"));
-            CHECK(has(installed, "Heading=\"Footer &lt;line&gt;\"") && has(installed, "local:BindingProxy.B=\"Alert\""));
+            CHECK(has(installed, "Heading=\"Footer &lt;line&gt; &#183; dot\"") && has(installed, "local:BindingProxy.B=\"Alert\""));
             // the tile: the page of TestMod's own design, in the options page's frame
             CHECK(has(tile, "<Grid x:Name=\"TestContent\">") && !has(tile, "BasicOptions") && has(tile, "x:Key=\"FH2Mod_ShowIf\""));
             CHECK(has(tile, "<Color x:Key=\"Test_Color\">") && has(tile, "<Grid>\r\n<ContentControl x:Name=\"DefaultHelpPanel\" Style="));

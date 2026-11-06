@@ -43,7 +43,7 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     FH2PageRow rows[4] = {};
     for (FH2PageRow& r : rows) r.size = sizeof r;
     rows[0].label = "Heading row"; rows[0].value = "2 / 3"; rows[0].style = FH2_ROW_HEADING;
-    rows[1].label = "Dim row"; rows[1].value = "Locked"; rows[1].style = FH2_ROW_DIM; rows[1].footer = "Footer <line>";
+    rows[1].label = "Dim row"; rows[1].value = "Locked"; rows[1].style = FH2_ROW_DIM; rows[1].footer = "Footer <line> \xC2\xB7" " dot";   // UTF-8, written as &#183; (the game reads pages as 1252)
     rows[2].label = "Picked row"; rows[2].key = "pick"; rows[2].description = "Press A";
     rows[3].label = "Red row"; rows[3].value = "Alert"; rows[3].value_alert = 1;
     api->set_page_rows(g_mod, "Stats", rows, 4);

@@ -38,6 +38,7 @@
 #include "platform.hpp"
 #include "strings.hpp"
 #include "updates.hpp"
+#include "xml_text.hpp"
 
 #include <windows.h>
 
@@ -845,18 +846,7 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
 
 // ---- the pages ----------------------------------------------------------------------------
 
-std::string xml_escape(const std::string& s) {
-    std::string o;
-    for (char c : s) switch (c) {
-            case '&': o += "&amp;"; break;
-            case '<': o += "&lt;"; break;
-            case '>': o += "&gt;"; break;
-            case '"': o += "&quot;"; break;
-            case '\n': o += ' '; break;   // FZTextBlock doesn't break lines (not even at &#10;)
-            default: o += c;
-        }
-    return o;
-}
+// xml_escape (mods' text in the pages, non-ASCII as &#NNN;) is in xml_text.cpp.
 
 std::string read_ui(const char* name) {
     const auto zip = game_mount() / L"media" / L"UI.zip";
