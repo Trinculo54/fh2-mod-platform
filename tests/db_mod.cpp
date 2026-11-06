@@ -3,6 +3,8 @@
 //   NitroTest.dll   every car can backfire
 //   CountTest.dll   adds 1 to AI driver 1's XP, so changes made twice show
 //   BadSqlTest.dll  SQL that fails
+//   CarIdTest.dll   adds car 3000 itself (a copy of car 441), in the range car packs' cars are given
+//   CarIdLate.dll   adds engine 3003 itself (car pack cars' engines have their car's Id)
 #include "fh2mod.h"
 #include <windows.h>
 
@@ -21,7 +23,15 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     g_name = g_name.substr(0, g_name.rfind('.'));
     const char* sql = g_name == "NitroTest"   ? "UPDATE BackfireLevels SET BackfireLevel = 3;"
                       : g_name == "CountTest" ? "UPDATE AIPlayers SET XP = XP + 1 WHERE Id = 1;"
-                                              : "UPDATE NoSuchTable SET X = 1;";
+                      : g_name == "CarIdTest"
+                          ? "CREATE TEMP TABLE hc AS SELECT * FROM Data_Car WHERE Id = 441;"
+                            "UPDATE hc SET Id = 3000, MediaName = 'HAND_Test01';"
+                            "INSERT INTO Data_Car SELECT * FROM hc; DROP TABLE hc;"
+                      : g_name == "CarIdLate"
+                          ? "CREATE TEMP TABLE he AS SELECT * FROM Data_Engine ORDER BY EngineID LIMIT 1;"
+                            "UPDATE he SET EngineID = 3003;"
+                            "INSERT INTO Data_Engine SELECT * FROM he; DROP TABLE he;"
+                          : "UPDATE NoSuchTable SET X = 1;";
     FH2ModInfo info{sizeof info, g_name.c_str(), "1.0.0", nullptr, FH2MOD_PLATFORM_VERSION, 0};
     FH2Mod* m = api->register_mod(&info);
     api->add_sql(m, sql);

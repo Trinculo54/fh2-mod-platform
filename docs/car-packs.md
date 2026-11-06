@@ -40,15 +40,22 @@ author = Trinculo54
 
 [car FOR_MustangCL_15]
 name = Mustang GT Clone
+id = 3000
 ```
 
-The platform reads `[pack]`'s `name` and `version`, the `[car ...]` section names, and each car's `name` (the MODS tab lists it). Anything else in a car's section is for the tool that made the pack. A pack without `pack.ini` adds no car, but its SQL and files are still used, so it can change stock cars too.
+The platform reads `[pack]`'s `name` and `version`, the `[car ...]` section names, and each car's `name` (the MODS tab lists it) and `id`, the Id the car asks for ([Database rows](#database-rows)). Anything else in a car's section is for the tool that made the pack. A pack without `pack.ini` adds no car, but its SQL and files are still used, so it can change stock cars too.
 
 ### Database rows
 
 The pack's `.sql` files run on the platform's copy of the game database, in file-name order and before mods' statements, so mods that change every car change the pack's too. Each pack runs in a transaction of its own: if a statement fails, none of the pack's changes are made, and the log has the SQLite error.
 
-Write `{car:<media name>}` wherever one of the pack's cars' Id goes, and never a number. The platform gives each car an Id the first time it sees it, the lowest free one from 3000 up (the game's own cars go up to 2501, and FM5's to 2169), and keeps it for good, since a bought car's Id is in the save. The Ids are recorded in `fh2-mods\platform-car-ids.txt`.
+Write `{car:<media name>}` wherever one of the pack's cars' Id goes, and never a number. The platform gives each car an Id the first time it sees it, and keeps it for good, since a bought car's Id is in the save. The Ids are recorded in `fh2-mods\platform-car-ids.txt`, which is each Azimuth folder's own.
+
+A save shows the same cars on another install only if their cars have the same Ids there, so give each car an `id` in `pack.ini`, from 3000 to 8999 (the game's own cars go up to 2501, and FM5's to 2169), one no other pack's car has. A car new to an install gets the Id it asks for whenever that one is free there, so every install with the pack gives the car the same Id, whatever order its packs were added in. When it isn't free (another car has it, or a mod's or the database's rows take it), the car gets another, and the MODS tab and the log say why, and that saves from other installs don't show it. A car without an `id` gets the lowest free one from 3000 up that no other installed pack's new car asks for, so its Id can differ between installs. A car that already has an Id keeps it, even if `pack.ini` asks for another later; the log says so. An `id` that isn't a number from 3000 to 8999 is ignored, with a warning.
+
+A car takes more than its `Data_Car` row: its Id `N` keys its rows in `Data_Car`, `Data_Engine`, `Data_Drivetrain`, `Data_Car_Buckets`, `CameraOverrides` and `CarExceptions`, and `N * 1000` to `N * 1000 + 999` its rows in `Data_CarBody` and the `List_*` tables. A new car gets an Id all of whose rows are free: in the database being built on, in the rows the mods' SQL adds, and in those packs add by numbers of their own. The platform runs that SQL on a copy in memory first to see them. So a mod that adds car 3014 itself, or engine 3014 or rows 3014000 up, doesn't clash with the next pack car: that one gets 3015. (The game's own drivetrain 5000 and its rows are skipped the same way.)
+
+Car packs' cars get Ids from 3000 to 8999, never 9000 or above. A mod (or a pack without `pack.ini`) that has to add a car by an Id of its own should use one from 9000 up, and that car's rows from `Id * 1000`. One that adds rows by an Id from 3000 to 8999 works, but the MODS tab and the log warn about it: a pack car recorded with that Id before is left out (below). So is a pack whose SQL never says `{car:X}` for one of the cars its `pack.ini` lists, since that car doesn't get the Id the platform gives it (its carbin's part Ids are set for that one).
 
 A new car needs, as the game's own cars have:
 
@@ -60,7 +67,7 @@ Engines, drivetrains and bodies can be shared with a stock car. The game's notes
 
 Give `Data_Car.DisplayName` and `ModelShort` as text. The game's own are string-table references (`_&<id>`), and the top bar only shows names from the string tables, so the platform gives each name a new key in `Data_Car.str` (from `0xFF00`) and writes it into every language's table ([string-tables.md](string-tables.md#adding-keys)). `DisplayName` is what the Autoshow and the top bar show.
 
-A pack is left out, and the log says why, when the database already has one of its cars (by media name), when another pack adds the same car (the first pack by folder name keeps it), or when the Id recorded for one of its cars is another car's in the database now.
+A pack is left out, and the log says why, when the database already has one of its cars (by media name), when another pack adds the same car (the first pack by folder name keeps it), when one of the rows of the Id recorded for one of its cars is in the database now or is added by a mod's or another pack's SQL (its car keeps that Id: remove what has it and the pack is back), or when no Id below 9000 is free.
 
 ### The model
 

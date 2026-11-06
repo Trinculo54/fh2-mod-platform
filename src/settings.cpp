@@ -1861,6 +1861,9 @@ std::vector<PageItem> car_pack_items() {
             it.value.clear();
             it.note       = "It isn't working: " + why + " fh2-mods\\platform.log has more.";
             it.note_alert = true;
+        } else if (const std::string warn = car_pack_sql_warning(p.name); !warn.empty()) {   // it works, but could clash
+            it.note       = "Warning: " + warn + " fh2-mods\\platform.log has more.";
+            it.note_alert = true;
         }
         items.push_back(it);
     }
@@ -1885,6 +1888,9 @@ std::vector<PageItem> installed_items() {
             it.value.clear();
             it.note       = "It isn't working: " + why + " fh2-mods\\platform.log has more.";
             it.note_alert = true;
+        } else if (const std::string warn = e.enabled ? mod_sql_warning(e.name) : ""; !warn.empty()) {   // its SQL could clash
+            it.note       = "Warning: " + warn + " fh2-mods\\platform.log has more.";
+            it.note_alert = true;
         }
         items.push_back(it);
     }
@@ -1902,7 +1908,8 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
     PageItem sw{g_entry_row[i], "Load " + e.name + with_v(e.version), about_mod(e)};
     sw.note = mod_note(e);
     if (const std::string why = mod_problem(e); !why.empty()) sw.note = "It isn't working: " + why;
-    sw.note += (sw.note.empty() ? "" : " ") + std::string("Off leaves it in fh2-mods, but the game doesn't load it.");
+    else if (const std::string warn = e.enabled ? mod_sql_warning(e.name) : ""; !warn.empty()) sw.note = "Warning: " + warn;
+    sw.note +=(sw.note.empty() ? "" : " ") + std::string("Off leaves it in fh2-mods, but the game doesn't load it.");
     add_mod_lines(sw, e);
     items.push_back(sw);
     if (i < g_entry_online_row.size() && g_entry_online_row[i] >= 0) items.push_back({g_entry_online_row[i], "", ""});

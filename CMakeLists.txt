@@ -53,7 +53,7 @@ set_source_files_properties(${_sqlite_src} PROPERTIES
     COMPILE_DEFINITIONS "SQLITE_OMIT_LOAD_EXTENSION;SQLITE_DEFAULT_MEMSTATUS=0")
 
 add_library(fh2mod_platform SHARED src/platform.cpp src/strings.cpp src/updates.cpp src/files.cpp
-            src/database.cpp src/media_overrides.cpp src/car_packs.cpp src/titles.cpp src/session.cpp src/hotkeys.cpp src/commands.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/pad_layer.cpp src/xml_text.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
+            src/database.cpp src/car_ids.cpp src/media_overrides.cpp src/car_packs.cpp src/titles.cpp src/session.cpp src/hotkeys.cpp src/commands.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/pad_layer.cpp src/xml_text.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
 target_include_directories(fh2mod_platform PRIVATE third_party/minhook/include ${_minhook} third_party/sqlite)
 if(NOT MSVC)
     # InterlockedCompareExchange128, for rewriting call sites atomically.
@@ -145,6 +145,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         target_link_libraries(db_mod PRIVATE fh2mod_api)
         set_target_properties(db_mod PROPERTIES OUTPUT_NAME DbMod PREFIX "")
         target_link_options(db_mod PRIVATE -static)
+        # The Ids car packs' cars are given (src/car_ids.cpp), on their own: run car_ids_test.exe.
+        add_executable(car_ids_test tests/car_ids_test.cpp src/car_ids.cpp ${_sqlite_src})
+        target_include_directories(car_ids_test PRIVATE src third_party/sqlite)
+        target_link_options(car_ids_test PRIVATE -static)
         # The HUD layer preview: its template and state on their own (tests/run_hud_layer_test.sh), and the
         # mod the platform test's "hud" phase loads.
         add_executable(hud_layer_test tests/hud_layer_test.cpp src/hud_state.cpp src/hud_template.cpp src/strings.cpp)

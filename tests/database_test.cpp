@@ -743,6 +743,76 @@ static void car_pack() {
     }
 }
 
+// Car packs' cars' Ids, next to cars a mod and a pack add with Ids of their own (src/car_ids.cpp). Packs
+// are read in an Azimuth folder with its own layer (data\titles), where the database is built on the
+// game's temp drive.
+static void car_ids() {
+    Case c{"car-ids"};
+    fs::create_directories(c.dir / "data" / "titles" / "1A96545B");
+    const fs::path layer  = c.dir / "data" / "titles" / "1A96545B" / "tmp" / "fh2-platform" / "media" / "Stripped" / "gamedbRC.slt";
+    const fs::path record = c.dir / "fh2-mods" / "platform-car-ids.txt";
+    // A pack as make_car_pack.py makes them: its car's Id where its SQL says {car:...}.
+    const fs::path pack = c.dir / "fh2-cars" / "test-pack";
+    fs::create_directories(pack / "media");
+    std::ofstream{pack / "pack.ini"} << "[pack]\nname = Test pack\nversion = 1\n\n[car TEST_Pack01]\nname = Test car\n";
+    std::ofstream{pack / "TEST_Pack01.sql"} << "CREATE TEMP TABLE pc AS SELECT * FROM Data_Car WHERE Id = 441;\n"
+                                               "UPDATE pc SET Id = {car:TEST_Pack01}, MediaName = 'TEST_Pack01';\n"
+                                               "INSERT INTO Data_Car SELECT * FROM pc; DROP TABLE pc;\n"
+                                               "CREATE TEMP TABLE pe AS SELECT * FROM Data_Engine ORDER BY EngineID LIMIT 1;\n"
+                                               "UPDATE pe SET EngineID = {car:TEST_Pack01};\n"
+                                               "INSERT INTO Data_Engine SELECT * FROM pe; DROP TABLE pe;\n";
+    // One whose pack.ini asks for an Id: its car gets it.
+    const fs::path wish = c.dir / "fh2-cars" / "wish-pack";
+    fs::create_directories(wish / "media");
+    std::ofstream{wish / "pack.ini"} << "[pack]\nname = Wish pack\n\n[car WISH_Pack01]\nname = Wish car\nid = 3500\n";
+    std::ofstream{wish / "WISH_Pack01.sql"} << "CREATE TEMP TABLE wc AS SELECT * FROM Data_Car WHERE Id = 441;\n"
+                                               "UPDATE wc SET Id = {car:WISH_Pack01}, MediaName = 'WISH_Pack01';\n"
+                                               "INSERT INTO Data_Car SELECT * FROM wc; DROP TABLE wc;\n";
+    // One that lists its car but writes an Id itself.
+    const fs::path lit = c.dir / "fh2-cars" / "literal-pack";
+    fs::create_directories(lit / "media");
+    std::ofstream{lit / "pack.ini"} << "[pack]\nname = Literal pack\n\n[car LIT_Pack01]\nname = Literal car\n";
+    std::ofstream{lit / "LIT_Pack01.sql"} << "CREATE TEMP TABLE lc AS SELECT * FROM Data_Car WHERE Id = 441;\n"
+                                             "UPDATE lc SET Id = 3001, MediaName = 'LIT_Pack01';\n"
+                                             "INSERT INTO Data_Car SELECT * FROM lc; DROP TABLE lc;\n";
+    const auto car = [&](int id) { return q(layer, ("SELECT MediaName FROM Data_Car WHERE Id = " + std::to_string(id)).c_str()); };
+    const std::string ids = "LIT_Pack01\t3002\nTEST_Pack01\t3003\nWISH_Pack01\t3500\n";
+
+    // CarIdTest adds car 3000 itself and the literal pack 3001: the packs' new cars get 3002 and 3003, and
+    // wish-pack's the 3500 its pack.ini asks for.
+    c.mods({"CarIdTest"});
+    c.launch();
+    CHECK(listed(record) == ids);
+    CHECK(car(3000) == "HAND_Test01" && car(3001) == "LIT_Pack01" && car(3003) == "TEST_Pack01" && car(3500) == "WISH_Pack01");
+    CHECK(has(c.log, "[car pack wish-pack] database: WISH_Pack01 is car 3500 from now on"));
+    CHECK(q(layer, "SELECT count(*) FROM Data_Engine WHERE EngineID = 3003") == "1");
+    CHECK(has(c.log, "[car pack test-pack] database: TEST_Pack01 is car 3003 from now on"));
+    CHECK(has(c.log, "[CarIdTest] database: warning: its SQL adds rows by Ids that car packs' cars are given (Data_Car 3000); "
+                     "a car added by hand should have an Id from 9000 up"));
+    CHECK(has(c.log, "[car pack literal-pack] database: warning: its SQL never says {car:LIT_Pack01} where LIT_Pack01's Id goes"));
+    CHECK(has(c.log, "[car pack literal-pack] database: warning: its SQL adds rows by Ids that car packs' cars are given (Data_Car 3001)"));
+    CHECK(!has(c.log, "FAILED"));
+
+    // The same again: the database on the temp drive is reused, and nothing more is recorded.
+    const Stamp built = stamp(layer);
+    c.launch();
+    CHECK(has(c.log, "database: same changes as last launch, reusing this folder's database on the temp drive"));
+    CHECK(stamp(layer) == built && listed(record) == ids);
+
+    // A mod that adds engine 3003, test-pack's car's: the pack is left out, and its car keeps its Id.
+    c.mods({"CarIdLate"});
+    c.launch();
+    CHECK(has(c.log, "[car pack test-pack] database: left out, so none of its changes were made: TEST_Pack01's Id, 3003, is "
+                     "taken now: CarIdLate's SQL adds Data_Engine 3003"));
+    CHECK(car(3003) == "" && car(3001) == "LIT_Pack01" && q(layer, "SELECT count(*) FROM Data_Engine WHERE EngineID = 3003") == "1");
+    CHECK(listed(record) == ids);
+
+    // That mod gone: the pack is back with the same Id.
+    c.mods({});
+    c.launch();
+    CHECK(car(3003) == "TEST_Pack01" && car(3000) == "" && listed(record) == ids);
+}
+
 // A copy another install of the platform built (with the mark): built over
 // from the game's own, and kept aside.
 static void other_install() {
@@ -991,6 +1061,7 @@ int wmain(int argc, wchar_t** argv) {
     fh2mp_keep_newer();
     fh2mp_copying();
     car_pack();
+    car_ids();
     other_install();
     fh2ml();
     failures();

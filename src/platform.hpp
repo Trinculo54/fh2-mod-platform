@@ -94,6 +94,7 @@ struct CarPack {
     std::string title, version;               // pack.ini's [pack] name and version
     std::vector<std::string> cars;            // the cars it adds: pack.ini's [car <media name>] sections
     std::vector<std::string> car_names;       // and each one's name= there ("" for none), for the MODS tab
+    std::vector<std::string> wanted_ids;      // and its id= ("" for none): the Id it asks for (car_ids.cpp)
     // A car's engine sound of its own (pack.ini's [car] engine_sound, engine_sound_base, engine_synth): its engine's
     // MediaName (set by the pack's SQL) names a bank the platform links from the base car's, and an engine sound
     // mod (SynthWrapper) is told about it in fh2-mods\platform-engine-synths.txt.
@@ -134,6 +135,12 @@ void apply_database(const std::vector<FH2Mod*>& mods);
 // Data_Car.str keys the database's car names have that a pack or mod gave as text, with their text
 // (the string tables are written with them).
 std::map<uint16_t, std::wstring> database_strings();
+// What in a car pack's (by folder name) or a mod's (by name) SQL could clash with car packs' cars, from
+// the last build, or "": rows by an Id car packs' cars are given (3000 to 8999), a pack's car its
+// SQL never gives as {car:...}, or one that can't have the Id its pack.ini asks for (so saves from
+// other installs don't show it). Only looked for while a pack adds cars. For the MODS tab.
+std::string car_pack_sql_warning(const std::string& pack);
+std::string mod_sql_warning(const std::string& mod);
 
 // hooks.cpp: the hook API, and what crash reports say about hooks.
 // The folder of Extra Options' winmm.dll if that's the winmm.dll loaded, else empty. Extra

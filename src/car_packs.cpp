@@ -196,8 +196,9 @@ void write_manifest() {
 }
 
 // pack.ini, next to the media folder: [pack] name= and version=, and a [car <media name>] section
-// for each car the pack adds (what's in those is for the tool that builds the pack). Without it a
-// pack adds no car, and its SQL runs as it is.
+// for each car the pack adds, whose name= the MODS tab shows and whose id= is the Id it asks for
+// (car_ids.cpp); the rest is for the tool that builds the pack. Without it a pack adds no car, and
+// its SQL runs as it is.
 void read_pack_ini(CarPack& pack) {
     const std::wstring ini = (pack.root / L"pack.ini").wstring();
     std::error_code ec;
@@ -221,6 +222,8 @@ void read_pack_ini(CarPack& pack) {
             pack.cars.push_back(car);
             GetPrivateProfileStringW(s, L"name", L"", buf, 1024, ini.c_str());
             pack.car_names.push_back(narrow(buf));
+            GetPrivateProfileStringW(s, L"id", L"", buf, 1024, ini.c_str());
+            pack.wanted_ids.push_back(narrow(buf));
             CarPack::EngineSound es;
             es.car = car;
             GetPrivateProfileStringW(s, L"engine_sound", L"", buf, 1024, ini.c_str());
