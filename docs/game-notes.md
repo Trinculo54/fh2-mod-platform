@@ -28,11 +28,17 @@ All of them ship an exe called `forza_durango_release_final.exe`, with the same 
 
 ### The override folder
 
-The game finds every file through its file system's resolver, which a vtable slot at game+0x2E6EF28 points to (game+0x11F49B0). The file system is a list of volumes, each mounted at a path with a priority; the game's own zips and folders are volumes under `game:\media\`. The game also has a folder volume class (constructor game+0x11E05A0, vtable game+0x2EAB918, its RTTI locator just before it) that serves the files in one folder. Mounting two of those, for `game:\mediaoverride\` and `game:\mediapc\`, over `game:\media\` at priorities above everything else (0x7FFFFFFE and 0x7FFFFFFD) is what makes `mediaoverride` work: the file system's vtable +0x1E8 mounts a volume (no hash-manifest check when its last three arguments are 0) and +0x1F8 sorts the volumes again. The folder volume's "does this file exist" method (+0xE8) is handed archive selectors such as `<*>0` too, which aren't file names, so they have to be answered "no".
+The game finds every file through its file system's resolver, which a vtable slot at game+0x2E6EF28 points to (game+0x11F49B0). The file system is a list of volumes, each mounted at a path with a priority; the game's own zips and folders are volumes under `game:\media\`. The game also has a folder volume class (constructor game+0x11E05A0, vtable game+0x2EAB918, its RTTI locator just before it) that serves the files in one folder. Mounting two of those, for `game:\mediaoverride\` and `game:\mediapc\`, over `game:\media\` at priorities above everything else (0x7FFFFF00 and 0x7FFFFEFF; up to 2.8.0, 0x7FFFFFFE and 0x7FFFFFFD) is what makes `mediaoverride` work: the file system's vtable +0x1E8 mounts a volume (no hash-manifest check when its last three arguments are 0) and +0x1F8 sorts the volumes again. The folder volume's "does this file exist" method (+0xE8) is handed archive selectors such as `<*>0` too, which aren't file names, so they have to be answered "no".
 
 Extra Options does this from its `winmm.dll`. Azimuth 1.0.1 runs without Extra Options for now, so from 2.7.3 the platform does the same when Extra Options' `winmm.dll` isn't loaded: it swaps the resolver pointer as soon as Azimuth maps the game (before the game's code is executable) and mounts both folders on the first lookup. `platform.log` says so ("media overrides: ..."). It checks the game's bytes against the exe on disk first and leaves everything alone if they differ. When Extra Options is loaded the platform doesn't touch the resolver: Extra Options refuses all of its patches if any place it patches was changed first, and its `EnableMediaOverrides` setting decides. Azimuth 1.0.1's log lists the folder under "modifications" (`the game folder's Mount\mediaoverride (loose files)`); that's only a note of what's in the game folder, not Azimuth reading it.
 
 Extra Options also patches game code: around 84 byte patches and 47 hooks, listed with their RVAs in `patches.json` in its repo. It applies them all at once, while Azimuth loads its TLS helper just after mapping the game, and only after checking that every one of those places looks as it expects. If any doesn't, it applies none of them. That's why the platform's hooks wait for `wait_for_code`, and refuse game code that no longer matches the exe on disk.
+
+### Azimuth's drives and this folder's layer
+
+The game reads files only through the drives Azimuth gives it. `game:\` is the game folder's `Mount`. A `game:\` path with `..` in it stops the game ("Invalid runtime path component", raised from the folder volume's `GetFileAttributesExA`), and a host path such as `D:\Games\...` isn't found: the lookup just fails. `T:\`, where the game keeps `T:\Turn10Temp.scratch`, is FH2's temporary drive, which Azimuth 1.0 keeps in its own folder as `data\titles\1A96545B\tmp` and doesn't empty between starts. A folder volume for a folder under `T:\` works as the one for `game:\mediaoverride\` does, loose files in it standing for zip entries the same way, and only that Azimuth folder's game sees it.
+
+So from 2.9.0, on Azimuth 1.0 or later without Extra Options, the platform mounts `T:\fh2-platform\media\` (its layer, priority 0x7FFFFFFE), then each car pack's `T:\fh2-platform\packs\<pack>\` (from 0x7FFFFFF0 down), then `mediaoverride` and `mediapc`, and writes to its layer what it used to write to `mediaoverride` ([car-packs.md](car-packs.md#this-azimuth-folders-own-files)).
 
 ## Text
 
@@ -41,6 +47,36 @@ See [`string-tables.md`](string-tables.md). The title screen's "PRESS (A) TO STA
 ## The game database
 
 `media\Stripped\gamedbRC.slt` is a plain SQLite database, about 6 MB, with around 290 tables. The game opens it as `game:\media\Stripped\gamedbRC.slt` through its own file system, the one `mediaoverride` is mounted over, and reads it at startup. Tables worth knowing: `Data_Car` (every car, with `DisplayName`, `BaseCost`, `PerformanceIndex`, 0-60 times and handling values), `Data_Engine`, `Events`, `EventCars`, `CarMeets`, `AIPlayers` and `DriverModels`. Text columns hold string-table references like `_&2149394699` rather than text, so names and descriptions are changed through the string tables. The exe also mentions `media\db\gamedb.slt`, which isn't in the shipped game.
+
+## Cars
+
+A car is a `Data_Car` row and a zip, `media\cars\<MediaName>.zip`. The game's car Ids go up to 2501 (FM5's to 2169). The tables keyed by `Ordinal` or `CarId` hold a car's upgrades (`List_Upgrade*`), suspension and anti-roll bar physics, colours (`Combo_Colors`), camera offsets and part positions. Their own ids are `Id * 1000 + n` (2155000 and up for car 2155), except `Combo_Colors`', and so is the car's body (`List_UpgradeCarBody.CarBodyID`), whose part tables are keyed by `CarBodyID`. Engines and drivetrains are shared between cars; an engine's `Data_Engine.MediaName` names its sound, `media\audio\fmodanthem\durango\PG_<name>.bank`. `Data_Car_Buckets` puts a car in an Autoshow group, and a new car works with `ContentId` 0.
+
+`DisplayName` (the model, "Mustang GT") and `ModelShort` ("Ford Mustang '15") refer to `Data_Car.str` ([string-tables.md](string-tables.md#keys)). The Autoshow shows a `DisplayName` given as text, but the top bar (year, make, `DisplayName`) shows only names from the string tables. `Thumbnail` is `game:\Media\Stripped\RC<n>\Thumbnail_<Id>.png`, which the game reads as `RC<n>.zip`'s `Thumbnail_<Id>_Big.swatchbin` and `_Small.swatchbin`. Loose files at that path in an override folder are read too, also under a name the zip doesn't have.
+
+### Car zips
+
+A car's zip holds its `<MediaName>.carbin`, its models (`scene\...\*.modelbin`), materials, shaders, textures (`*.swatchbin`) and lights. Their paths name the car in lower case: `game:\media\cars\for_mustanggt_15\scene\...`. Entries are in upper-case name order, local headers have no extra field, and each entry's central-directory record has a 4-byte extra field `0x1123` with the offset of the entry's data. The game finds each zip's directory from `media\zipmanifest.xml` (UTF-8 with a BOM, CRLF), one line per zip:
+
+```xml
+<Zip version="1" path="game:\media\cars\for_mustanggt_15.zip" priority="80" dirstart="19831020" dirsize="67706" direntries="548" />
+```
+
+`dirstart` is the central directory's offset, `dirsize` its size to the end of the file (the end record included), and `direntries` the number of entries. The game takes those as they are, so a changed zip needs a changed line.
+
+### Thumbnails
+
+A `.swatchbin` is a Grub bundle (`burG`) with one `TXCB` texture block: its header at `0x28` (`TXCH`, with the width and height as u16s at `+24`) and its data at `0x53`. A car's thumbnails are BC7, one mip, 816 x 459 (`_Big`) and 192 x 108 (`_Small`), padded to whole macro tiles of 64 x 32 blocks (1024 x 512 and 256 x 128 pixels), and tiled as the Xbox One GPU tiles them (2D thin): 4 pipes (`P4_16x16`), 8 banks of width and height 1, macro tile aspect 2, a 256-byte pipe interleave. With `xN` for bit `N` of a block's x (in blocks) and so on:
+
+```
+t    = 16 * (x0 | y0 << 1 | x1 << 2 | y1 << 3 | x2 << 4 | y2 << 5)     place in its 8 x 8 micro tile
+       + 1024 * (macro tiles before it, in row order)
+pipe = (x3 ^ y3 ^ x4) | (x4 ^ y4) << 1
+bank = (tx0 ^ ty2) | (tx1 ^ ty1 ^ ty2) << 1 | (tx2 ^ ty0) << 2           tx = x / 32, ty = y / 8
+the block's offset = (t & 255) | pipe << 8 | bank << 10 | (t >> 8) << 13
+```
+
+The game's own thumbnails decode exactly so. Other textures, with mips, haven't been checked.
 
 ## Drivatars
 

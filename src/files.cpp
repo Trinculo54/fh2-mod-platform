@@ -134,7 +134,7 @@ int set_file(FH2Mod* mod, const char* media_path, const void* data, std::size_t 
         log_line(mod->name, "can't replace " + shown(rel) + ": " + it->second->name + " already does");
         return 0;
     }
-    const fs::path target = game_mount() / L"mediaoverride" / rel;
+    const fs::path target = override_root() / rel;
     auto manifest         = read_files_manifest();
     auto known            = find_ci(manifest, rel);
     std::error_code ec;
@@ -175,7 +175,7 @@ void clear_file(FH2Mod* mod, const char* media_path) {
     auto manifest = read_files_manifest();
     for (const auto& rel : which) {
         const auto key = lower_w(rel);
-        if (remove_file(game_mount() / L"mediaoverride" / rel))
+        if (remove_file(override_root() / rel))
             log_line(mod->name, "stopped replacing " + shown(rel));
         else
             log_line(mod->name, "couldn't delete the " + shown(rel) + " override (error " +
@@ -195,7 +195,7 @@ void remove_leftover_file(const char* media_path) {
     auto manifest = read_files_manifest();
     auto it       = find_ci(manifest, rel);
     if (it == manifest.end()) return;
-    if (remove_file(game_mount() / L"mediaoverride" / rel))
+    if (remove_file(override_root() / rel))
         plog("removed the " + shown(rel) + " override (" + it->second + " no longer replaces it)");
     manifest.erase(it);
     write_files_manifest(manifest);
@@ -211,7 +211,7 @@ void clean_leftover_files(const std::vector<FH2Mod*>&) {
             ++it;
             continue;
         }
-        if (remove_file(game_mount() / L"mediaoverride" / it->first))
+        if (remove_file(override_root() / it->first))
             plog("removed the " + shown(it->first) + " override (" + it->second + " no longer replaces it)");
         it      = manifest.erase(it);
         changed = true;

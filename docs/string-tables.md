@@ -14,7 +14,7 @@ Mount\media\Stripped\StringTables\DEV.zip   developer English
 Mount\media\Stripped\StringTables\LOC.zip   placeholders ("Main:IDS_Press")
 ```
 
-Inside each zip are about 120 tables, one per area of the game: `Main.str`, `PauseMenu.str`, `LoadingMessages.str`, `AIPlayers.str` and so on. Don't edit the zips: `media\zipmanifest.xml` records where each zip's directory is, and the game relies on it. The platform writes edited copies to Extra Options' override folder instead, as `Mount\mediaoverride\Stripped\StringTables\<language>\<table>.str`, and Extra Options makes the game read those (or, when Extra Options isn't loaded, the platform from 2.7.3).
+Inside each zip are about 120 tables, one per area of the game: `Main.str`, `PauseMenu.str`, `LoadingMessages.str`, `AIPlayers.str` and so on. Don't edit the zips: `media\zipmanifest.xml` records where each zip's directory is, and the game relies on it. The platform writes edited copies to Extra Options' override folder instead, as `Mount\mediaoverride\Stripped\StringTables\<language>\<table>.str`, and Extra Options makes the game read those (or, when Extra Options isn't loaded, the platform from 2.7.3). From 2.9.0, on Azimuth 1.0 or later without Extra Options, they go to the Azimuth folder's own layer instead, `data\titles\1A96545B\tmp\fh2-platform\media\Stripped\StringTables\<language>\<table>.str`, which the game reads ahead of `mediaoverride` ([car-packs.md](car-packs.md#this-azimuth-folders-own-files)).
 
 The game reads its string tables once, early in startup. Edits made in `fh2mod_init` are always in time; anything later shows from the next launch.
 
@@ -42,6 +42,8 @@ Some keys worth knowing:
 | `LoadingMessages.str` | `0x6875` | `IDS_FastTravel` | Fast Traveling to Destination |
 | `LoadingMessages.str` | `0xBA63` | `IDS_EnteringCarMeet` | Entering {0} Car Meet |
 | `AIPlayers.str` | various | `IDS_Name_1` ... | The 25 built-in Drivatar gamertags, plus "HRZN Ben". Car meets and road-trip traffic are named from here. |
+
+The game database's text columns refer to strings as `_&<id>`: the low 16 bits of the number are the key, and the high 16 bits are the same for every string of one table (`0xCD49` for `Data_Car.str`, so `_&3444141176`, `0xCD496C78`, is its key `0x6C78`, "Mustang GT").
 
 Strings can contain `{0}`-style placeholders, filled in by the game. Keep them if you replace such a string. `\n` makes a new line where the game's text box allows it. On the title screen, for example, "TO START" is its own box, centred vertically on the button, which is why title notices are padded with blank lines above.
 
@@ -71,3 +73,7 @@ section 3, key order
 ```
 
 Only section 0 depends on the text. To rewrite a table, rebuild section 0 and shift the later section offsets in the header by the change in its size. That's what the platform does (`src/strings.cpp`), and `scripts/dump_strings.py` reads the format in Python.
+
+## Adding keys
+
+From 2.9.0 the platform can add keys too, for car names a car pack or a mod gives as text ([car-packs.md](car-packs.md#database-rows)). A new key goes into section 0 in key order, with a record at the same place in sections 1 and 3 (the name `IDS_CarPack_<key>` with an index of 0, and a value of 0), and the later sections move along. The game reads such keys like its own. Car names get keys in `Data_Car.str` from `0xFF00`; the game's own end at `0xFEC3`.

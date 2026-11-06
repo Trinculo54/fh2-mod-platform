@@ -295,7 +295,9 @@ void apply_all() {
             if (mu) WaitForSingleObject(mu, 10000);
             notices = any_notices(g_azimuth);
         }
-        const bool remove = keys.empty() && texts.empty() && !notices;
+        // Car names a pack or mod gave as text, as new keys (database.cpp).
+        const auto add    = table == "data_car.str" ? database_strings() : std::map<uint16_t, std::wstring>{};
+        const bool remove = keys.empty() && texts.empty() && !notices && add.empty();
         const auto name   = g_table_names.count(table) ? g_table_names[table] : table;
         const int n       = override_string_table(
             g_game, name,
@@ -306,7 +308,7 @@ void apply_all() {
                 if (is_main && key == kToStartKey) s = title_with_notices(g_azimuth, s);
                 return s;
             },
-            remove);
+            remove, override_root(), add);
         if (mu) {
             ReleaseMutex(mu);
             CloseHandle(mu);
@@ -317,6 +319,7 @@ void apply_all() {
         } else {
             plog("wrote " + name + " for " + std::to_string(n) + " languages (" + std::to_string(keys.size()) +
                  " key edits, " + std::to_string(texts.size()) + " text replacements" +
+                 (add.empty() ? "" : ", " + std::to_string(add.size()) + " car names added") +
                  (is_main && notices ? ", title notices" : "") + ")");
             written.insert(table);
         }
@@ -587,6 +590,14 @@ void build_database() {
     std::vector<FH2Mod*> ptrs;
     for (auto& c : snap) ptrs.push_back(&c);
     apply_database(ptrs);
+    // Its car names given as text go into Data_Car.str (and come out again once there are none).
+    {
+        std::scoped_lock lk{g_mu};
+        if (database_strings().empty() && !read_manifest().count("data_car.str")) return;
+        g_dirty.insert("data_car.str");
+        g_table_names.emplace("data_car.str", "Data_Car.str");
+    }
+    apply_all();
 }
 
 void api_apply_database(FH2Mod*) { build_database(); }

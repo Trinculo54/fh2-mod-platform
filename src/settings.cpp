@@ -1008,6 +1008,7 @@ struct PageItem {
     std::string name;                // its x:Name, when something focuses it ("" for none)
     int open_view = 0;               // on Installed mods: the view (a mod's page) A shows, or 0
     std::string select;              // a page's row: the key A passes to on_select, or ""
+    bool skip = false;               // a line of information the cursor passes over (not the first row)
 };
 
 // A line of information is a Button laid out like a row: label left, value right. The first
@@ -1068,10 +1069,13 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
             if (info_row) {
                 data_item(it.label, it.description);
                 const std::string name = n == 0 ? first_name : button_name(it, false);
+                // The list's items aren't focusable themselves (A_Style_ListBoxItem_List_Default), only
+                // what's in them, so a Button that isn't leaves the cursor nothing to stop on there.
+                const bool skip = it.skip && n > 0;
                 rows += "                                        <Button Tag=\"{StaticResource " + key +
                         "}\" local:BindingProxy.A=\"" + xml_escape(it.label) + "\" local:BindingProxy.C=\"" + xml_escape(it.value) + "\" local:BindingProxy.B=\"" + xml_escape(it.value_alert) +
                         "\"" + content + " Template=\"{StaticResource " + info_template(it.style) + "}\"" + (name.empty() ? "" : " x:Name=\"" + name + "\"") +
-                        " />\r\n";
+                        (skip ? " Focusable=\"False\"" : "") + " />\r\n";
                 continue;
             }
             const Row& r     = g_rows[it.row];
@@ -1839,6 +1843,40 @@ bool any_problem() {
     return false;
 }
 
+// Car packs (car_packs.cpp), under the mods on Installed mods: a heading, then a row per pack with
+// the cars it adds, and why it isn't working when it isn't; or why the packs aren't read.
+std::vector<PageItem> car_pack_items() {
+    std::vector<PageItem> items;
+    const std::string unread = car_packs_unread();
+    if (car_packs().empty() && unread.empty()) return items;
+    PageItem heading = info("Car packs", "Packs in the fh2-cars folder: new cars for the Autoshow.");
+    heading.style    = FH2_ROW_HEADING;
+    heading.skip     = true;
+    items.push_back(heading);
+    if (!unread.empty()) items.push_back(info("Car packs aren't read", unread));
+    for (const CarPack& p : car_packs()) {
+        std::string cars;
+        for (std::size_t i = 0; i < p.cars.size(); ++i)
+            cars += (i ? ", " : "") + (i < p.car_names.size() && !p.car_names[i].empty() ? p.car_names[i] : p.cars[i]);
+        PageItem it = info(p.title.empty() ? p.name : p.title,
+                           p.cars.empty() ? std::string("A car pack that changes the game's own cars, and adds none.")
+                                          : "A car pack. It adds " +
+                                                (p.cars.size() == 1 ? std::string("a car") : std::to_string(p.cars.size()) + " cars") +
+                                                " to the Autoshow: " + cars + ".");
+        it.value   = p.version;
+        it.version = p.version.empty() ? "Version unknown" : "Version " + p.version;
+        it.link    = "fh2-cars\\" + p.name;
+        if (const std::string why = car_pack_problem(p.name); !why.empty()) {   // it isn't working: says so, in red
+            it.value_alert = "! Error !";
+            it.value.clear();
+            it.note       = "It isn't working: " + why + " fh2-mods\\platform.log has more.";
+            it.note_alert = true;
+        }
+        items.push_back(it);
+    }
+    return items;
+}
+
 // Installed mods: one row per mod; A shows its settings.
 std::vector<PageItem> installed_items() {
     std::vector<PageItem> items;
@@ -1862,6 +1900,8 @@ std::vector<PageItem> installed_items() {
     }
     if (g_entries.empty())
         items.push_back(info("No mods installed", "Mods go in the fh2-mods folder next to azimuth.exe. See GET MODS for some to try."));
+    const std::vector<PageItem> packs = car_pack_items();
+    items.insert(items.end(), packs.begin(), packs.end());
     return items;
 }
 
@@ -1984,6 +2024,16 @@ std::vector<PageItem> about_items() {
     open.link = folder;
     items.push_back(open);
     urls.push_back(folder);
+
+    // fh2-cars, where car packs are read (Azimuth 1.0 or later without Extra Options) and it's there
+    if (std::error_code ec; instance_layer() && std::filesystem::is_directory(azimuth_dir() / L"fh2-cars", ec)) {
+        const std::string cars = narrow((azimuth_dir() / L"fh2-cars").wstring());
+        PageItem packs = info("Open car packs folder", "Opens fh2-cars in File Explorer, to add or remove car packs. Packs you add "
+                                                       "there are read the next time you start the game.");
+        packs.link = cars;
+        items.push_back(packs);
+        urls.push_back(cars);
+    }
 
     PageItem report = info("Report a problem", "Something not working? Press A to open the platform's GitHub issues and say what "
                                                "happened. Attach platform.log from the mods folder: it has what the platform and "
