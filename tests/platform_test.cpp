@@ -10,6 +10,10 @@
 // session file: "online-first", "online", "online-chosen" (the player's choices) and
 // "fh2mp-off" (FH2MP turned off on the MODS tab); last, "hud": HudTestMod.dll adds a HUD
 // layer (the HUD layer preview, include/fh2mod_hud.h).
+// The runner goes through the phases twice, once per layout (platform 2.9.0): first with no
+// data\titles folder (Azimuth before 1.0, or Extra Options loaded), where the platform's files go
+// to mediaoverride; then with one (Azimuth 1.0 or later without Extra Options), where they go to
+// the folder's own layer, data\titles\1A96545B\tmp\fh2-platform\media (car_packs.cpp).
 #include "strings.hpp"
 #include "updates.hpp"
 
@@ -33,8 +37,15 @@ static std::string slurp(const fs::path& f) {
     return {std::istreambuf_iterator<char>(in), {}};
 }
 
+// Where the platform's files go in this layout: the folder's own layer on Azimuth 1.0 or later
+// (a data\titles folder) without Extra Options, else mediaoverride.
+static bool own_layer() { return fs::is_directory(L"data\\titles"); }
+static fs::path layer() {
+    return own_layer() ? fs::path{L"data\\titles\\1A96545B\\tmp\\fh2-platform\\media"} : fs::path{L"FH2\\Mount\\mediaoverride"};
+}
+
 static std::wstring str(const char* table, uint16_t key) {
-    auto d = slurp(fs::path{L"FH2\\Mount\\mediaoverride\\Stripped\\StringTables\\EN"} / table);
+    auto d = slurp(layer() / L"Stripped\\StringTables\\EN" / table);
     if (d.empty()) return L"<none>";
     std::wstring found = L"<missing>";
     edit_lsb2(std::vector<char>(d.begin(), d.end()), [&](uint16_t k, const std::wstring& t) {
@@ -45,7 +56,7 @@ static std::wstring str(const char* table, uint16_t key) {
 }
 
 static bool ai_has(const wchar_t* name) {
-    auto d = slurp(L"FH2\\Mount\\mediaoverride\\Stripped\\StringTables\\EN\\AIPlayers.str");
+    auto d = slurp(layer() / L"Stripped\\StringTables\\EN\\AIPlayers.str");
     bool hit = false;
     edit_lsb2(std::vector<char>(d.begin(), d.end()), [&](uint16_t, const std::wstring& t) {
         if (t == name) hit = true;
@@ -56,11 +67,12 @@ static bool ai_has(const wchar_t* name) {
 
 // AIPlayers.XP of `id` in the database override, or -1.
 static int db_xp(int id) {
-    if (!fs::exists("FH2\\Mount\\mediaoverride\\Stripped\\gamedbRC.slt")) return -1;
+    const fs::path f = layer() / L"Stripped\\gamedbRC.slt";
+    if (!fs::exists(f)) return -1;
     sqlite3* db = nullptr;
     sqlite3_stmt* st = nullptr;
     int xp = -1;
-    if (sqlite3_open_v2("FH2\\Mount\\mediaoverride\\Stripped\\gamedbRC.slt", &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK &&
+    if (sqlite3_open_v2(f.string().c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK &&
         sqlite3_prepare_v2(db, ("SELECT XP FROM AIPlayers WHERE Id = " + std::to_string(id)).c_str(), -1, &st, nullptr) == SQLITE_OK &&
         sqlite3_step(st) == SQLITE_ROW)
         xp = sqlite3_column_int(st, 0);
@@ -286,7 +298,7 @@ int wmain(int argc, wchar_t** argv) {
         SetUnhandledExceptionFilter(after_crash); // Windows' (or Azimuth's) handler, to the platform
     }
     if (phase == L"crash-chained") SetUnhandledExceptionFilter(after_chained_crash);
-    if (phase == L"full") {   // a saves folder, for the snapshot TestMod asks for (platform 2.8.0)
+    if (phase == L"full" && own_layer()) {   // a save, for the snapshot TestMod asks for (platform 2.8.0)
         fs::create_directories(L"data\\titles\\1A96545B\\saves\\1A96545B");
         std::ofstream{"data\\titles\\1A96545B\\saves\\1A96545B\\test.sav", std::ios::binary} << "save data";
     }
@@ -339,14 +351,19 @@ int wmain(int argc, wchar_t** argv) {
         if (argc > 2) CHECK(log.find("the game is mapped at") != std::string::npos);
 
         // Files
-        const fs::path ov = L"FH2\\Mount\\mediaoverride";
+        const fs::path ov = layer();
         CHECK(slurp(ov / "drivatarglobalcache" / "DefaultCache.bin") == "from AaaMod");
         CHECK(has(log, "[TestMod] can't replace media\\drivatarglobalcache\\DefaultCache.bin: AaaMod already does"));
         CHECK(has(log, "media\\Stripped\\StringTables\\EN\\Main.str is managed by the platform"));
         CHECK(has(log, "\"UI/../../evil.txt\" isn't a path under media"));
         CHECK(slurp(ov / "UI" / "keep.xml") == "<xml/>");
         CHECK(slurp(ov / "UI" / "handmade.xml") == "<xml/>");
-        CHECK(slurp(ov / "UI" / "handmade.xml.bak") == "made by hand");
+        if (own_layer()) {   // the hand-placed file in mediaoverride stays as it was: the layer is read first
+            CHECK(slurp(L"FH2\\Mount\\mediaoverride\\UI\\handmade.xml") == "made by hand");
+            CHECK(!fs::exists(ov / "UI" / "handmade.xml.bak"));
+        } else {
+            CHECK(slurp(ov / "UI" / "handmade.xml.bak") == "made by hand");
+        }
         CHECK(!fs::exists(ov / "UI" / "temp.xml"));
         CHECK(has(log, "[TestMod] stopped replacing media\\UI\\temp.xml"));
         const auto files = slurp("fh2-mods\\platform-files.txt");
@@ -439,13 +456,19 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(log, "[TestMod] bad log folder refused") &&
                   has(log, "[TestMod] session_log_path: \"..\\Elsewhere\" isn't a folder name"));
             const std::string status = slurp("fh2-mods\\platform-session.json");
-            // save snapshots (API 9): one copy, and the saves left as they were
-            CHECK(has(log, "[TestMod] asked for a copy of the saves before the game reads them: the platform test") &&
-                  has(log, "[TestMod] save snapshot asked for"));
-            CHECK(has(log, ("save snapshot: 1 file(s), 0 MB, copied to fh2-mods\\save-snapshots\\" + id +
-                            " (the newest 2 kept), for TestMod (the platform test)").c_str()));
-            CHECK(slurp(fs::path(L"fh2-mods\\save-snapshots") / id / L"1A96545B" / L"test.sav") == "save data");
-            CHECK(slurp(L"data\\titles\\1A96545B\\saves\\1A96545B\\test.sav") == "save data");
+            // save snapshots (API 9): one copy, and the saves left as they were. Before Azimuth 1.0 there's
+            // no data\titles, so no saves folder: the mod is told so.
+            if (own_layer()) {
+                CHECK(has(log, "[TestMod] asked for a copy of the saves before the game reads them: the platform test") &&
+                      has(log, "[TestMod] save snapshot asked for"));
+                CHECK(has(log, ("save snapshot: 1 file(s), 0 MB, copied to fh2-mods\\save-snapshots\\" + id +
+                                " (the newest 2 kept), for TestMod (the platform test)").c_str()));
+                CHECK(slurp(fs::path(L"fh2-mods\\save-snapshots") / id / L"1A96545B" / L"test.sav") == "save data");
+                CHECK(slurp(L"data\\titles\\1A96545B\\saves\\1A96545B\\test.sav") == "save data");
+            } else {
+                CHECK(has(log, "[TestMod] request_save_snapshot: there's no saves folder at data\\titles\\1A96545B\\saves") &&
+                      !has(log, "[TestMod] save snapshot asked for"));
+            }
             CHECK(has(status, ("\"session\": \"" + id + "\"").c_str()) && has(status, "\"state\": \"running\"") &&
                   has(status, "\"platform\": \"2.9.0\"") && has(status, "\"TestMod\": \"1.0.0\""));
         }
@@ -526,11 +549,10 @@ int wmain(int argc, wchar_t** argv) {
                   has(log, " bytes; a copy is in fh2-mods\\platform-hudlayer-A_Hud.xaml"));
             const std::string copy = slurp("fh2-mods\\platform-hudlayer-A_Hud.xaml");
             CHECK(has(copy, "<!-- FH2 Mod Platform: HUD layer -->") && has(copy, "FH2HL_Root"));
-            // The page as the game reads it: on 2.8.0 set_file's target is the test folder's mediaoverride (if
-            // set_file writes elsewhere later, this check follows it). With the game mapped, only if the Mods
+            // The page as the game reads it: where set_file writes in this layout (layer()). With the game mapped, only if the Mods
             // page's hooks went in: the platform removes its pages when they don't.
             if (argc <= 2 || has(log, "[HUD layer] hooks: 4 of 4 made and on; the HUD layer is ready")) {
-                const std::string page = slurp(L"FH2\\Mount\\mediaoverride\\UI\\Scenes\\Anthem\\A_Hud.xaml");
+                const std::string page = slurp(layer() / L"UI\\Scenes\\Anthem\\A_Hud.xaml");
                 CHECK(has(page, "<!-- FH2 Mod Platform: HUD layer -->") && has(page, "FH2HL_Root") && page == copy);
             }
             CHECK(has(marker, "state written"));
@@ -552,7 +574,7 @@ int wmain(int argc, wchar_t** argv) {
     } else if (online_phase) {
         const auto known = slurp("fh2-mods\\platform-mods.txt");
         const bool pages = fs::exists(L"FH2\\Mount\\media\\UI.zip") && argc <= 2;
-        const auto installed = pages ? slurp(L"FH2\\Mount\\mediaoverride\\UI\\Scenes\\Anthem\\A_ModPage_01.xaml") : std::string();
+        const auto installed = pages ? slurp(layer() / L"UI\\Scenes\\Anthem\\A_ModPage_01.xaml") : std::string();
         if (phase == L"online-first") {
             // OfflineMod is new: it loads, register_mod turns it away, and it's remembered as offline-only
             CHECK(has(log, "started from the FH2MP launcher (online play)"));
@@ -565,7 +587,7 @@ int wmain(int argc, wchar_t** argv) {
                 // each mod's page is a view of Installed mods: OfflineMod's has the switch, FH2MP's doesn't
                 CHECK(has(installed, "Heading=\"Load when playing online\"") && has(installed, "Its author made it for offline play"));
                 CHECK(!has(installed, "the game doesn't load FH2MP"));
-                CHECK(!has(slurp(L"FH2\\Mount\\mediaoverride\\UI\\Scenes\\Anthem\\A_Hud.xaml"), "OfflineMod"));   // not an error
+                CHECK(!has(slurp(layer() / L"UI\\Scenes\\Anthem\\A_Hud.xaml"), "OfflineMod"));   // not an error
             }
         } else if (phase == L"online") {
             // ... and from then on isn't loaded at all online
@@ -587,7 +609,7 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(str("AIPlayers.str", 0) == L"<none>");
         CHECK(str("Main.str", 0x18F0) == L"<none>");
         CHECK(slurp(L"fh2-mods\\platform-tables.txt").find("AIPlayers.str") == std::string::npos);
-        const fs::path ov = L"FH2\\Mount\\mediaoverride";
+        const fs::path ov = layer();
         CHECK(!fs::exists(ov / "UI" / "keep.xml") && !fs::exists(ov / "UI" / "handmade.xml"));
         CHECK(!fs::exists(ov / "UI" / "Scenes" / "Anthem" / "A_Splash.xaml"));   // no title entries left
         CHECK(slurp(ov / "drivatarglobalcache" / "DefaultCache.bin") == "from AaaMod");
