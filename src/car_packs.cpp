@@ -21,12 +21,14 @@
 // never write over each other's files. A pack's pack.ini lists the cars it adds; their Ids are
 // given when the database is built (its SQL says {car:<media name>} where one goes), and kept.
 //
-// A car can have an engine sound of its own (pack.ini [car]: engine_sound, engine_sound_base, engine_synth): its SQL
-// gives its engine a MediaName of its own (the sound's name), and the game loads PG_<MediaName>.bank only if there is
-// one. The platform links the base car's PG_<engine_sound_base>.bank into the pack's temp-drive folder under the new
-// name, and lists the car in fh2-mods\platform-engine-synths.txt for an engine sound mod: SynthWrapper plays the
-// pack's engine_synth for that name and gives the game the base car's name for its events. Without such a mod the
-// car simply sounds like its base car; a real base car keeps its own sound either way.
+// A car can have an engine sound of its own (pack.ini [car]: engine_sound, engine_sound_base, engine_synth). The game
+// loads PG_<engine MediaName>.bank, but finds the bank's events only under a stock car's sound name (FMOD Studio looks
+// event paths up in the master strings bank, which holds only the stock PG_ names): an engine named anything else is
+// silent. So the pack's SQL names a stock sound (engine_sound_base). The platform links that PG_<engine_sound_base>.bank
+// into the pack's temp-drive folder under engine_sound, and lists the car (with its media name) in
+// fh2-mods\platform-engine-synths.txt for an engine sound mod: SynthWrapper (0.7.0) renames the car's engine to
+// engine_sound when its synth is complete, plays engine_synth for it, and gives the game engine_sound_base's events.
+// Without such a mod the car plays its stock engine_sound_base; a real base car keeps its own sound either way.
 #include "platform.hpp"
 #include "updates.hpp"
 
@@ -600,8 +602,10 @@ void prepare_car_packs() {
     write_engine_synths();
 }
 
-// <sound name> TAB <base car's sound name> TAB <folder> TAB <.synth name without extension> TAB <pack>, one car a line,
-// with "PG_" on the names (as the game's events use them). Rewritten at every start; gone when no pack has one.
+// <sound name> TAB <base car's sound name> TAB <folder> TAB <.synth name without extension> TAB <pack> TAB <car's media
+// name>, one car a line, with "PG_" on the sound names (as the game's events use them). The media name (2.9.0) lets
+// the mod rename the car's engine; mods reading only the first five columns are unaffected. Rewritten at every
+// start; gone when no pack has one.
 void write_engine_synths() {
     std::string text;
     for (const auto& pack : g_packs)
@@ -615,7 +619,7 @@ void write_engine_synths() {
                 continue;
             }
             text += "PG_" + es.sound + "\tPG_" + es.base + "\t" + narrow(synth.parent_path().wstring()) + "\t" +
-                    narrow(synth.stem().wstring()) + "\t" + pack.name + "\r\n";
+                    narrow(synth.stem().wstring()) + "\t" + pack.name + "\t" + es.car + "\r\n";
         }
     const fs::path out = azimuth_dir() / "fh2-mods" / "platform-engine-synths.txt";
     std::error_code ec;

@@ -95,9 +95,10 @@ struct CarPack {
     std::vector<std::string> cars;            // the cars it adds: pack.ini's [car <media name>] sections
     std::vector<std::string> car_names;       // and each one's name= there ("" for none), for the MODS tab
     std::vector<std::string> wanted_ids;      // and its id= ("" for none): the Id it asks for (car_ids.cpp)
-    // A car's engine sound of its own (pack.ini's [car] engine_sound, engine_sound_base, engine_synth): its engine's
-    // MediaName (set by the pack's SQL) names a bank the platform links from the base car's, and an engine sound
-    // mod (SynthWrapper) is told about it in fh2-mods\platform-engine-synths.txt.
+    // A car's engine sound of its own (pack.ini's [car] engine_sound, engine_sound_base, engine_synth): the pack's SQL
+    // names the stock engine_sound_base (the game finds events only under stock names); the platform links that bank
+    // under engine_sound, and an engine sound mod (SynthWrapper) told about it in fh2-mods\platform-engine-synths.txt
+    // renames the car's engine to engine_sound when it can play it.
     struct EngineSound {
         std::string car, sound, base, synth; // media name; PG_ bank names without "PG_"; .synth file under the pack
     };
