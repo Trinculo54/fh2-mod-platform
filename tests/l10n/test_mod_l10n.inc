@@ -6,11 +6,11 @@ static const FH2Translation test_mod_translations[] = {
      "msgid \"\"\n"
      "\"Test notice line\\n\"\n"
      "\"\\n\"\n"
-     "\"second line\"\n"
+     "\"second line  \"\n"
      "msgstr \"\"\n"
      "\"Testowa linia og\305\202oszenia\\n\"\n"
      "\"\\n\"\n"
-     "\"druga linia\"\n"
+     "\"druga linia  \"\n"
      "\n"
      "msgctxt \"row.Greeting.label\"\n"
      "msgid \"Test greeting\"\n"
@@ -23,7 +23,7 @@ static const FH2Translation test_mod_translations[] = {
      "msgctxt \"count.cars\"\n"
      "msgid \"{n} car\"\n"
      "msgid_plural \"{n} cars\"\n"
-     "msgstr[0] \"{n} samoch\303\263d\"\n"
+     "msgstr[0] \"Jeden samoch\303\263d\"\n"
      "msgstr[1] \"{n} samochody\"\n"
      "msgstr[2] \"{n} samochod\303\263w\"\n"
      "\n"
@@ -35,8 +35,8 @@ static const FH2Translation test_mod_translations[] = {
      "msgid \"Old English\"\n"
      "msgstr \"Stary polski\"\n"
      "\n",
-     656},
-    /* pt_BR.po: 1 strings */
+     662},
+    /* pt_BR.po: 1 string */
     {"pt-BR",
      "msgctxt \"row.Greeting.label\"\n"
      "msgid \"Test greeting\"\n"

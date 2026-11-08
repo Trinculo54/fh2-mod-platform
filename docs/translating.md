@@ -82,7 +82,7 @@ python3 platform/tools/l10n/extract.py --domain MyMod src
 python3 platform/tools/l10n/po2inc.py src/mymod_l10n.inc mymod_translations l10n/*.po
 ```
 
-Both have `--check`, which writes nothing and fails when the file isn't up to date: run them in CI. `extract.py` stops, with the file and line, at a key or English that isn't a plain string literal, and at a key used for two different English texts. `po2inc.py` leaves out what the platform would refuse anyway (entries marked fuzzy, untranslated ones, ones whose placeholders don't match the English) and warns about the placeholders.
+Both have `--check`, which writes nothing and fails when the file isn't up to date: run them in CI. `extract.py` stops, with the file and line, at a key or English in `FH2_TR` (or its siblings) that isn't a plain string literal, and at a key used for two different English texts. A call to `api->tr()` it can't read gets a warning instead and is passed over, since another object can have a `tr` of its own; use the macros, and nothing slips past. `po2inc.py` leaves out what the platform would refuse anyway (entries marked fuzzy, untranslated ones, ones whose placeholders don't match the English) and warns about the placeholders.
 
 Then hand them to the platform straight after `register_mod`:
 
@@ -107,7 +107,7 @@ When you change the English, run `extract.py` again. Translation tools (Weblate,
 You'll get the mod's `.pot` file (or a link to it on Weblate), and you give back a `.po` file for your language. Poedit (poedit.net) is a free editor for them: open the `.pot`, and it makes a new translation from it.
 
 - **Each text has a context** (`msgctxt`): its key, which says where it shows (`row.Trees.label` is a row's label on the Mods page). Read the note (`#.`) above it too.
-- **Keep every `{placeholder}`** exactly as it is: `{count}`, `{name}`. You can move them, but not translate or drop them, or the platform leaves your translation out. A plural's singular may leave out `{n}` ("Jedno drzewo").
+- **Keep every `{placeholder}`** exactly as it is: `{count}`, `{name}`. You can move them, but not translate or drop them, or the platform leaves your translation out. One exception: a plural form your language uses for 1 alone may leave out the number ("Jedno drzewo" for "{n} tree broken"). That's the first form in Polish, Czech, German and most others; not in Russian, whose first form is also for 21, 31 and so on, nor in Brazilian Portuguese and French, which use it for 0 as well.
 - **Plurals** have one box per form in your language: Polish has three (1 drzewo; 2, 3, 4, 22 drzewa; 5, 11, 25 drzew). Fill in all of them.
 - **Mind `max-length`**: more characters than that won't fit on screen. Shorten rather than overflow.
 - **Use the game's own words** for its things (Barn Finds, Bucket List, Showcase): look at how the game says them in your language. Address the player the way the game does (in Polish "ty", in Brazilian Portuguese "você").

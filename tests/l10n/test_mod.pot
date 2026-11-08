@@ -6,14 +6,14 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "X-Domain: TestMod\n"
 
-#. TestMod's notice on the title screen, in each language's own words
+#. TestMod's notice on the title screen, in each language's own words (the spaces at the end are trimmed)
 #: test_mod.cpp:31
 #, max-length:40
 msgctxt "notice"
 msgid ""
 "Test notice line\n"
 "\n"
-"second line"
+"second line  "
 msgstr ""
 
 #. a row on the Mods page

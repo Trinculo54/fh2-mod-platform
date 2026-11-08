@@ -5,7 +5,7 @@ over several lines, C escapes, "#, fuzzy" and the other comments, and old entrie
 """
 import re
 
-PLACEHOLDER = re.compile(r'\{[^{}\s]+\}')
+PLACEHOLDER = re.compile(r'\{[^{} \t\n]+\}')   # as the platform's: no brace, space, tab or line break inside
 
 
 class Entry:
@@ -36,15 +36,40 @@ def placeholders(text):
     return sorted(set(PLACEHOLDER.findall(text or '')))
 
 
-def placeholders_fit(entry, text):
+def placeholders_fit(entry, text, only_for_one=False):
     """As the platform checks them: the same as the English's; for a plural form, none the English hasn't
-    got in either form, and every one both English forms have."""
+    got in either form, and every one both English forms have, unless the form is only ever used for 1
+    (then it may say "one" instead of {n})."""
     t = set(placeholders(text))
     one = set(placeholders(entry.msgid))
     if entry.plural is None:
         return t == one
     other = set(placeholders(entry.plural))
-    return t <= (one | other) and (one & other) <= t
+    return t <= (one | other) and (only_for_one or (one & other) <= t)
+
+
+def plural_form(tag, n):
+    """Which msgstr[] holds the form for n in a PO file for tag, as the platform picks it (src/l10n.cpp)."""
+    lang = tag.split('-')[0]
+    a = abs(n)
+    d10, d100 = a % 10, a % 100
+    few = 2 <= d10 <= 4 and (d100 < 10 or d100 >= 20)
+    if lang == 'pl':
+        return 0 if a == 1 else 1 if few else 2
+    if lang in ('ru', 'uk', 'be'):
+        return 0 if d10 == 1 and d100 != 11 else 1 if few else 2
+    if lang in ('cs', 'sk'):
+        return 0 if a == 1 else 1 if 2 <= a <= 4 else 2
+    if lang in ('pt', 'fr'):
+        return 1 if a > 1 else 0
+    if lang in ('ja', 'ko', 'zh'):
+        return 0
+    return 0 if a == 1 else 1
+
+
+def form_only_for_one(tag, form):
+    """Whether msgstr[form] of a PO file for tag is only ever used for 1 (Polish's form 0, not Russian's)."""
+    return plural_form(tag, 1) == form and all(n == 1 or plural_form(tag, n) != form for n in range(200))
 
 
 _ESCAPES = {'n': '\n', 't': '\t', 'r': '\r', 'a': '\a', 'b': '\b', 'f': '\f', 'v': '\v'}
@@ -104,8 +129,8 @@ def parse(text, name='<po>'):
             entries.append(cur)
         cur, seen_id, seen_str, last = Entry(), False, False, None
 
-    for n, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
+    for n, raw in enumerate(text.split('\n'), 1):   # lines end at \n alone, as the platform reads them
+        line = raw.strip(' \t\r')
         where = '%s:%d' % (name, n)
         if not line:
             flush()
@@ -132,7 +157,7 @@ def parse(text, name='<po>'):
             else:
                 setattr(cur, attr, getattr(cur, attr) + s)
             continue
-        kw, _, rest = line.partition(' ')
+        kw, rest = (re.split(r'[ \t]', line, maxsplit=1) + [''])[:2]   # a space or a tab after the keyword, as the platform reads it
         if kw == 'msgctxt':
             if seen_id or seen_str:
                 flags = cur.flags if not seen_id else set()

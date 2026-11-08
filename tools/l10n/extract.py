@@ -10,8 +10,9 @@ Scans the C and C++ files under the paths given for
     FH2_TR_DESCRIPTION("English")                   (FH2ModInfo.description, key "mod.description")
     api->set_string_tr(mod, "Table.str", 0x1234, "key", L"English")
 The key and the English have to be plain string literals (adjacent ones are joined); the key may be
-NULL or nullptr. Anything else stops it with the file and line, since a translation can only be found
-for text it can see.
+NULL or nullptr. Anything else in the FH2_TR macros stops it with the file and line, since a
+translation can only be found for text it can see. A ->tr(), ->tr_plural() or ->set_string_tr() call
+it can't read (another object's method of that name, say) gets a warning instead, and is passed over.
 
 Each entry gets its file:line, and as a translator's note the "// L10N:" comment on the line above the
 call (or at the end of its line). The note can start with a slot kind in brackets, which sets the
@@ -214,6 +215,10 @@ def scan(path, shown, entries, order):
             if english is None:
                 raise Stop('the English is NULL')
         except Stop as e:
+            if name.startswith('->'):
+                # perhaps another object's tr(), or the platform's with text it can't see: said, and passed over
+                print('warning: %s:%d: %s() isn\'t read: %s' % (shown, line, name[2:], e), file=sys.stderr)
+                continue
             raise Stop('%s:%d: %s' % (shown, line, e))
         note = ''
         for l in (line, line - 1):
@@ -286,7 +291,7 @@ def main(argv):
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     with open(out, 'w', encoding='utf-8', newline='\n') as f:
         f.write(text)
-    print('%s: %d strings' % (out, len(order)))
+    print('%s: %d %s' % (out, len(order), 'string' if len(order) == 1 else 'strings'))
     return 0
 
 

@@ -27,8 +27,8 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     // Translations (API 10): Polish and Brazilian Portuguese; the platform test has a Brazilian Portuguese file in
     // fh2-mods\lang\TestMod that's used instead of the second.
     FH2_ADD_TRANSLATIONS(api, g_mod, test_mod_translations);
-    // L10N(notice-line): TestMod's notice on the title screen, in each language's own words
-    api->set_notice(g_mod, FH2_TR(api, g_mod, "notice", "Test notice line\n\nsecond line"));
+    // L10N(notice-line): TestMod's notice on the title screen, in each language's own words (the spaces at the end are trimmed)
+    api->set_notice(g_mod, FH2_TR(api, g_mod, "notice", "Test notice line\n\nsecond line  "));
     api->replace_string(g_mod, "AIPlayers.str", L"Nocomply76", L"Buddy1");
     api->set_string(g_mod, "LoadingMessages.str", 0x6875, L"from TestMod");
 

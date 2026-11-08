@@ -12,11 +12,11 @@ msgctxt "notice"
 msgid ""
 "Test notice line\n"
 "\n"
-"second line"
+"second line  "
 msgstr ""
 "Testowa linia ogłoszenia\n"
 "\n"
-"druga linia"
+"druga linia  "
 
 #. a row on the Mods page
 #, max-length:30
@@ -29,10 +29,11 @@ msgctxt "row.Greeting.description"
 msgid "A row whose text is in the game's language."
 msgstr "Wiersz, którego tekst jest w języku gry."
 
+# the singular says "one" instead of {n}: Polish uses that form for 1 alone
 msgctxt "count.cars"
 msgid "{n} car"
 msgid_plural "{n} cars"
-msgstr[0] "{n} samochód"
+msgstr[0] "Jeden samochód"
 msgstr[1] "{n} samochody"
 msgstr[2] "{n} samochodów"
 
