@@ -617,10 +617,11 @@ int offline_only;
 
 [FH2MP](https://github.com/Charelene/FH2MP) brings back online play, and runs on the platform itself (its `fh2-mods\FH2MP.dll`). Some mods shouldn't run in online play, because they change how cars drive or what other players see: a nitro boost, say. From platform 2.8.0 such a mod isn't loaded when the game is started from the FH2MP launcher.
 
-- **Online is decided once, before any mod loads.** It's online when FH2MP's launcher has handed the game a session (its `data\bin\fh2mp-session.txt`, which the launcher writes before starting the game and removes when it ends; the platform only checks that it's there, and never reads it, as it holds the player's token), and `FH2MP.dll` is in `fh2-mods` and turned on. `playing_online` is never true without FH2MP. The log says "started from the FH2MP launcher (online play)".
+- **Online is decided before any mod loads, and on the safe side.** It's online when FH2MP is in `fh2-mods` and turned on, and has a session to play with: the `fh2mp-session.txt` its launcher writes before starting the game and removes when it ends (in `data\bin`, or next to `azimuth.exe` in a folder without `data\bin`), or `FH2MP_TOKEN` in the environment. The platform only checks that the file is there, and never reads it, as it holds the player's token. A session file counts even when FH2MP will find it too old and stay offline, and one the platform can't check counts as there. FH2MP is `FH2MP.dll`, or a DLL under another name that registered as FH2MP at an earlier launch. `playing_online` is never true without FH2MP. The log says which DLL and which session, then "started from the FH2MP launcher (online play)".
+- **Online found later (platform 2.9.0).** Mods load before FH2MP connects and can't be unloaded, so the platform looks again when a mod registers as FH2MP (a renamed DLL it didn't know), when FH2MP's `fh2mod_init` returns (FH2MP reads its session there, and the launcher may have written it after the loader looked), and when FH2MP calls `going_online` (below). If FH2MP is online after all, the game counts as online from then on: `playing_online` returns 1, offline-only mods that register later are turned away as usual, and the mods that shouldn't run online but had already started are **stopped**. Their hooks and byte patches go off, `enable_hooks` is refused for them, and their hotkeys and commands aren't called, until the game restarts. The log says "online play after all" and names them, and the MODS tab shows them as "Off online", stopped for online play. A mod from before the platform can't be stopped: the log says so. This is [issue #22](https://github.com/Trinculo54/fh2-mod-platform/issues/22).
 - **`offline_only`**: set it to 1 in your `FH2ModInfo` if your mod shouldn't run online. Online, `register_mod` then returns `NULL`, so call `register_mod` first in `fh2mod_init` and return straight away when it gives you `NULL` (as every mod should anyway); what you return then isn't reported as a problem. The platform remembers it, and from the next online launch doesn't load your DLL at all. Offline, nothing changes. Older platforms ignore the member, so set it whatever the version.
 - **The player decides in the end.** Where FH2MP is installed, each mod's page on MODS > Installed mods has a **Load when playing online** switch, set from your `offline_only` until the player changes it. Their choice is kept in `fh2-mods\platform-online.txt` and takes effect the next time the game starts from the launcher. It works for any DLL in `fh2-mods`, platform mods or not, so players can also turn off a mod whose author hasn't set the flag.
-- **`playing_online`** returns 1 when the game is online in that sense, 0 otherwise. Call it from anywhere, `fh2mod_init` included; it doesn't change during the session. Use it to turn off just the part of your mod that shouldn't run online and keep the rest. Check `api_version >= 9` first.
+- **`playing_online`** returns 1 when the game is online in that sense, 0 otherwise. Call it from anywhere, `fh2mod_init` included. From platform 2.9.0 it can turn from 0 to 1 during the session (online found later, above), never back, so check it when it matters, not once at the start. Use it to turn off just the part of your mod that shouldn't run online and keep the rest; anything your mod does from its own threads rather than through hooks is yours to stop when it turns 1. Check `api_version >= 9` first.
 - **What it can't switch off**: files you copied into `mediaoverride` yourself (your mod's zip, say). The game reads those online too. Files you put there with `set_file` are your mod's, and go with it.
 
 ```cpp
@@ -630,6 +631,16 @@ info.offline_only = 1;   // the boost would be a cheat online
 g_mod = api->register_mod(&info);
 if (!g_mod) return 0;    // online (or a bad info): nothing to do
 ```
+
+### For FH2MP: `FH2Platform.Online` (platform 2.9.0)
+
+```c
+const FH2PlatformOnline* o = (const FH2PlatformOnline*)api->get_interface(FH2_ONLINE_INTERFACE, 1);
+/* o->playing_online(): as FH2ModApi.playing_online
+   o->going_online(names, size): call before connecting */
+```
+
+The platform publishes this interface itself, before any mod starts, so FH2MP finds it from `fh2mod_init` on; older platforms return `NULL`. FH2MP calls `going_online` before it connects. The game then counts as online from that moment (if it didn't already), with the mods that shouldn't run online stopped as above. It returns how many such mods had already started in this game, and puts their names in `names` ("Nitro, Other", cut short to fit `size`, NUL-terminated). 0 means none did: connect. Over 0, those mods ran offline first, and may have changed the game in ways the platform can't undo (memory they wrote from their own threads, say), so FH2MP should stay offline and ask the player to start the game from the FH2MP launcher. Call it from any thread, as often as you like.
 
 ## Sessions (API 9)
 
