@@ -400,7 +400,10 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] add_title_entry: Second has choices but no on_choose"));
         CHECK(has(log, "[TestMod] add_title_entry: there's already an entry called Garage"));
         CHECK(has(log, "[TestMod] add_title_entry: Y is TestMod's Garage; Third gets RB"));
-        CHECK(has(log, "[TestMod] add_title_entry: Third's label is cut to \"Third entry with a label that is\""));
+        // cut at 32 characters, not 32 bytes (which left 27 of these), and in capitals beyond a-z (platform 2.9.0)
+        CHECK(has(log, "[TestMod] add_title_entry: Third's label is cut to \"\xC5\xBB\xC3\xB3\xC5\x82ta trasa z bardzo d\xC5\x82ug\xC4\x85 nazw\xC4\x85\""));
+        CHECK(has(log, "[TestMod] title-screen entry: (RB) \xC5\xBB\xC3\x93\xC5\x81TA TRASA Z BARDZO D\xC5\x81UG\xC4\x84 NAZW\xC4\x84\n") ||
+              has(log, "[TestMod] title-screen entry: (RB) \xC5\xBB\xC3\x93\xC5\x81TA TRASA Z BARDZO D\xC5\x81UG\xC4\x84 NAZW\xC4\x84\r\n"));
         CHECK(has(log, "[TestMod] title-screen entry: (LB) FOURTH & <LAST> (a list of 20, in 3 pages of 8)"));
         CHECK(has(log, "[TestMod] add_title_entry: no button left for Fifth (four entries at most, from every mod)"));
         CHECK(has(log, "[TestMod] add_title_entry: \"bad key\" isn't a usable key (letters, digits, _)"));
@@ -516,6 +519,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(splash, "{Binding FH2Mod_TitleReady}") && has(splash, "<Setter Property=\"Visibility\" Value=\"Collapsed\" />"));
             CHECK(has(splash, "A_BitmapImage_ControllerButton_Y}") && has(splash, "Text=\"DRIVE THE TEST GARAGE\""));
             CHECK(has(splash, "A_BitmapImage_ControllerButton_LB}") && has(splash, "Text=\"FOURTH &amp; &lt;LAST&gt;\""));
+            CHECK(has(splash, "Text=\"&#379;&#211;&#321;TA TRASA Z BARDZO D&#321;UG&#260; NAZW&#260;\""));   // Polish capitals
             // the choice row on Settings > Mods: a slider shown like the game's option rows, a name per value
             const auto mods = slurp(scenes / "A_ModOptions.xaml");
             CHECK(has(mods, "Style=\"{StaticResource FH2Mod_Choice_") && has(mods, "<Setter Property=\"Maximum\" Value=\"2\" />"));

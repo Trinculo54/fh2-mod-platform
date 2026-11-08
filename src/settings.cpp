@@ -38,6 +38,7 @@
 #include "lang.hpp"
 #include "platform.hpp"
 #include "strings.hpp"
+#include "text.hpp"
 #include "updates.hpp"
 #include "xml_text.hpp"
 
@@ -1498,8 +1499,7 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             blocks = "<Grid>\r\n                        " + held(0, block);
             for (std::size_t k = 1; k <= views->size() && k <= view_titles->size(); ++k) {
                 std::string vt = block;
-                std::string name = (*view_titles)[k - 1].title;
-                for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                const std::string name = upper_game((*view_titles)[k - 1].title);
                 swap_attr(vt, "Content", xml_escape(name));
                 if ((*view_titles)[k - 1].settings) swap_attr(vt, "Tag", "{local:Loc ScreenTitles.IDS_MyProfile}");   // the game's grey "SETTINGS"
                 blocks += "\r\n                        " + held(k, vt);
@@ -2211,15 +2211,12 @@ bool write_hub_page(int p) {
             g_tile_acts[t].clear();
             return write_custom_page(hub_file(p).c_str(), res, content, help);
         }
-        for (char& c : title) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
         g_tile_acts[t] = row_acts(items, "FirstItem");
-        return write_list_page(hub_file(p).c_str(), title, items, true, nullptr, nullptr, select ? "{local:Loc HelpButtons.IDS_Select}" : nullptr);
+        return write_list_page(hub_file(p).c_str(), upper_game(title), items, true, nullptr, nullptr, select ? "{local:Loc HelpButtons.IDS_Select}" : nullptr);
     }
     if (p >= kHubModPage && p < kHubTilePage && static_cast<std::size_t>(p - kHubModPage) < g_entries.size()) {
         const ModEntry& e = g_entries[p - kHubModPage];
-        std::string title = e.name;
-        for (char& c : title) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        return write_list_page(hub_file(p).c_str(), title, mod_page_items(p - kHubModPage));
+        return write_list_page(hub_file(p).c_str(), upper_game(e.name), mod_page_items(p - kHubModPage));
     }
     return false;
 }
@@ -3559,7 +3556,7 @@ constexpr uintptr_t RVA_SPLASH_BUTTON_SLOT = 0x2E53940;   // Splash vtable +0x57
 constexpr uintptr_t RVA_SPLASH_ON_START    = 0x0EA0D40;   // Splash::OnStart (A)
 constexpr uintptr_t RVA_SPLASH_A_HANDLER   = 0x0E8F9A5;   // Splash shown: registers A (key 18)
 constexpr std::size_t kSplashState         = 0x448;       // int, see above
-constexpr std::size_t kMaxTitleLabel       = 32;          // bytes; the panel is 326 px wide (about 24 characters)
+constexpr std::size_t kMaxTitleLabel       = 32;          // characters (text_chars); the panel is 326 px wide (about 24 capitals)
 constexpr std::size_t kTitleListFits       = 10;          // choices one box shows, with Back
 constexpr std::size_t kTitlePageSize       = 8;           // choices on a page of a longer list, with Previous, Next and Back
 const char* const kTitleFile               = "UI/Scenes/Anthem/A_Splash.xaml";
@@ -3600,12 +3597,6 @@ const char* button_letters(int b) {
         case FH2_BUTTON_RB: return "RB";
         default: return nullptr;
     }
-}
-
-std::string ascii_upper(std::string s) {
-    for (char& c : s)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return s;
 }
 
 // A_Splash.xaml with every entry's line in it, or remove_leftover_file when there are none.
@@ -3660,7 +3651,7 @@ bool write_title_page() {
         panel += std::string("\r\n                        <StackPanel Orientation=\"Horizontal\" HorizontalAlignment=\"Center\" Margin=\"0, 4, 0, 0\">\r\n"
                              "                            <local:FZMaterial ImageSource=\"{StaticResource A_BitmapImage_ControllerButton_") +
                  button_letters(button) + "}\" Width=\"32\" Height=\"32\" />\r\n"
-                 "                            <local:FZTextBlock Text=\"" + xml_escape(ascii_upper(label)) +
+                 "                            <local:FZTextBlock Text=\"" + xml_escape(upper_game(label)) +
                  "\" Style=\"{StaticResource A_Style_Text_LoadingSmall}\" Margin=\"8, 0, 0, 0\" />\r\n"
                  "                        </StackPanel>";
     panel += "\r\n                    </StackPanel>";
@@ -4430,10 +4421,8 @@ int title_add(FH2Mod* m, const FH2TitleEntry* e) {
                               " gets " + button_letters(button));
     }
     std::string label = e->label;
-    if (label.size() > kMaxTitleLabel) {
-        std::size_t cut = kMaxTitleLabel;
-        while (cut > 0 && (static_cast<unsigned char>(label[cut]) & 0xC0) == 0x80) --cut;   // not inside a character
-        label.resize(cut);
+    if (text_chars(label) > kMaxTitleLabel) {   // characters, not bytes: a Polish letter is one, as an English one
+        label = cut_text(label, kMaxTitleLabel);
         log_line(m->name, std::string("add_title_entry: ") + e->key + "'s label is cut to \"" + label + "\"");
     }
     TitleEntry& t = g_titles.emplace_back();
@@ -4471,7 +4460,7 @@ int title_add(FH2Mod* m, const FH2TitleEntry* e) {
         if (!t.page_loc.empty()) list += ", in " + std::to_string(t.page_loc.size()) + " pages of " + std::to_string(kTitlePageSize);
         list += ")";
     }
-    log_line(m->name, std::string("title-screen entry: (") + button_letters(button) + ") " + ascii_upper(label) + list);
+    log_line(m->name, std::string("title-screen entry: (") + button_letters(button) + ") " + upper_game(label) + list);
     return 1;
 }
 
