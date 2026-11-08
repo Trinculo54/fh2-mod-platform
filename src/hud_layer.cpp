@@ -23,6 +23,7 @@
 #include "fh2mod_hud.h"
 #include "hud_state.hpp"
 #include "hud_template.hpp"
+#include "lang.hpp"
 #include "platform.hpp"
 #include "updates.hpp"
 
@@ -498,6 +499,11 @@ bool write_marker(bool loading) {
 // ---- the Button prompts row and its ini -------------------------------------------------------------
 
 const char* const kChoices[3] = {"Automatic", "Controller", "Keyboard and mouse"};
+constexpr const char* kRowLabel = "Button prompts";
+constexpr const char* kRowText  = "What the HUD bar's button prompts show. Automatic: the controller or the keyboard and mouse, whichever "
+                                  "you used last (Xbox-style controllers only; choose Controller for others). This is a development "
+                                  "build of the FH2 Mod Platform.";
+std::atomic<FH2Mod*> g_row_mod{nullptr};   // the mod whose part has the row
 fs::path ini_path() { return fh2mods() / L"platform-hudlayer.ini"; }
 
 void read_ini() {
@@ -546,16 +552,14 @@ void add_row(FH2Mod* m) {
     FH2Setting s{};
     s.size        = sizeof s;
     s.key         = "HudButtonPrompts";
-    s.label       = "Button prompts";
-    s.description = "What the HUD bar's button prompts show. Automatic: the controller or the keyboard and mouse, whichever you used last "
-                    "(Xbox-style controllers only; choose Controller for others). This is a development build of the FH2 "
-                    "Mod Platform.";
+    s.label       = kRowLabel;
+    s.description = kRowText;
     s.kind         = FH2_SETTING_CHOICE;
     s.choices      = kChoices;
     s.choice_count = 3;
     s.value        = g_choice.load();
     s.on_change    = on_row;
-    settings_add(m, &s);
+    if (settings_add(m, &s)) g_row_mod = m;
 }
 
 // ---- the game's Strings and notifies (HudGame) ------------------------------------------------------
@@ -1441,6 +1445,15 @@ const void* hud_interface() { return &g_iface; }
 FH2Mod* hud_layer_owner() { return &g_layer_mod; }
 bool hud_layer_active() { return g_active.load(); }
 int hud_layer_choice() { return g_choice.load(); }
+
+void hud_layer_refresh_text() {
+    FH2Mod* m = g_row_mod.load();
+    if (!m) return;
+    const std::string label = tr(kRowLabel), text = tr(kRowText);
+    const std::string names[3] = {tr(kChoices[0]), tr(kChoices[1]), tr(kChoices[2])};
+    const char* const choices[3] = {names[0].c_str(), names[1].c_str(), names[2].c_str()};
+    settings_set_text(m, "HudButtonPrompts", label.c_str(), text.c_str(), choices, 3);
+}
 double hud_layer_now() { return now_ms(); }
 
 void hud_layer_prepare(const FH2ModApi* api) {
@@ -1475,7 +1488,7 @@ void hud_layer_prepare(const FH2ModApi* api) {
     else hlog("button prompts: %s (fh2-mods\\platform-hudlayer.ini)", kChoices[g_choice.load()]);
     if (g_left_out) {
         g_eng.set_off(HudOff::left_out);
-        api->set_notice(&g_layer_mod, "HUD layer: left out after a crash. See platform.log.");
+        api->set_notice(&g_layer_mod, tr("HUD layer: left out after a crash. See platform.log.").c_str());
         return;
     }
     api->set_notice(&g_layer_mod, "");   // a notice from an earlier left-out session goes (g_layer_mod never registers)

@@ -531,6 +531,11 @@ int wmain(int argc, wchar_t** argv) {
             // text given after add_setting and register_mod (API 10)
             CHECK(has(mods, "Test button, renamed") && !has(mods, "\"Test button\"") && has(mods, "Text=\"RB &amp; &lt;renamed&gt;\""));
             CHECK(has(installed, "set later."));
+            // the platform's own lines as whole sentences, one for each state (platform 2.9.0)
+            CHECK(has(installed, "Heading=\"Version 0.5.0 (doesn't check for updates)\""));
+            CHECK(has(installed, "It isn't working: It needs FH2 Mod Platform 9.9.9 or newer; this is 2.9.0. Reinstall it to get the "
+                                 "platform it came with. fh2-mods\\platform.log has more."));
+            CHECK(has(installed, "Reinstall it to get the platform it came with. Off leaves it in fh2-mods, but the game doesn't load it."));
         }
         // No mod adds a HUD layer here, so the preview behaves as 2.8.0: nothing of the layer in the log,
         // no file of its own, no layer in any A_Hud.xaml written; only line 1 names the build.
@@ -605,6 +610,8 @@ int wmain(int argc, wchar_t** argv) {
                 CHECK(has(installed, "local:BindingProxy.C=\"Off online  1.0.0\""));
                 // each mod's page is a view of Installed mods: OfflineMod's has the switch, FH2MP's doesn't
                 CHECK(has(installed, "Heading=\"Load when playing online\"") && has(installed, "Its author made it for offline play"));
+                CHECK(has(installed, "the game doesn't load OfflineMod, so it can't change online play. Its author made it for offline play, so "
+                                     "it's off unless you turn it on. Takes effect the next time you start the game from the launcher."));
                 CHECK(!has(installed, "the game doesn't load FH2MP"));
                 CHECK(!has(slurp(layer() / L"UI\\Scenes\\Anthem\\A_Hud.xaml"), "OfflineMod"));   // not an error
             }

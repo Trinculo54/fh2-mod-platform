@@ -1111,7 +1111,7 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
             const Row& r     = g_rows[it.row];
             const std::string label = it.label.empty() ? r.label : it.label;
             std::string desc = it.description.empty() ? r.description : it.description;
-            if (r.restart) desc += (desc.empty() ? "" : " ") + tr("Takes effect the next time you start the game.");
+            if (r.restart) desc = join_sentences(desc, tr("Takes effect the next time you start the game."));
             if (r.mod != &g_hub_owner) desc += (desc.empty() ? "" : " ") + std::string("(") + r.mod->name + ")";
             data_item(label, desc);
             if (!r.choices.empty()) {
@@ -1606,6 +1606,7 @@ void hub_rows_text();   // with the MODS tab's rows, below
 // The Mods page (Settings > Mods, and the MODS tab's All settings): every mod's rows.
 bool write_mods_page() {
     hotkeys_refresh_text();
+    hud_layer_refresh_text();
     std::vector<PageItem> items;
     {
         std::scoped_lock lk{g_mu};
@@ -1679,6 +1680,17 @@ void hub_online_changed(void* user, const char*, int v) {
     if (i < g_entries.size()) set_mod_online(g_entries[i].dll, v != 0);
 }
 
+// A mod's "Load when playing online" row's text, in the game's language now (English before it has one).
+void online_row_text(Row& o, const ModEntry& e) {
+    o.label       = tr("Load when playing online");
+    o.description = e.offline_only
+                        ? trf("Off: when you start the game from the FH2MP launcher, the game doesn't load {0}, so it can't change "
+                              "online play. Its author made it for offline play, so it's off unless you turn it on. Takes effect the "
+                              "next time you start the game from the launcher.", {e.name})
+                        : trf("Off: when you start the game from the FH2MP launcher, the game doesn't load {0}, so it can't change "
+                              "online play. Takes effect the next time you start the game from the launcher.", {e.name});
+}
+
 void add_hub_rows() {
     g_entries = mod_entries();
     // "Load when playing online" (platform 2.8.0), only where FH2MP is installed, and not for FH2MP
@@ -1704,11 +1716,7 @@ void add_hub_rows() {
         Row& o       = g_rows.emplace_back();
         o.mod        = &g_hub_owner;
         o.key        = "ModOnline_" + std::to_string(i);
-        o.label      = "Load when playing online";
-        o.description = std::string("Off: when you start the game from the FH2MP launcher, the game doesn't load ") + e.name +
-                        ", so it can't change online play. " +
-                        (e.offline_only ? "Its author made it for offline play, so it's off unless you turn it on. " : "") +
-                        "Takes effect the next time you start the game from the launcher.";
+        online_row_text(o, e);
         o.prop       = "FH2Mod_" + std::to_string(g_rows.size() - 1);
         o.value      = e.loads_online ? 1 : 0;
         o.boot       = o.value;
@@ -1722,24 +1730,17 @@ std::string with_v(const std::string& version) { return version.empty() ? "" : "
 
 const char* const kHubTileNames[kHubTiles] = {"INSTALLED MODS", "UPDATES", "GET MODS", "ABOUT", "ALL SETTINGS"};
 std::string hub_tile_text(int k) {
-    std::string s = tr(kHubTileNames[k]);
-    if (k == 0) s += " (" + std::to_string(g_entries.size()) + ")";   // in fh2-mods, on or off
+    if (k == 0) return trf("INSTALLED MODS ({0})", {std::to_string(g_entries.size())});   // in fh2-mods, on or off
     if (k == 1)
-        if (const int out = updates_out(); out > 0) s += " (" + std::to_string(out) + ")";
-    return s;
+        if (const int out = updates_out(); out > 0) return trf("UPDATES ({0})", {std::to_string(out)});
+    return tr(kHubTileNames[k]);
 }
 
 // The "Load when playing online" rows' text, in the game's language now (under g_mu).
 void hub_rows_text() {
     for (std::size_t i = 0; i < g_entries.size() && i < g_entry_online_row.size(); ++i) {
         if (g_entry_online_row[i] < 0) continue;
-        const ModEntry& e = g_entries[i];
-        Row& o            = g_rows[g_entry_online_row[i]];
-        o.label           = tr("Load when playing online");
-        o.description     = trf("Off: when you start the game from the FH2MP launcher, the game doesn't load {0}, so it can't "
-                                "change online play.", {e.name}) +
-                            (e.offline_only ? " " + tr("Its author made it for offline play, so it's off unless you turn it on.") : "") +
-                            " " + tr("Takes effect the next time you start the game from the launcher.");
+        online_row_text(g_rows[g_entry_online_row[i]], g_entries[i]);
     }
 }
 
@@ -1853,23 +1854,25 @@ std::string mod_note(const ModEntry& e) {
 }
 
 // the lines under a mod's description: its version (in red with a ! when a newer one is out),
-// and its GitHub page
+// and its GitHub page. A whole line for each state, so each language words it its own way.
 void add_mod_lines(PageItem& it, const ModEntry& e) {
     if (it.note.empty()) it.note = mod_note(e);
-    const std::string v = e.version.empty() ? tr("Version unknown") : trf("Version {0}", {e.version});
     std::string latest;
     if (e.enabled && e.mod && !e.mod->repo.empty() && e.mod->check_updates) latest = latest_known(e.mod);
     if (!latest.empty() && compare_versions(latest, e.version) > 0) {
         const std::string l = latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest;
-        it.version_alert    = "! " + v + " (" + trf("{0} is out", {l}) + ")";
+        it.version_alert    = "! " + (e.version.empty() ? trf("Version unknown ({0} is out)", {l})
+                                                         : trf("Version {0} ({1} is out)", {e.version, l}));
+    } else if (e.version.empty()) {
+        it.version = tr("Version unknown");   // the note and the row's value say whether it's on
     } else {
-        std::string state;
-        if (!e.enabled) state = tr("turned off");
-        else if (e.online_off) state = tr("off for online play");
-        else if (!e.problem.empty()) state = tr("didn't load");
-        else if (!e.mod || e.mod->repo.empty() || !e.mod->check_updates) state = tr("doesn't check for updates");
-        else state = latest.empty() ? tr("not checked yet") : tr("up to date");
-        it.version = v + " (" + state + ")";
+        const char* line = !e.enabled                                               ? "Version {0} (turned off)"
+                           : e.online_off                                           ? "Version {0} (off for online play)"
+                           : !e.problem.empty()                                     ? "Version {0} (didn't load)"
+                           : !e.mod || e.mod->repo.empty() || !e.mod->check_updates ? "Version {0} (doesn't check for updates)"
+                           : latest.empty()                                         ? "Version {0} (not checked yet)"
+                                                                                    : "Version {0} (up to date)";
+        it.version = trf(line, {e.version});
     }
     if (!e.repo.empty()) it.link = "github.com/" + e.repo;
 }
@@ -1977,7 +1980,7 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
     sw.note = mod_note(e);
     if (const std::string why = mod_problem(e); !why.empty()) sw.note = trf("It isn't working: {0}", {why});
     else if (const std::string warn = e.enabled ? mod_sql_warning(e.name) : ""; !warn.empty()) sw.note = trf("Warning: {0}", {warn});
-    sw.note += (sw.note.empty() ? "" : " ") + tr("Off leaves it in fh2-mods, but the game doesn't load it.");
+    sw.note = join_sentences(sw.note, tr("Off leaves it in fh2-mods, but the game doesn't load it."));
     add_mod_lines(sw, e);
     items.push_back(sw);
     if (i < g_entry_online_row.size() && g_entry_online_row[i] >= 0) items.push_back({g_entry_online_row[i], "", ""});
@@ -2004,12 +2007,10 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
                 PageItem it = info(pg.label, pg.description);
                 const bool on_tile = pg.tile >= 0 && g_tile_page[pg.tile] == static_cast<int>(j);
                 if (pg.custom && pg.rows.empty())   // only on its tile
-                    it.description += (it.description.empty() ? "" : " ") +
-                                      (on_tile ? trf("Open it from the pause menu's {0} tile.", {tr(kTiles[pg.tile].name)})
-                                               : tr("It needs a pause-menu tile to open from, and doesn't have one."));
+                    it.description = join_sentences(it.description, on_tile ? trf("Open it from the pause menu's {0} tile.", {tr(kTiles[pg.tile].name)})
+                                                                            : tr("It needs a pause-menu tile to open from, and doesn't have one."));
                 else if (on_tile)
-                    it.description += (it.description.empty() ? "" : " ") +
-                                      trf("The pause menu's {0} tile opens it too.", {tr(kTiles[pg.tile].name)});
+                    it.description = join_sentences(it.description, trf("The pause menu's {0} tile opens it too.", {tr(kTiles[pg.tile].name)}));
                 it.open_view = j < g_page_view.size() ? g_page_view[j] : 0;
                 it.name      = "PART_Button_FH2Mod_Page_" + std::to_string(j);
                 items.push_back(it);
@@ -2037,16 +2038,15 @@ std::vector<PageItem> updates_items() {
         if (latest.empty() || compare_versions(latest, e.version) <= 0) continue;
         const std::string l = latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest;
         PageItem it = info(e.name, trf("Version {0} is out. Get it from the mod's GitHub page (below): extract its zip into your "
-                                       "Azimuth folder, then start the game again.", {l}));
+                                       "Azimuth folder, then start the game again. Press A to open it.", {l}));
         it.value_alert = "! " + e.version + " !";
         add_mod_lines(it, e);
-        it.description += " " + tr("Press A to open it.");
         items.push_back(it);
         urls.push_back("https://github.com/" + e.mod->repo + "/releases/latest");
     }
     const std::string how = tr("Mods that name their GitHub page check it for new releases at most every 6 hours. A mod with a new "
                                "release also says so on the title screen, under PRESS (A) TO START, and with a ! on the MODS tab.");
-    items.push_back(info(tr("How update checks work"), items.empty() ? tr("There aren't any updates at the moment.") + " " + how : how));
+    items.push_back(info(tr("How update checks work"), items.empty() ? join_sentences(tr("There aren't any updates at the moment."), how) : how));
     urls.push_back("");
     g_update_urls = urls;
     return items;
@@ -2128,6 +2128,7 @@ std::atomic<void*> g_tile_page_obj[kTileCount] = {};   // the page object showin
 
 bool write_hub_page(int p) {
     hotkeys_refresh_text();
+    hud_layer_refresh_text();
     {
         std::scoped_lock lk{g_mu};
         hub_rows_text();
@@ -4439,7 +4440,7 @@ int title_add(FH2Mod* m, const FH2TitleEntry* e) {
         t.list_title   = widen(e->list_title && *e->list_title ? e->list_title : label.c_str());
         t.list_message = widen(e->list_message ? e->list_message : "");
         for (const std::string& c : t.choices) t.wchoices.push_back(widen(c));
-        t.wchoices.push_back(L"Back");
+        t.wchoices.push_back(L"Back");   // in the game's language as it's shown (tr_w)
         t.loc.push_back(loc_string(t.list_title.c_str()));
         t.loc.push_back(loc_string(t.list_message.c_str()));
         for (const std::wstring& c : t.wchoices) t.loc.push_back(loc_string(c.c_str()));
@@ -4527,11 +4528,12 @@ bool write_hud_notice() {
         return false;
     }
     if (!names.empty()) {   // the notice only when a mod didn't load (a HUD layer may need the page anyway)
-        std::string title = names.size() == 1 ? "A MOD DIDN'T LOAD" : std::to_string(names.size()) + " MODS DIDN'T LOAD";
-        std::string which;
+        const std::string title = names.size() == 1 ? tr("A MOD DIDN'T LOAD") : trf("{0} MODS DIDN'T LOAD", {std::to_string(names.size())});
+        std::string which;   // the mods' names: not translated
         for (std::size_t i = 0; i < names.size() && i < 3; ++i) which += (i ? ", " : "") + names[i];
-        if (names.size() > 3) which += " and " + std::to_string(names.size() - 3) + " more";
-        const std::string text = which + (names.size() == 1 ? " isn't" : " aren't") + " working. See MODS in the pause menu.";
+        if (names.size() > 3) which = trf("{0} and {1} more", {which, std::to_string(names.size() - 3)});
+        const std::string text = trf(names.size() == 1 ? "{0} isn't working. See MODS in the pause menu."
+                                                       : "{0} aren't working. See MODS in the pause menu.", {which});
         auto key = [](double v, double t, bool ease_in) {
             char b[256];
             std::snprintf(b, sizeof b,

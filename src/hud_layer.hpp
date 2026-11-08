@@ -23,6 +23,7 @@ bool hud_layer_active();                         // a layer was added this sessi
 const char* hud_layer_crash_text();              // crash.cpp: a fixed buffer, "" without a layer
 std::string hud_layer_session_text();            // session.cpp: "" without a layer
 int hud_layer_choice();                          // the Button prompts row: 0 Automatic, 1 Controller, 2 Keyboard and mouse
+void hud_layer_refresh_text();                   // the Button prompts row's text in the game's language, before the pages are written
 double hud_layer_now();                          // the layer's clock, ms
 void hud_layer_sweep_check();                    // the device sweep's round: says once if the pump stopped
 

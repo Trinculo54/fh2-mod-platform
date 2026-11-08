@@ -421,21 +421,29 @@ void device_sweep_start() {
 
 int device_auto_kbd() { return g_auto_kbd.load(); }
 
-// The rows' text, in the game's language now: before the pages are written.
+// The rows' text, in the game's language now: before the pages are written. The choices keep the keys' and
+// buttons' names; only Off is translated.
 void hotkeys_refresh_text() {
     struct Text {
         FH2Mod* mod;
         std::string key, label;
+        std::vector<std::string> keys, pads;
     };
     std::vector<Text> rows;
     {
         std::scoped_lock lk{g_mu};
-        for (const Hotkey& h : g_hotkeys) rows.push_back({h.mod, h.key, h.label});
+        for (const Hotkey& h : g_hotkeys) rows.push_back({h.mod, h.key, h.label, h.key_names, h.chord_names});
     }
     const std::string desc = tr("A hotkey. Off turns it off; the game still gets the key or buttons as ever.");
+    const std::string off  = tr("Off");
+    auto set = [&](const Text& r, const std::string& key, const std::string& label, const std::vector<std::string>& names) {
+        std::vector<const char*> c;
+        for (const std::string& n : names) c.push_back(n == "Off" ? off.c_str() : n.c_str());
+        settings_set_text(r.mod, key.c_str(), label.c_str(), desc.c_str(), c.data(), static_cast<uint32_t>(c.size()));
+    };
     for (const Text& r : rows) {
-        settings_set_text(r.mod, ("Hotkey_" + r.key).c_str(), trf("{0}: key", {r.label}).c_str(), desc.c_str(), nullptr, 0);
-        settings_set_text(r.mod, ("HotkeyPad_" + r.key).c_str(), trf("{0}: controller", {r.label}).c_str(), desc.c_str(), nullptr, 0);
+        set(r, "Hotkey_" + r.key, trf("{0}: key", {r.label}), r.keys);
+        set(r, "HotkeyPad_" + r.key, trf("{0}: controller", {r.label}), r.pads);
     }
 }
 
