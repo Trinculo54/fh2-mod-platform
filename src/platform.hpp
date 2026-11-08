@@ -22,7 +22,8 @@ struct FH2Mod {
     std::map<std::string, std::map<uint16_t, std::wstring>> set;
     std::map<std::string, std::map<std::wstring, std::wstring>> repl;
     std::vector<std::string> notice; // from set_notice
-    std::vector<std::string> status; // the platform's own: update available, platform too old
+    std::string update_notice;       // the platform's own title notice that a newer version is out ("" for none)
+    std::vector<std::string> status; // the platform's other title notices: platform too old
     std::set<std::wstring> files;    // mediaoverride paths this mod owns (lower case)
     std::vector<std::string> sql;    // database statements, in the order given
     std::string latest;              // latest release on GitHub, once checked

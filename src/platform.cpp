@@ -332,6 +332,7 @@ void apply_all() {
 
 void refresh_notice(FH2Mod* m) {
     std::vector<std::string> lines = m->notice;
+    if (!m->update_notice.empty()) lines.push_back(m->update_notice);
     lines.insert(lines.end(), m->status.begin(), m->status.end());
     write_notice_file(g_azimuth, m->wname, m->dll, lines);
     g_dirty.insert("main.str");
@@ -436,15 +437,10 @@ void check_updates(FH2Mod* m) {
                                           "); couldn't reach GitHub this time"
                                     : "newer than the latest release on GitHub (" + latest + ")")
                           : "up to date (latest release " + latest + when + ")");
-    const std::string line = m->name + " " + (latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest) +
-                             " is available";
-    auto& st     = m->status;
-    const auto it = std::find_if(st.begin(), st.end(), [](const std::string& s) {
-        return s.size() > 13 && s.compare(s.size() - 13, 13, " is available") == 0;
-    });
-    const bool had = it != st.end();
-    if (had) st.erase(it);
-    if (newer) st.insert(st.begin(), line);
+    // The platform's own notice has a place of its own (update_notice), so it's found whatever language it's in.
+    const bool had   = !m->update_notice.empty();
+    m->update_notice = newer ? trf("{0} {1} is available", {m->name, latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest})
+                             : std::string();
     if (newer || had) {
         refresh_notice(m);
         apply_all();
@@ -490,7 +486,7 @@ FH2Mod* api_register(const FH2ModInfo* info) {
         std::scoped_lock lk{g_mu};
         m->dll = g_current_dll;
         if (!m->platform_version.empty() && compare_versions(m->platform_version, FH2MOD_PLATFORM_VERSION) > 0) {
-            m->status.push_back("Old FH2 Mod Platform: reinstall " + m->name);
+            m->status.push_back(trf("Old FH2 Mod Platform: reinstall {0}", {m->name}));
             log_line(m->name, "built for FH2 Mod Platform " + m->platform_version + ", but this is " +
                                   FH2MOD_PLATFORM_VERSION + "; reinstall it to get the platform it came with");
         }
