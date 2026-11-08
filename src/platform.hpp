@@ -21,6 +21,8 @@ struct FH2Mod {
     // table (lower case) -> edits
     std::map<std::string, std::map<uint16_t, std::wstring>> set;
     std::map<std::string, std::map<std::wstring, std::wstring>> repl;
+    // table (lower case) -> key -> (msg key, English): set_string_tr's, each language's own text (API 10)
+    std::map<std::string, std::map<uint16_t, std::pair<std::string, std::wstring>>> set_tr;
     std::vector<std::string> notice; // from set_notice
     std::string update_notice;       // the platform's own title notice that a newer version is out ("" for none)
     std::vector<std::string> status; // the platform's other title notices: platform too old
@@ -206,6 +208,9 @@ bool fh2mp_installed();               // FH2MP.dll is in fh2-mods (turned on or 
 void set_mod_online(const std::wstring& dll, bool on);
 // The latest release of a mod on GitHub, once checked ("" before that, or if unknown).
 std::string latest_known(const FH2Mod* m);
+// A mod's description now: set_mod_description's, or FH2ModInfo's in the game's language (its
+// catalogue's "mod.description", API 10).
+std::string mod_description(FH2Mod* m);
 
 // session.cpp: this run of the game (API 9). start_session makes the id and opens the copy of
 // platform.log that fh2-mods\platform-logs keeps; session_line is platform.log's line about it.

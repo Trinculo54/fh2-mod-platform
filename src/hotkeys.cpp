@@ -13,6 +13,7 @@
 // the XInput pads, judged by hud_state.cpp. Without one, poll() is 2.8.0's exactly.
 #include "hud_layer.hpp"
 #include "hud_state.hpp"
+#include "l10n.hpp"
 #include "lang.hpp"
 #include "platform.hpp"
 #include "updates.hpp"
@@ -359,6 +360,7 @@ int hotkey_add(FH2Mod* m, const FH2Hotkey* k) {
         h->mod       = m;
         h->key       = k->key;
         h->label     = k->label;
+        l10n_note(m, "hotkey." + h->key + ".label", k->label);   // tr()'s text follows the game's language (API 10)
         h->on_press  = k->on_press;
         h->on_rebind = k->on_rebind;
         h->user      = k->user;
@@ -441,7 +443,8 @@ void hotkeys_refresh_text() {
         for (const std::string& n : names) c.push_back(n == "Off" ? off.c_str() : n.c_str());
         settings_set_text(r.mod, key.c_str(), label.c_str(), desc.c_str(), c.data(), static_cast<uint32_t>(c.size()));
     };
-    for (const Text& r : rows) {
+    for (Text& r : rows) {
+        l10n_follow(r.mod, "hotkey." + r.key + ".label", r.label);   // a mod's tr() text, in the game's language now (API 10)
         set(r, "Hotkey_" + r.key, trf("{0}: key", {r.label}), r.keys);
         set(r, "HotkeyPad_" + r.key, trf("{0}: controller", {r.label}), r.pads);
     }

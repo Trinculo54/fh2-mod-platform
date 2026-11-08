@@ -128,7 +128,10 @@ typedef struct FH2ModApi {
 
     /* Set the string with `key` in `table` ("Main.str") to `text`. */
     void (*set_string)(FH2Mod* mod, const char* table, uint16_t key, const wchar_t* text);
-    /* Replace every string in `table` that is exactly `from` with `to`. */
+    /* Replace every string in `table` that is exactly `from` with `to`.
+       Each language's table has its own text, so English `from` only
+       matches the English tables (EN, GB, and CZ and HU, which are English
+       too). For your text in every language, see set_string_tr (API 10). */
     void (*replace_string)(FH2Mod* mod, const char* table, const wchar_t* from, const wchar_t* to);
     /* Forget this mod's edits to `table`, or to every table if NULL. */
     void (*clear_strings)(FH2Mod* mod, const char* table);
@@ -537,6 +540,82 @@ typedef struct FH2ModApi {
     int (*set_setting_text)(FH2Mod* mod, const char* key, const char* label, const char* description,
                             const char* const* choices, uint32_t choice_count);
     void (*set_mod_description)(FH2Mod* mod, const char* description);
+
+    /* ---- Translations -------------------------------------------------------
+       Your text in the player's language, from translations you build into
+       your DLL as gettext PO files (docs/translating.md has the workflow and
+       include/fh2mod_l10n.h the helpers). Each text has a key, the PO file's
+       msgctxt ("row.Trees.label"), and its English, the msgid. Anything
+       without a translation shows in English.
+
+       Text you get from tr() and pass to the platform (a row's label,
+       description or choices, a page's title and rows, a title-screen entry,
+       a hotkey's label, set_notice, set_mod_description) follows the game's
+       language by itself: the platform knows which key each text it handed
+       out came from, and looks it up again in the game's language each time
+       it writes a page. The game picks its language a few seconds after
+       fh2mod_init, so add your rows there with tr() as usual. The title
+       screen's entry lines are the exception: they're written once, as the
+       game starts, so they follow its language from the next launch. Text
+       you build from tr()'s (with a number filled in, say) is yours, and
+       stays as it was: set it again when the page opens (FH2Page.on_open).
+
+       language: the language text is looked up in, as a BCP-47 tag: "en",
+       "en-GB", "pl", "pt-BR", "de", "fr", "es-ES", "es-MX", "it", "ja", "ko",
+       "zh-Hant", "cs", "hu", "ru", "nl" (the game's language once it has one;
+       before that, the one it had last time; else "en"), or "qps" for the
+       test language (padded text in [brackets], turned on by test=1 in
+       fh2-mods\platform-language.ini). Any thread, fh2mod_init included.
+
+       add_translation: one language's PO file, held in memory (`size`
+       bytes of UTF-8; your DLL's copy can be freed after the call). `lang` is
+       its tag ("pl", "pt-BR"; "pt_BR" is read the same). Call it once per
+       language, from fh2mod_init right after register_mod. If
+       fh2-mods\lang\<your mod's name>\<lang>.po exists, that file is used
+       instead (the log says so), so translators can try theirs without a
+       build. Entries marked fuzzy are skipped, and one whose {placeholders}
+       don't match the English is left out with a line in the log (a plural
+       form `lang` uses for 1 alone may leave the number out). Returns how
+       many entries it took (0: none; the log says why).
+
+       tr: `english` in the language now, or `english` when there's no
+       translation. `key` is the msgctxt (NULL: entries without one). A
+       translation made from different English than you pass (the English
+       changed since) isn't used, so it never shows with the wrong meaning.
+       Looks in the language's catalogue, then pt-BR -> pt, en-GB -> en,
+       es-MX -> es-ES -> es, then English. The text stays valid for the
+       session: don't free it.
+
+       tr_plural: the same for text with a count: `one` and `other` are the
+       English forms (msgid and msgid_plural), and the form for `n` is picked
+       by the language's own rules (Polish has three). It returns the form
+       with its {n} still in: fill it in yourself (fh2_fill in
+       fh2mod_l10n.h), with format_number for the digits.
+
+       set_string_tr: set_string with a key, for each language's string table
+       in its own words: every table gets the text for its language, so the
+       game shows the right one whatever language it picks. `msg_key` and
+       `english` are looked up as in tr(). Write it from fh2mod_init, as
+       set_string.
+
+       format_number: `v` with `decimals` digits after the point (0 to 6),
+       the way the language writes numbers: 1,234.5 in English, 1 234,5 in
+       Polish (a no-break space), 1.234,5 in Brazilian Portuguese and German.
+       format_date: a date, 24.10.2026 in Polish and German, 24/10/2026 in
+       Portuguese, French, Spanish and Italian, and 2026-10-24 in English.
+       Both write UTF-8 to `out` and return its length, or 0 (with "" in
+       `out`) when `n` bytes don't hold it or the value isn't usable.
+
+       FH2ModInfo.description reaches register_mod before your translations
+       do, so the platform looks it up itself under the key
+       "mod.description". */
+    const char* (*language)(void);
+    int (*add_translation)(FH2Mod* mod, const char* lang, const char* po_utf8, size_t size);
+    const char* (*tr)(FH2Mod* mod, const char* key, const char* english);
+    const char* (*tr_plural)(FH2Mod* mod, const char* key, const char* one, const char* other, int64_t n);
+    void (*set_string_tr)(FH2Mod* mod, const char* table, uint16_t key, const char* msg_key, const wchar_t* english);
+    int (*format_number)(double v, int decimals, char* out, size_t n);
+    int (*format_date)(int year, int month, int day, char* out, size_t n);
 } FH2ModApi;
 
 /* Called on the game's UI thread when the player changes a row: keep it

@@ -35,6 +35,7 @@
 //  - The message box is the one the options pages use for "Unsaved changes": see the popup
 //    section below.
 #include "hud_layer.hpp"
+#include "l10n.hpp"
 #include "lang.hpp"
 #include "platform.hpp"
 #include "strings.hpp"
@@ -1602,6 +1603,7 @@ bool write_custom_page(const char* file, const std::string& resources, const std
 }
 
 void hub_rows_text();   // with the MODS tab's rows, below
+void follow_language();
 
 // The Mods page (Settings > Mods, and the MODS tab's All settings): every mod's rows.
 bool write_mods_page() {
@@ -1611,6 +1613,7 @@ bool write_mods_page() {
     {
         std::scoped_lock lk{g_mu};
         hub_rows_text();
+        follow_language();
         for (std::size_t i = 0; i < g_rows.size(); ++i)
             if (g_rows[i].mod != &g_hub_owner) items.push_back({static_cast<int>(i), "", ""});
     }
@@ -1734,6 +1737,42 @@ std::string hub_tile_text(int k) {
     if (k == 1)
         if (const int out = updates_out(); out > 0) return trf("UPDATES ({0})", {std::to_string(out)});
     return tr(kHubTileNames[k]);
+}
+
+// Text the mods got from tr() (API 10), in the game's language now: each row's, link's and page's
+// that the mod gave as tr()'s text (l10n.hpp). Before the pages are written, under g_mu; the game's
+// language is read once for the lot.
+void follow_language() {
+    const std::string tag = l10n_language();
+    auto follow           = [&tag](FH2Mod* m, const std::string& slot, std::string& text) { l10n_follow(m, slot, text, tag); };
+    auto row_text         = [&follow](FH2Mod* m, const std::string& slot, std::string& label, std::string& description) {
+        follow(m, slot + ".label", label);
+        follow(m, slot + ".description", description);
+    };
+    for (Row& r : g_rows) {
+        if (r.mod == &g_hub_owner) continue;
+        row_text(r.mod, "row." + r.key, r.label, r.description);
+        for (std::size_t c = 0; c < r.choices.size(); ++c) follow(r.mod, "row." + r.key + ".choice." + std::to_string(c), r.choices[c]);
+    }
+    for (LinkRow& l : g_links) row_text(l.mod, "row." + l.key, l.label, l.description);
+    for (ModPage& pg : g_pages) {
+        const std::string s = "page." + pg.key;
+        follow(pg.mod, s + ".title", pg.title);
+        row_text(pg.mod, s, pg.label, pg.description);
+        for (std::size_t i = 0; i < pg.rows.size(); ++i) {
+            PageRowData& d      = pg.rows[i];
+            const std::string r = s + ".row." + std::to_string(i);
+            row_text(pg.mod, r, d.label, d.description);
+            follow(pg.mod, r + ".value", d.value);
+            follow(pg.mod, r + ".footer", d.footer);
+        }
+    }
+}
+
+// The mods' descriptions on the MODS tab, in the game's language now (under g_page_mu).
+void follow_descriptions() {
+    for (ModEntry& e : g_entries)
+        if (e.mod) e.description = mod_description(e.mod);
 }
 
 // The "Load when playing online" rows' text, in the game's language now (under g_mu).
@@ -2132,8 +2171,10 @@ bool write_hub_page(int p) {
     {
         std::scoped_lock lk{g_mu};
         hub_rows_text();
+        follow_language();
     }
     std::scoped_lock lk{g_page_mu};
+    follow_descriptions();
     switch (p) {
         case kHubInstalled: {
             // views 1..nmods: each mod's settings; then the mods' pages, each from its mod's
@@ -2612,7 +2653,11 @@ struct FakeLocString {
     const wchar_t* text;
 };
 void* g_loc_vt[11];
-const wchar_t* fake_text(FakeLocString* self) { return tr_w(self->text); }   // in the game's language, as it's shown
+// in the game's language, as it's shown: a mod's text from tr() (API 10), or the platform's own
+const wchar_t* fake_text(FakeLocString* self) {
+    const wchar_t* t = l10n_follow_w(self->text);
+    return t ? t : tr_w(self->text);
+}
 void** fake_clone(FakeLocString* self, void** out) {
     InterlockedIncrement(reinterpret_cast<volatile LONG*>(&self->refs));
     *out = self;
@@ -3605,7 +3650,11 @@ bool write_title_page() {
     std::vector<std::pair<int, std::string>> lines;
     {
         std::scoped_lock lk{g_mu};
-        for (const TitleEntry& e : g_titles) lines.emplace_back(e.button, e.label);
+        for (TitleEntry& e : g_titles) {
+            l10n_follow(e.mod, "title." + e.key + ".label", e.label);   // tr()'s text, in the game's language now (API 10)
+            if (text_chars(e.label) > kMaxTitleLabel) e.label = cut_text(e.label, kMaxTitleLabel);
+            lines.emplace_back(e.button, e.label);
+        }
     }
     if (lines.empty()) {
         remove_leftover_file(kTitleFile);
@@ -3985,6 +4034,8 @@ int settings_add(FH2Mod* m, const FH2Setting* s) {
             return 0;
         }
         g_links.push_back({m, s->key, s->label && *s->label ? s->label : s->key, s->description ? s->description : "", url});
+        l10n_note(m, std::string("row.") + s->key + ".label", s->label);   // tr()'s text follows the game's language (API 10)
+        l10n_note(m, std::string("row.") + s->key + ".description", s->description);
         log_line(m->name, "MODS tab link: " + g_links.back().label + " (" + url + ")" +
                               (g_written ? "; the page is already written, so it shows from the next launch" : ""));
         return 1;
@@ -3994,6 +4045,8 @@ int settings_add(FH2Mod* m, const FH2Setting* s) {
     r.key        = s->key;
     r.label      = s->label && *s->label ? s->label : s->key;
     r.description = s->description ? s->description : "";
+    l10n_note(m, "row." + r.key + ".label", s->label);   // tr()'s text follows the game's language (API 10)
+    l10n_note(m, "row." + r.key + ".description", s->description);
     r.prop       = "FH2Mod_" + std::to_string(g_rows.size() - 1);
     r.value      = s->value ? 1 : 0;
     r.boot       = r.value;
@@ -4026,8 +4079,10 @@ int settings_add(FH2Mod* m, const FH2Setting* s) {
             return 0;
         }
         // shown like the game's own option rows; underneath, a slider over the choices' numbers
-        for (uint32_t c = 0; c < s->choice_count; ++c)
+        for (uint32_t c = 0; c < s->choice_count; ++c) {
             r.choices.push_back(s->choices[c] && *s->choices[c] ? s->choices[c] : "?");
+            l10n_note(m, "row." + r.key + ".choice." + std::to_string(c), s->choices[c]);
+        }
         const int last = static_cast<int>(s->choice_count) - 1;
         const int v    = s->value < 0 ? 0 : s->value > last ? last : s->value;
         r.slider       = true;
@@ -4061,12 +4116,19 @@ int settings_set_text(FH2Mod* m, const char* key, const char* label, const char*
         if (description) r->description = description;
         if (choices)
             for (uint32_t c = 0; c < choice_count; ++c) r->choices[c] = choices[c] && *choices[c] ? choices[c] : "?";
+        // tr()'s text follows the game's language from here (API 10); other text stays as given
+        if (label && *label) l10n_note(m, std::string("row.") + key + ".label", label);
+        if (description) l10n_note(m, std::string("row.") + key + ".description", description);
+        if (choices)
+            for (uint32_t c = 0; c < choice_count; ++c) l10n_note(m, std::string("row.") + key + ".choice." + std::to_string(c), choices[c]);
         return 1;
     }
     for (LinkRow& l : g_links)
         if (l.mod == m && l.key == key) {
             if (label && *label) l.label = label;
             if (description) l.description = description;
+            if (label && *label) l10n_note(m, std::string("row.") + key + ".label", label);
+            if (description) l10n_note(m, std::string("row.") + key + ".description", description);
             return 1;
         }
     log_line(m->name, std::string("set_setting_text: there's no row called ") + key);
@@ -4119,6 +4181,9 @@ int pages_add(FH2Mod* m, const FH2Page* p) {
     pg.title       = p->title;
     pg.label       = p->label && *p->label ? p->label : p->title;
     pg.description = p->description ? p->description : "";
+    l10n_note(m, "page." + pg.key + ".title", p->title);   // tr()'s text follows the game's language (API 10)
+    l10n_note(m, "page." + pg.key + ".label", p->label && *p->label ? p->label : p->title);
+    l10n_note(m, "page." + pg.key + ".description", p->description);
     pg.tile        = tile;
     pg.on_open     = p->on_open;
     pg.on_select   = p->on_select;
@@ -4167,6 +4232,15 @@ int pages_set_rows(FH2Mod* m, const char* key, const FH2PageRow* rows, uint32_t 
     std::scoped_lock lk{g_mu};
     for (ModPage& pg : g_pages)
         if (pg.mod == m && pg.key == key) {
+            // tr()'s text follows the game's language (API 10)
+            for (uint32_t i = 0; i < count; ++i) {
+                const FH2PageRow& r = *reinterpret_cast<const FH2PageRow*>(reinterpret_cast<const uint8_t*>(rows) + std::size_t{i} * stride);
+                const std::string s = "page." + pg.key + ".row." + std::to_string(i);
+                l10n_note(m, s + ".label", r.label);
+                l10n_note(m, s + ".value", r.value);
+                l10n_note(m, s + ".description", r.description);
+                l10n_note(m, s + ".footer", r.footer);
+            }
             pg.rows = std::move(data);
             return 1;
         }
@@ -4426,6 +4500,7 @@ int title_add(FH2Mod* m, const FH2TitleEntry* e) {
         label = cut_text(label, kMaxTitleLabel);
         log_line(m->name, std::string("add_title_entry: ") + e->key + "'s label is cut to \"" + label + "\"");
     }
+    l10n_note(m, std::string("title.") + e->key + ".label", e->label);   // tr()'s text follows the game's language (API 10)
     TitleEntry& t = g_titles.emplace_back();
     t.mod         = m;
     t.key         = e->key;
@@ -4444,11 +4519,22 @@ int title_add(FH2Mod* m, const FH2TitleEntry* e) {
         t.loc.push_back(loc_string(t.list_title.c_str()));
         t.loc.push_back(loc_string(t.list_message.c_str()));
         for (const std::wstring& c : t.wchoices) t.loc.push_back(loc_string(c.c_str()));
+        // tr()'s text, in the game's language as the list shows (API 10)
+        // without a list_title it's the label, cut to kMaxTitleLabel as the label is
+        const bool own_title    = e->list_title && *e->list_title;
+        const char* given_title = own_title ? e->list_title : e->label;
+        const std::size_t cut   = own_title ? 0 : kMaxTitleLabel;
+        l10n_note_w(m, t.list_title.c_str(), given_title, {}, cut);
+        l10n_note_w(m, t.list_message.c_str(), e->list_message);
+        for (std::size_t c = 0; c < t.choices.size(); ++c) l10n_note_w(m, t.wchoices[c].c_str(), e->choices[c]);
         if (t.choices.size() > kTitleListFits) {
             const std::size_t pages = (t.choices.size() + kTitlePageSize - 1) / kTitlePageSize;
             for (std::size_t p = 0; p < pages; ++p)
                 t.page_titles.push_back(t.list_title + L"  " + std::to_wstring(p + 1) + L"/" + std::to_wstring(pages));
-            for (const std::wstring& pt : t.page_titles) t.page_loc.push_back(loc_string(pt.c_str()));
+            for (const std::wstring& pt : t.page_titles) {
+                t.page_loc.push_back(loc_string(pt.c_str()));
+                l10n_note_w(m, pt.c_str(), given_title, pt.substr(t.list_title.size()), cut);
+            }
             if (!g_loc_previous) {
                 g_loc_previous = loc_string(L"Previous");
                 g_loc_next     = loc_string(L"Next");

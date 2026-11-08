@@ -20,6 +20,7 @@
 #include <psapi.h>
 
 #include "hud_layer.hpp"
+#include "l10n.hpp"
 #include "lang.hpp"
 #include "platform.hpp"
 #include "platform_version.h"
@@ -267,6 +268,8 @@ std::set<std::string> read_manifest() {
     return t;
 }
 
+std::vector<std::string> split_lines(const char* s);   // below
+
 // Rebuilds every dirty table from all mods' edits (later registrations win
 // on the same key), and Main.str's "TO START" from the notices.
 void apply_all() {
@@ -276,13 +279,29 @@ void apply_all() {
     for (const auto& table : g_dirty) {
         std::map<uint16_t, std::wstring> keys;
         std::map<std::wstring, std::wstring> texts;
+        // set_string_tr's (API 10): each language's table gets that language's text
+        struct TrText {
+            FH2Mod* mod;
+            std::string key;
+            std::wstring english;
+        };
+        std::map<uint16_t, TrText> tr_keys;
         for (const auto& m : g_mods) {
             if (auto it = m->set.find(table); it != m->set.end())
                 for (const auto& [k, v] : it->second) {
-                    if (keys.count(k) && keys[k] != v)
+                    if ((keys.count(k) && keys[k] != v) || tr_keys.count(k))
                         plog("note: " + m->name + " overrides another mod's string " + std::to_string(k) + " in " +
                              g_table_names[table]);
                     keys[k] = v;
+                    tr_keys.erase(k);
+                }
+            if (auto it = m->set_tr.find(table); it != m->set_tr.end())
+                for (const auto& [k, v] : it->second) {
+                    if (keys.count(k) || tr_keys.count(k))
+                        plog("note: " + m->name + " overrides another mod's string " + std::to_string(k) + " in " +
+                             g_table_names[table]);
+                    tr_keys[k] = {m.get(), v.first, v.second};
+                    keys.erase(k);
                 }
             if (auto it = m->repl.find(table); it != m->repl.end())
                 for (const auto& [f, t] : it->second) texts[f] = t;
@@ -299,15 +318,28 @@ void apply_all() {
         }
         // Car names a pack or mod gave as text, as new keys (database.cpp).
         const auto add    = table == "data_car.str" ? database_strings() : std::map<uint16_t, std::wstring>{};
-        const bool remove = keys.empty() && texts.empty() && !notices && add.empty();
+        const bool remove = keys.empty() && tr_keys.empty() && texts.empty() && !notices && add.empty();
         const auto name   = g_table_names.count(table) ? g_table_names[table] : table;
         const int n       = override_string_table(
             g_game, name,
-            [&](uint16_t key, const std::wstring& t) {
+            [&](std::string_view lang, uint16_t key, const std::wstring& t) {
                 std::wstring s = t;
                 if (auto k = keys.find(key); k != keys.end()) s = k->second;
+                if (auto k = tr_keys.find(key); k != tr_keys.end())
+                    s = l10n_table_text(k->second.mod, k->second.key, k->second.english, lang);
                 if (auto x = texts.find(s); x != texts.end()) s = x->second;
-                if (is_main && key == kToStartKey) s = title_with_notices(g_azimuth, s);
+                if (is_main && key == kToStartKey)
+                    // a notice a mod got from tr() (API 10) in this table's language, then the platform's own lines
+                    s = title_with_notices(g_azimuth, s, [&](const std::wstring& who, const std::vector<std::string>& lines) {
+                        for (const auto& m : g_mods) {
+                            std::string text;
+                            if (_wcsicmp(m->wname.c_str(), who.c_str()) || !l10n_text_in(m.get(), "notice", lang, text)) continue;
+                            std::vector<std::string> out = split_lines(text.c_str());
+                            out.insert(out.end(), m->status.begin(), m->status.end());
+                            return out;
+                        }
+                        return lines;
+                    });
                 return s;
             },
             remove, override_root(), add);
@@ -319,8 +351,8 @@ void apply_all() {
             if (n) plog("removed " + name + " overrides (" + std::to_string(n) + " languages)");
             written.erase(table);
         } else {
-            plog("wrote " + name + " for " + std::to_string(n) + " languages (" + std::to_string(keys.size()) +
-                 " key edits, " + std::to_string(texts.size()) + " text replacements" +
+            plog("wrote " + name + " for " + std::to_string(n) + " languages (" + std::to_string(keys.size() + tr_keys.size()) +
+                 " key edits, " + (tr_keys.empty() ? "" : std::to_string(tr_keys.size()) + " of them in each language's own words, ") + std::to_string(texts.size()) + " text replacements" +
                  (add.empty() ? "" : ", " + std::to_string(add.size()) + " car names added") +
                  (is_main && notices ? ", title notices" : "") + ")");
             written.insert(table);
@@ -468,6 +500,8 @@ FH2Mod* api_register(const FH2ModInfo* info) {
         m->offline_only = info->offline_only != 0;   // API 9
     m->wname           = widen(m->name);
     FH2Mod* raw        = m.get();
+    // the description in the game's language, from the mod's catalogue (API 10), once it has one
+    if (!m->description.empty()) l10n_note_key(raw, "mod.description", "mod.description", m->description);
     if (m->offline_only && g_online) {
         std::scoped_lock lk{g_mu};
         const auto choices = online_choices();
@@ -513,6 +547,17 @@ void api_set_string(FH2Mod* m, const char* table, uint16_t key, const wchar_t* t
     if (!m || !table) return;
     std::scoped_lock lk{g_mu};
     m->set[lower(table)][key] = text ? text : L"";
+    if (auto it = m->set_tr.find(lower(table)); it != m->set_tr.end()) it->second.erase(key);
+    touch(table);
+}
+
+// Each language's table with its own text (API 10): looked up in the mod's catalogues as the
+// tables are written, for every language, so the game picks the text itself.
+void api_set_string_tr(FH2Mod* m, const char* table, uint16_t key, const char* msg_key, const wchar_t* english) {
+    if (!m || !table) return;
+    std::scoped_lock lk{g_mu};
+    m->set_tr[lower(table)][key] = {msg_key ? msg_key : "", english ? english : L""};
+    if (auto it = m->set.find(lower(table)); it != m->set.end()) it->second.erase(key);
     touch(table);
 }
 
@@ -528,12 +573,15 @@ void api_clear_strings(FH2Mod* m, const char* table) {
     std::scoped_lock lk{g_mu};
     if (table) {
         m->set.erase(lower(table));
+        m->set_tr.erase(lower(table));
         m->repl.erase(lower(table));
         touch(table);
     } else {
         for (const auto& [t, _] : m->set) g_dirty.insert(t);
+        for (const auto& [t, _] : m->set_tr) g_dirty.insert(t);
         for (const auto& [t, _] : m->repl) g_dirty.insert(t);
         m->set.clear();
+        m->set_tr.clear();
         m->repl.clear();
     }
 }
@@ -542,6 +590,7 @@ void api_apply_strings(FH2Mod*) { apply_all(); }
 
 void api_set_notice(FH2Mod* m, const char* lines) {
     if (!m) return;
+    l10n_note(m, "notice", lines);   // tr()'s text (API 10): each language's title screen gets its own
     std::scoped_lock lk{g_mu};
     m->notice = split_lines(lines);
     refresh_notice(m);
@@ -658,6 +707,7 @@ int api_game_language(char* code, size_t size) { return game_language(code, size
 
 void api_set_mod_description(FH2Mod* m, const char* description) {
     if (!m) return;
+    l10n_note(m, "mod.description", description);   // tr()'s text follows the game's language; other text stays
     std::scoped_lock lk{g_mu};
     m->description = description ? description : "";
 }
@@ -776,6 +826,7 @@ DWORD WINAPI load_mods(LPVOID) {
         return 0;
     }
     start_media_overrides();
+    l10n_start();
 
     struct Loaded {
         std::wstring file;
@@ -1131,6 +1182,16 @@ std::string latest_known(const FH2Mod* m) {
     return m ? m->latest : std::string();
 }
 
+std::string mod_description(FH2Mod* m) {
+    std::string d;
+    {
+        std::scoped_lock lk{g_mu};
+        d = m->description;
+    }
+    l10n_follow(m, "mod.description", d);
+    return d;
+}
+
 std::vector<ModEntry> mod_entries() {
     // remembered: dll -> name, version, description
     std::map<std::wstring, std::vector<std::wstring>> known;
@@ -1157,6 +1218,7 @@ std::vector<ModEntry> mod_entries() {
                     e.name         = m->name;
                     e.version      = m->version;
                     e.description  = m->description;
+                    l10n_follow(m.get(), "mod.description", e.description);   // in the game's language (API 10)
                     e.repo         = m->repo;
                     e.offline_only = m->offline_only;
                     e.platform_mod = true;
@@ -1289,6 +1351,13 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.game_language     = api_game_language;
                 g_api.set_setting_text  = settings_set_text;
                 g_api.set_mod_description = api_set_mod_description;
+                g_api.language          = l10n_language;
+                g_api.add_translation   = l10n_add_translation;
+                g_api.tr                = l10n_tr;
+                g_api.tr_plural         = l10n_tr_plural;
+                g_api.set_string_tr     = api_set_string_tr;
+                g_api.format_number     = l10n_format_number;
+                g_api.format_date       = l10n_format_date;
                 return load_mods(nullptr);
             },
             nullptr, 0, nullptr))

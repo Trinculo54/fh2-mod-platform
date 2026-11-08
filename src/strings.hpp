@@ -36,10 +36,11 @@ std::filesystem::path find_game_mount(const std::filesystem::path& azimuth_dir,
 // Writes `file` from every language zip, edited, to
 // <mount>\mediaoverride\Stripped\StringTables\<lang>\<file>. With `remove`
 // set, deletes those overrides instead. A non-empty `override_root` is used instead of
-// <mount>\mediaoverride. `add`: new keys, as edit_lsb2. Returns how many were written or
+// <mount>\mediaoverride. `edit` is told which language's table it's editing: the zip's name,
+// as it's spelt ("EN", "br"). `add`: new keys, as edit_lsb2. Returns how many were written or
 // removed.
 int override_string_table(const std::filesystem::path& mount, std::string_view file,
-                          const std::function<std::wstring(uint16_t, const std::wstring&)>& edit,
+                          const std::function<std::wstring(std::string_view lang, uint16_t, const std::wstring&)>& edit,
                           bool remove = false, const std::filesystem::path& override_root = {},
                           const std::map<uint16_t, std::wstring>& add = {});
 

@@ -1,0 +1,10 @@
+# TestMod's Brazilian Portuguese, built into TestMod.dll. The platform test puts another in
+# fh2-mods\lang\TestMod\, which wins over this one.
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: pt_BR\n"
+
+msgctxt "row.Greeting.label"
+msgid "Test greeting"
+msgstr "Saudação (da DLL)"

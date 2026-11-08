@@ -195,7 +195,9 @@ void write_notice_file(const fs::path& azimuth, const std::wstring& name, const 
 
 namespace {
 
-std::vector<std::string> notice_lines(const fs::path& azimuth) {
+std::vector<std::string> notice_lines(
+    const fs::path& azimuth,
+    const std::function<std::vector<std::string>(const std::wstring&, const std::vector<std::string>&)>& lines_for = {}) {
     std::error_code ec;
     std::vector<std::pair<std::wstring, std::vector<std::string>>> notes; // sorted by mod name
     for (const auto& e : fs::directory_iterator(notices_dir(azimuth), ec)) {
@@ -208,6 +210,7 @@ std::vector<std::string> notice_lines(const fs::path& azimuth) {
         std::vector<std::string> lines;
         while (std::getline(in, text))
             if (!(text = trim(text)).empty()) lines.push_back(text);
+        if (lines_for) lines = lines_for(e.path().stem().wstring(), lines);
         if (!lines.empty()) notes.emplace_back(e.path().stem().wstring(), lines);
     }
     std::sort(notes.begin(), notes.end());
@@ -220,13 +223,15 @@ std::vector<std::string> notice_lines(const fs::path& azimuth) {
 
 bool any_notices(const fs::path& azimuth) { return !notice_lines(azimuth).empty(); }
 
-std::wstring title_with_notices(const fs::path& azimuth, const std::wstring& to_start) {
+std::wstring title_with_notices(
+    const fs::path& azimuth, const std::wstring& to_start,
+    const std::function<std::vector<std::string>(const std::wstring&, const std::vector<std::string>&)>& lines_for) {
     // "TO START" is its own text box beside "PRESS (A)", centred vertically
     // on it. Blank lines above balance the notice lines below so it stays
     // level with the button and the notices stack underneath; one extra
     // blank line evens out the box sitting a little high (checked in game).
     std::wstring above, below;
-    for (const auto& l : notice_lines(azimuth)) {
+    for (const auto& l : notice_lines(azimuth, lines_for)) {
         above += L"\n";
         below += L"\n" + widen(l);
     }

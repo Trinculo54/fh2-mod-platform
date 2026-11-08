@@ -53,7 +53,7 @@ set_source_files_properties(${_sqlite_src} PROPERTIES
     COMPILE_DEFINITIONS "SQLITE_OMIT_LOAD_EXTENSION;SQLITE_DEFAULT_MEMSTATUS=0")
 
 add_library(fh2mod_platform SHARED src/platform.cpp src/strings.cpp src/updates.cpp src/files.cpp
-            src/database.cpp src/car_ids.cpp src/media_overrides.cpp src/car_packs.cpp src/titles.cpp src/session.cpp src/hotkeys.cpp src/commands.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/pad_layer.cpp src/xml_text.cpp src/lang.cpp src/text.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
+            src/database.cpp src/car_ids.cpp src/media_overrides.cpp src/car_packs.cpp src/titles.cpp src/session.cpp src/hotkeys.cpp src/commands.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/pad_layer.cpp src/xml_text.cpp src/lang.cpp src/text.cpp src/l10n.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
 target_include_directories(fh2mod_platform PRIVATE third_party/minhook/include ${_minhook} third_party/sqlite)
 if(NOT MSVC)
     # InterlockedCompareExchange128, for rewriting call sites atomically.
@@ -168,6 +168,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_executable(text_test tests/text_test.cpp src/text.cpp)
         target_include_directories(text_test PRIVATE src)
         target_link_options(text_test PRIVATE -static)
+        # Mods' translations and text in the game's language (src/l10n.cpp), with no game: run l10n_test.exe.
+        add_executable(l10n_test tests/l10n_test.cpp src/l10n.cpp)
+        target_include_directories(l10n_test PRIVATE include src)
+        target_compile_definitions(l10n_test PRIVATE UNICODE _UNICODE)
+        target_compile_options(l10n_test PRIVATE ${_warn})
+        target_link_options(l10n_test PRIVATE -municode -static)
         # The pad layer preview's rules (src/pad_engine.hpp), with no game: run pad_engine_test.exe.
         add_executable(pad_engine_test tests/pad_engine_test.cpp)
         target_include_directories(pad_engine_test PRIVATE include src)

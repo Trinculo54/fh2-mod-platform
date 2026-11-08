@@ -1,7 +1,8 @@
 // A mod for the platform test: notices, conflicting edits, a late edit,
 // file overrides, database changes, an interface for AaaMod, pages (API 8),
-// title-screen entries (API 9).
+// title-screen entries (API 9), translations (API 10).
 #include "fh2mod.h"
+#include "fh2mod_l10n.h"
 #include <windows.h>
 
 #include <cstdio>
@@ -9,6 +10,9 @@
 
 static const FH2ModApi* g_api;
 static FH2Mod* g_mod;
+
+// tests/l10n/pl.po and pt_BR.po, built in by tools/l10n/po2inc.py (tests/run_platform_test.sh checks it's up to date)
+#include "l10n/test_mod_l10n.inc"
 
 struct MathV1 {
     uint32_t size;
@@ -20,7 +24,11 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     g_api = api;
     FH2ModInfo info{sizeof info, "TestMod", "1.0.0", nullptr, "9.9.9", 0};
     g_mod = api->register_mod(&info);
-    api->set_notice(g_mod, "Test notice line\n\nsecond line  ");
+    // Translations (API 10): Polish and Brazilian Portuguese; the platform test has a Brazilian Portuguese file in
+    // fh2-mods\lang\TestMod that's used instead of the second.
+    FH2_ADD_TRANSLATIONS(api, g_mod, test_mod_translations);
+    // L10N(notice-line): TestMod's notice on the title screen, in each language's own words (the spaces at the end are trimmed)
+    api->set_notice(g_mod, FH2_TR(api, g_mod, "notice", "Test notice line\n\nsecond line  "));
     api->replace_string(g_mod, "AIPlayers.str", L"Nocomply76", L"Buddy1");
     api->set_string(g_mod, "LoadingMessages.str", 0x6875, L"from TestMod");
 
@@ -143,6 +151,24 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->set_setting_text(g_mod, "Button", nullptr, nullptr, renamed, 2);   // refused: it has 3
     api->set_setting_text(g_mod, "Nope", "x", nullptr, nullptr, 0);          // refused: no such row
     api->set_mod_description(g_mod, "TestMod's description, set later.");
+
+    // Translations (API 10), in the language last time (Polish: the platform test writes platform-language.ini).
+    api->log(g_mod, (std::string("language ") + api->language()).c_str());
+    FH2Setting greet{sizeof greet};
+    greet.key = "Greeting";
+    // L10N: a row on the Mods page
+    greet.label = FH2_TR(api, g_mod, "row.Greeting.label", "Test greeting");
+    greet.description = FH2_TR(api, g_mod, "row.Greeting.description", "A row whose text is in the game's language.");
+    greet.on_change = [](void*, const char*, int) {};
+    api->add_setting(g_mod, &greet);
+    api->log(g_mod, ("plural: " + fh2_fill(FH2_TR_PLURAL(api, g_mod, "count.cars", "{n} car", "{n} cars", 5), {{"n", fh2_number(api, 5)}})).c_str());
+    api->log(g_mod, (std::string("stale: ") + FH2_TR(api, g_mod, "row.Stale.label", "New English")).c_str());
+    api->log(g_mod, (std::string("fuzzy: ") + FH2_TR(api, g_mod, "row.Fuzzy.label", "Not sure yet")).c_str());
+    char date[32];
+    api->format_date(2026, 11, 8, date, sizeof date);
+    api->log(g_mod, ("number: " + fh2_number(api, 1234.5, 1) + ", date: " + date).c_str());
+    // each language's string table with its own text
+    api->set_string_tr(g_mod, "LoadingMessages.str", 0x5507, "loading.tip", L"A loading tip from TestMod");
 
     // Sessions: the id, and a log of our own named after it (three kept); a bad folder name.
     api->log(g_mod, (std::string("session id ") + api->session_id()).c_str());
