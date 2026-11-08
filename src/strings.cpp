@@ -453,7 +453,7 @@ fs::path find_game_mount(const fs::path& azimuth_dir, const fs::path& command_li
 }
 
 int override_string_table(const fs::path& mount, std::string_view file,
-                          const std::function<std::wstring(uint16_t, const std::wstring&)>& edit, bool remove,
+                          const std::function<std::wstring(std::string_view, uint16_t, const std::wstring&)>& edit, bool remove,
                           const fs::path& override_root, const std::map<uint16_t, std::wstring>& add) {
     std::error_code ec;
     const fs::path tables   = mount / "media" / "Stripped" / "StringTables";
@@ -468,7 +468,9 @@ int override_string_table(const fs::path& mount, std::string_view file,
         }
         const auto orig = unzip_file(e.path(), file);
         if (orig.empty()) continue;
-        const auto data = edit_lsb2(orig, edit, nullptr, add);
+        const std::string lang = e.path().stem().string();
+        const auto data        = edit_lsb2(
+            orig, [&](uint16_t key, const std::wstring& text) { return edit(lang, key, text); }, nullptr, add);
         if (data.empty()) continue;
         fs::create_directories(target.parent_path(), ec);
         const auto tmp = target.wstring() + L".tmp";
