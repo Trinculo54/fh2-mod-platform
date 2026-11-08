@@ -1,6 +1,6 @@
 # API reference
 
-Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5, 7 with 2.6, 8 with 2.7 and 9 with 2.8. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 the Mods page, version 5 its sliders, version 6 mod descriptions and link rows for the MODS tab, version 7 byte patches and instruction hooks, version 8 pages of your own, and version 9 title-screen entries, choice rows and online play (FH2MP); the sections for those say so.
+Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5, 7 with 2.6, 8 with 2.7, 9 with 2.8 and 10 with 2.9. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 the Mods page, version 5 its sliders, version 6 mod descriptions and link rows for the MODS tab, version 7 byte patches and instruction hooks, version 8 pages of your own, and version 9 title-screen entries, choice rows and online play (FH2MP); the sections for those say so.
 
 ## Rules that apply everywhere
 
@@ -72,7 +72,7 @@ Sets the string with `key` in `table` (for example `"Main.str"`) to `text`, in e
 void replace_string(FH2Mod* mod, const char* table, const wchar_t* from, const wchar_t* to);
 ```
 
-Replaces every string in `table` that is exactly `from` (the whole string, case-sensitive) with `to`. This runs after key edits, so it sees their results. It's handy for text that's the same in every language, like the names in `AIPlayers.str`.
+Replaces every string in `table` that is exactly `from` (the whole string, case-sensitive) with `to`. This runs after key edits, so it sees their results. It's handy for text that's the same in every language, like the names in `AIPlayers.str`. Each language's table has its own text, so English `from` only matches the English tables (EN and GB, and CZ and HU, whose text is English); for your text in every language's own words, see [set_string_tr](#translations-api-10).
 
 ## clear_strings
 
@@ -99,6 +99,8 @@ void set_notice(FH2Mod* mod, const char* utf8_lines);
 ```
 
 Sets your lines on the title screen, under "PRESS (A) TO START". Separate lines with `\n`; empty lines are dropped, and null or `""` clears them. Each line fits about 40 characters. Your lines appear together with every other mod's, sorted by mod name, with the platform's own update and version lines for your mod after yours.
+
+From platform 2.9.0, lines you got from [tr()](#translations-api-10) are written into each language's `Main.str` in that language's words, so the title screen matches the game's language whatever it picks.
 
 They're saved to `fh2-mods\notices\<name>.txt` and written into `Main.str` the next time strings are applied, which happens on its own after `fh2mod_init`. Mods from before the platform (WheresMyBuddy 1.1 and 1.2, FH2 Universal Radio 1.2) read and write the same files, so their notices and yours always end up together.
 
@@ -766,6 +768,65 @@ api->set_mod_description(g_mod, my_text(lang, "Breakable trees and bushes."));
 ```
 
 In Japanese, Korean and Chinese the game's fonts only have the characters its own text uses, so check your translations against them (`media\ui\Fonts.zip`; its `fontsettings.xml` says which font each language uses): a character the font lacks shows as a box.
+
+For most mods, [translations](#translations-api-10) do all of this for you: text from `tr()` follows the game's language without these calls.
+
+## Translations (API 10)
+
+```c
+const char* language(void);
+int add_translation(FH2Mod* mod, const char* lang, const char* po_utf8, size_t size);
+const char* tr(FH2Mod* mod, const char* key, const char* english);
+const char* tr_plural(FH2Mod* mod, const char* key, const char* one, const char* other, int64_t n);
+void set_string_tr(FH2Mod* mod, const char* table, uint16_t key, const char* msg_key, const wchar_t* english);
+int format_number(double v, int decimals, char* out, size_t n);
+int format_date(int year, int month, int day, char* out, size_t n);
+```
+
+Your text in the player's language. You write it in English with a key for each text, translators turn the list of them into a gettext PO file per language, and you build those files into your DLL. [`translating.md`](translating.md) has the whole workflow, for you and for your translators; [`include/fh2mod_l10n.h`](../include/fh2mod_l10n.h) has helpers that also work on older platforms (they give the English there), and `tools/l10n` the scripts that make the files. Anything without a translation shows in English, so you can add translations a language at a time.
+
+```cpp
+#include "fh2mod_l10n.h"
+#include "mymod_l10n.inc"    // tools/l10n/po2inc.py: l10n/pl.po, l10n/pt_BR.po ...
+
+g_mod = api->register_mod(&info);
+FH2_ADD_TRANSLATIONS(api, g_mod, mymod_translations);
+
+FH2Setting s{sizeof s};
+s.key = "Trees";
+// L10N: the row on the Mods page
+s.label = FH2_TR(api, g_mod, "row.Trees.label", "Breakable trees");
+s.description = FH2_TR(api, g_mod, "row.Trees.description", "Trees break when you hit them.");
+api->add_setting(g_mod, &s);
+```
+
+**Following the game's language.** The game picks its language a few seconds after `fh2mod_init`, so text you look up there can be in the wrong one. You don't have to wait for it: every text `tr()` and `tr_plural()` give you is the platform's own copy, and the platform remembers which key and English each one came from. Where you pass one on as it is, the platform looks it up again in the game's language every time it writes the page: a row's label, description and choices (`add_setting`, `set_setting_text`), a page's title, label, description and rows (`add_page`, `set_page_rows`), a title-screen entry's label and its list (`add_title_entry`), a hotkey's label (`add_hotkey`), your title-screen notice (`set_notice`, which gets each language's own words in each language's `Main.str`) and `set_mod_description`. The title screen's entry lines are written once, as the game starts, so they're in the language the game had last time; they follow it from the next launch. Text you make from `tr()`'s, with a number filled in, say, is yours, and stays as you made it: set it again when the page opens (`FH2Page.on_open`). Text you pass that isn't `tr()`'s stays as you gave it, as before.
+
+- **`language`** says which language text is looked up in, as a BCP-47 tag: `en`, `en-GB`, `pl`, `pt-BR`, `de`, `fr`, `es-ES`, `es-MX`, `it`, `ja`, `ko`, `zh-Hant`, `cs`, `hu`, `ru` or `nl`, for the game's EN, GB, PL, BR, DE, FR, ES, MX, IT, JP, KO, CHT, CZ, HU, RU and NL. It's the game's language once the game has one. Before that it's the one the game had last time, which the platform keeps in `fh2-mods\platform-language.ini`, or `en` the first time. `qps` is the test language (below). Call it from any thread, `fh2mod_init` included.
+- **`add_translation`** takes one language's PO file, as UTF-8 text in memory (`size` bytes; the platform copies what it needs). `lang` is the language's tag (`pl`, `pt-BR`; `pt_BR` reads the same). Call it once per language, straight after `register_mod`: `FH2_ADD_TRANSLATIONS` does that for the array `po2inc.py` makes. It reads `msgctxt`, `msgid`, `msgid_plural`, `msgstr` and `msgstr[n]`, text over several lines and C escapes (`\n`, `\"`, `\t`...). It skips entries marked `#, fuzzy` (not checked yet) and untranslated ones, and leaves out an entry whose `{placeholders}` don't match its English, with a line in the log. It returns how many entries it took, or 0 (the log says why).
+  If `fh2-mods\lang\<your mod's name>\<lang>.po` exists, that file is used instead of what you pass, and the log says so. Translators can try their work in game that way, without a build; a file for a language your DLL hasn't got is read too.
+- **`tr`** gives `english` in the language now, or `english` itself when there's no translation. `key` is the PO file's `msgctxt`, a name of your choosing that stays the same when the English changes: `"row.Trees.label"`. `NULL` looks for an entry without one, by its English alone. A translation made from other English than you pass isn't used, so a text you've reworded shows in English until it's translated again rather than with its old meaning (the log says so once). It looks in the language's own translation, then its parent: `pt-BR` then `pt`, `en-GB` then `en`, `es-MX` then `es-ES` then `es`; English comes last. The text stays valid for the session; don't free it, and don't change it. Pass the same English each time: the platform keeps every different text it hands out for the session.
+- **`tr_plural`** is `tr` for text with a count. `one` and `other` are the English forms (the PO file's `msgid` and `msgid_plural`), and the form for `n` is picked by the language's own rules, as in Unicode's CLDR: English and most languages have one form for 1 and another for the rest; Polish has three (1; 2-4, 22-24...; the rest), as do Russian and Czech; Portuguese and French use the singular for 0 and 1; Japanese, Korean and Chinese have one form. It gives you the form with its `{n}` still in it, so fill that in: `fh2_fill` and `fh2_number` in `fh2mod_l10n.h` do it with the number in the language's own style.
+  ```cpp
+  // L10N: under the Achievements page's title
+  const char* t = FH2_TR_PLURAL(api, g_mod, "count.unlocked", "{n} achievement unlocked", "{n} achievements unlocked", n);
+  const std::string unlocked = fh2_fill(t, {{"n", fh2_number(api, n)}});   // "1 234 ..." in Polish
+  row.value = unlocked.c_str();   // copied by set_page_rows
+  ```
+- **`set_string_tr`** is `set_string` with a key: each language's string table gets the text for its own language, so the game shows the right one whatever language it picks, with nothing to follow. `msg_key` and `english` are looked up as `tr()` looks them up (`english` is UTF-16, as `set_string`'s text is). Make it from `fh2mod_init`, as `set_string`: a later one shows from the next launch. `set_string` and `set_string_tr` on the same key replace each other.
+  ```cpp
+  api->set_string_tr(g_mod, "LoadingMessages.str", 0x6875, "loading.tip", L"Trees break when you hit them.");
+  ```
+- **`format_number`** writes `v` with `decimals` digits after the point (0 to 6) as the language writes numbers: `1,234.5` in English (and Japanese, Korean, Chinese and Mexican Spanish), `1 234,5` in Polish, Russian, Czech, Hungarian and French (with a no-break space, U+00A0, which the game's fonts have), and `1.234,5` in Brazilian Portuguese, German, Italian, Dutch and Spanish. **`format_date`** writes a date: `24.10.2026` in Polish, German, Russian and Czech; `24/10/2026` in Portuguese, French, Spanish and Italian; `24-10-2026` in Dutch; `2026/10/24` in Japanese and Chinese; `2026. 10. 24.` in Korean and Hungarian; and `2026-10-24` in English, as the platform writes dates. Both write UTF-8 into `out` and return its length, or 0 (with `""` in `out`) when `n` bytes don't hold it, or the number isn't finite or the date isn't one.
+- **`FH2ModInfo.description`** reaches `register_mod` before your translations do, so the platform looks it up itself, under the key `mod.description`, each time it shows it. Mark it `FH2_TR_DESCRIPTION("...")` so `extract.py` lists it.
+
+**The test language.** With `test=1` in `fh2-mods\platform-language.ini`, every text that goes through `tr()`, `tr_plural()` or `set_string_tr` shows in the test language, `qps`: the English with its letters swapped for Polish and Portuguese ones and padded by how much translations tend to grow (twice the length up to 10 characters, 1.7 times to 20, 1.5 times to 50, 1.35 times beyond), in `[brackets]`. `{placeholders}` stay as they are. Text that's cut off, text that never goes through a translation and capitals that don't work beyond A to Z are then easy to see, before anyone translates anything. Numbers and dates come out as in Polish. There's no row for it on purpose: put `test=0` back, or delete the file, when you're done.
+
+```ini
+; fh2-mods\platform-language.ini (the platform writes "last" itself)
+last=pl
+test=1
+```
 
 ## Crash reports
 
