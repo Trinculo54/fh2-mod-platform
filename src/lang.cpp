@@ -1080,6 +1080,7 @@ const Text kTexts[] = {
   "Dalej",
   "Дальше",
   "Volgende"}},
+// The two title notices are written in English for now (platform.cpp): kept for when they are translated per language.
 {"{0} {1} is available",
  {"{0} {1} está disponível",
   "{0} {1} ist verfügbar",

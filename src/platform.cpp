@@ -439,8 +439,10 @@ void check_updates(FH2Mod* m) {
                                     : "newer than the latest release on GitHub (" + latest + ")")
                           : "up to date (latest release " + latest + when + ")");
     // The platform's own notice has a place of its own (update_notice), so it's found whatever language it's in.
+    // It's in English for now, as the old-platform notice is: it goes into Main.str for every language, and
+    // translated it would be in English or the player's language depending on when the check finishes.
     const bool had   = !m->update_notice.empty();
-    m->update_notice = newer ? trf("{0} {1} is available", {m->name, latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest})
+    m->update_notice = newer ? fill("{0} {1} is available", {m->name, latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest})
                              : std::string();
     if (newer || had) {
         refresh_notice(m);
@@ -487,7 +489,7 @@ FH2Mod* api_register(const FH2ModInfo* info) {
         std::scoped_lock lk{g_mu};
         m->dll = g_current_dll;
         if (!m->platform_version.empty() && compare_versions(m->platform_version, FH2MOD_PLATFORM_VERSION) > 0) {
-            m->status.push_back(trf("Old FH2 Mod Platform: reinstall {0}", {m->name}));
+            m->status.push_back(fill("Old FH2 Mod Platform: reinstall {0}", {m->name}));   // in English (see check_updates)
             log_line(m->name, "built for FH2 Mod Platform " + m->platform_version + ", but this is " +
                                   FH2MOD_PLATFORM_VERSION + "; reinstall it to get the platform it came with");
         }
