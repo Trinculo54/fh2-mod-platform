@@ -2,7 +2,9 @@
 // the game (tests/wine_test.cpp).
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <vector>
 
 namespace fh2platform {
 
@@ -28,5 +30,21 @@ LoadOrder parse_load_order(const std::string& order);
 // ("winmm=n,b", "winmm,dxgi=n,b;d3d11=n"). Names are compared without regard to case, and where two
 // entries name it, the later one counts, as in Wine. `unsaid` when no entry names it.
 LoadOrder env_load_order(const std::string& overrides, const std::string& name);
+
+// The names Wine looks a DLL up by when it's loaded from a program's folder, first to last
+// (dlls/ntdll/loadorder.c): its full path without ".dll" ("Z:\games\Azimuth\winmm"), then
+// "*winmm", then "winmm". `dll` is the full path of the file, with ".dll".
+std::vector<std::string> wine_override_names(const std::string& dll);
+
+// Where Wine looks for what one name says: WINEDLLOVERRIDES, then winecfg's settings for the
+// program (HKCU\Software\Wine\AppDefaults\<exe>\DllOverrides), then its settings for every
+// program (HKCU\Software\Wine\DllOverrides). Each gives `unsaid` when it says nothing.
+struct LoadOrderSources {
+    std::function<LoadOrder(const std::string&)> env, app, global;
+};
+
+// The load order Wine uses, as it decides: for each name in turn, the first source that says
+// anything about it; `unsaid` when none says anything about any of them (Wine's own default).
+LoadOrder wine_load_order(const std::vector<std::string>& names, const LoadOrderSources& from);
 
 } // namespace fh2platform

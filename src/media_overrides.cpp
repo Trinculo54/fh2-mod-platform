@@ -6,8 +6,10 @@
 // doesn't support yet, or Wine without the winmm override), the platform
 // does the same itself. Only then, because Extra Options checks every place
 // it patches and refuses all of its patches if any one was changed first,
-// this one included. Under Wine it can still be on its way when the platform
-// starts (extra_options_expected): that counts as loaded.
+// this one included. Extra Options' winmm.dll is loaded before the platform
+// starts (azimuth.exe imports winmm.dll), so whether it's loaded is decided
+// then. Under Wine, when that can't be told and Wine is set to load it
+// (extra_options_expected), it counts as loaded.
 //
 // Under Proton the game isn't mapped at 0x140000000, so the pointers the
 // checks below compare with the exe on disk are moved by the same amount
@@ -353,21 +355,26 @@ void watch() {
          (code_was_running ? "already executable" : "not executable yet"));
 }
 
-// Says whether Extra Options came, when it was expected but not loaded yet: it patches the game right
-// after it's mapped, so 20 seconds after that it isn't coming.
+// When whether Extra Options is loaded couldn't be told (extra_options_expected): says whether it ran,
+// once it's found or writes its log this launch. It patches the game right after it's mapped, so
+// kExtraOptionsTimeoutMs after that it hasn't.
 void wait_for_extra_options() {
     ULONGLONG mapped = 0;
     for (unsigned i = 0;; ++i) {
         if (!extra_options_dir().empty()) {
-            plog("media overrides: Extra Options has loaded, so mediaoverride is left to it");
+            plog("media overrides: Extra Options is loaded after all, so mediaoverride is left to it");
+            return;
+        }
+        if (extra_options_log_is_new()) {
+            plog("media overrides: Extra Options wrote FH2_ExtraOptions.log this launch, so it's running and "
+                 "mediaoverride is left to it");
             return;
         }
         if (launched_game() == Launched::other) return;
         if (!mapped && i % 10 == 0 && find_game()) mapped = GetTickCount64();
-        if (mapped && GetTickCount64() - mapped > 20000) {
-            plog("media overrides: Extra Options' winmm.dll still isn't loaded 20 seconds after the game was mapped, "
-                 "though Wine is set to load it, so nothing mounts mediaoverride this time; check that "
-                 "FH2_ExtraOptions.log next to azimuth.exe is from this launch");
+        if (mapped && GetTickCount64() - mapped > kExtraOptionsTimeoutMs) {
+            plog("media overrides: Extra Options still hasn't written FH2_ExtraOptions.log 20 seconds after the "
+                 "game was mapped, so it seems not to be running, and nothing mounts mediaoverride this time");
             return;
         }
         Sleep(50);
@@ -383,11 +390,11 @@ void start_media_overrides() {
         return;
     }
     if (extra_options_expected()) {
-        // Under Wine, set to load but not loaded yet (seen under Proton). Swapping the game's file
-        // lookup first would make Extra Options refuse every patch ("unexpected loaded bytes at
-        // media_override_native_resolver"), so mediaoverride is left to it as when it's loaded.
-        plog("media overrides: Extra Options' winmm.dll is next to azimuth.exe and Wine is set to load it, but it "
-             "isn't loaded yet; mediaoverride is left to it");
+        // Under Wine, set to load, but the list of loaded DLLs couldn't be read. Swapping the game's
+        // file lookup under Extra Options would make it refuse every patch ("unexpected loaded bytes
+        // at media_override_native_resolver"), so mediaoverride is left to it as when it's loaded.
+        plog("media overrides: Extra Options' winmm.dll is next to azimuth.exe and Wine is set to load it, but the "
+             "list of loaded DLLs can't be read to see whether it has; mediaoverride is left to it");
         car_packs_unavailable("Extra Options is set to load");
         std::thread(wait_for_extra_options).detach();
         return;

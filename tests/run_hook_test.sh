@@ -10,7 +10,7 @@ b=$root/build-test
 exe=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 other=
 [ -n "${2:-}" ] && other=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
-phases="plain eo wine-builtin changed-code crash"
+phases="plain eo eo-hidden wine-builtin changed-code crash"
 [ -n "$other" ] && phases="$phases other-game skip-launcher"
 status=0
 for phase in $phases; do
@@ -32,11 +32,11 @@ for phase in $phases; do
         [ "$phase" = skip-launcher ] && args=(--skip-launcher)
     fi
     overrides=
-    if [ "$phase" = eo ] || [ "$phase" = wine-builtin ]; then
+    if [ "$phase" = eo ] || [ "$phase" = eo-hidden ] || [ "$phase" = wine-builtin ]; then
         cp "$b/winmm.dll" "$dir/"
         # As on Linux: Extra Options' winmm.dll loads only with this override. Without it (the
         # wine-builtin phase), Wine uses its own winmm.dll and reports the game folder's path for it.
-        [ "$phase" = eo ] && overrides="winmm=n,b"
+        [ "$phase" != wine-builtin ] && overrides="winmm=n,b"
         # Last launch's log says it's done; this launch's mustn't be taken from it.
         printf 'AZIMUTH: winmm proxy initialized; original TLS helper retained.\r\n' > "$dir/FH2_ExtraOptions.log"
         touch -d '1 hour ago' "$dir/FH2_ExtraOptions.log"

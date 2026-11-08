@@ -3,6 +3,9 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <map>
+#include <string>
+#include <vector>
 
 using namespace fh2platform;
 
@@ -77,6 +80,71 @@ int main() {
     check(env_load_order("winmm", "winmm") == LoadOrder::unsaid, "an entry without = is skipped");
     check(env_load_order(";;winmm=n,b;", "winmm") == LoadOrder::native_first, "empty entries are skipped");
     check(env_load_order("d3d11=n;winmm=n,b", "d3d11") == LoadOrder::native_first, "other names are read too");
+
+    // The names Wine looks the winmm.dll next to azimuth.exe up by, first to last.
+    const std::vector<std::string> names = wine_override_names("Z:\\games\\Azimuth\\winmm.dll");
+    check(names == std::vector<std::string>{"Z:\\games\\Azimuth\\winmm", "*winmm", "winmm"},
+          "the full path without .dll, then *winmm, then winmm");
+    check(wine_override_names("C:\\Azimuth\\WINMM.DLL") ==
+              std::vector<std::string>{"C:\\Azimuth\\WINMM", "*WINMM", "WINMM"},
+          ".DLL in capitals goes too");
+    check(wine_override_names("winmm.dll") == std::vector<std::string>{"*winmm", "winmm"}, "no path, no full name");
+
+    // Which source counts, as Wine decides: each name in turn, and for each WINEDLLOVERRIDES, then
+    // winecfg's settings for azimuth.exe, then its settings for every program.
+    struct Fake {
+        std::map<std::string, LoadOrder> says;
+        int asked = 0;
+        LoadOrder operator()(const std::string& name) {
+            ++asked;
+            const auto it = says.find(name);
+            return it == says.end() ? LoadOrder::unsaid : it->second;
+        }
+    };
+    auto decide = [&](Fake& env, Fake& app, Fake& global) {
+        LoadOrderSources from;
+        from.env    = [&](const std::string& n) { return env(n); };
+        from.app    = [&](const std::string& n) { return app(n); };
+        from.global = [&](const std::string& n) { return global(n); };
+        return wine_load_order(names, from);
+    };
+    {
+        Fake env, app, global;
+        check(decide(env, app, global) == LoadOrder::unsaid, "nothing said anywhere is unsaid (Wine's own winmm.dll)");
+        check(env.asked == 3 && app.asked == 3 && global.asked == 3, "every source is asked about every name");
+    }
+    {
+        Fake env{{{"winmm", LoadOrder::native_first}}}, app{{{"winmm", LoadOrder::builtin_first}}}, global;
+        check(decide(env, app, global) == LoadOrder::native_first, "WINEDLLOVERRIDES before azimuth.exe's settings");
+    }
+    {
+        Fake env, app{{{"winmm", LoadOrder::builtin_first}}}, global{{{"winmm", LoadOrder::native_first}}};
+        check(decide(env, app, global) == LoadOrder::builtin_first, "azimuth.exe's settings before everyone's");
+    }
+    {
+        Fake env, app, global{{{"winmm", LoadOrder::native_first}}};
+        check(decide(env, app, global) == LoadOrder::native_first, "everyone's settings when nothing else says");
+    }
+    {
+        Fake env{{{"winmm", LoadOrder::builtin_first}}}, app, global{{{"*winmm", LoadOrder::native_first}}};
+        check(decide(env, app, global) == LoadOrder::native_first,
+              "*winmm anywhere before winmm, even winmm in WINEDLLOVERRIDES");
+    }
+    {
+        Fake env{{{"*winmm", LoadOrder::builtin_first}}},
+            app{{{"Z:\\games\\Azimuth\\winmm", LoadOrder::native_first}}}, global;
+        check(decide(env, app, global) == LoadOrder::native_first, "the full path before *winmm");
+        check(env.asked == 1 && app.asked == 1 && global.asked == 0, "the first answer ends the search");
+    }
+    {
+        Fake env{{{"winmm", LoadOrder::disabled}}}, app, global{{{"winmm", LoadOrder::native_first}}};
+        check(decide(env, app, global) == LoadOrder::disabled, "disabled is an answer too");
+    }
+    {
+        LoadOrderSources from;
+        from.env = [](const std::string& n) { return n == "winmm" ? LoadOrder::native_first : LoadOrder::unsaid; };
+        check(wine_load_order(names, from) == LoadOrder::native_first, "sources that aren't given are skipped");
+    }
 
     std::printf(g_failed ? "\n%d FAILED\n" : "\nALL PASSED\n", g_failed);
     return g_failed ? 1 : 0;

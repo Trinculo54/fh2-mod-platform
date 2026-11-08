@@ -52,4 +52,25 @@ LoadOrder env_load_order(const std::string& overrides, const std::string& name) 
     return got;
 }
 
+std::vector<std::string> wine_override_names(const std::string& dll) {
+    std::string path = dll;
+    if (path.size() >= 4) {
+        std::string ext = path.substr(path.size() - 4);
+        for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (ext == ".dll") path.resize(path.size() - 4);
+    }
+    const std::size_t slash = path.find_last_of("\\/");
+    const std::string name  = slash == std::string::npos ? path : path.substr(slash + 1);
+    if (slash == std::string::npos) return {"*" + name, name};
+    return {path, "*" + name, name};
+}
+
+LoadOrder wine_load_order(const std::vector<std::string>& names, const LoadOrderSources& from) {
+    for (const std::string& name : names)
+        for (const auto* source : {&from.env, &from.app, &from.global})
+            if (*source)
+                if (const LoadOrder o = (*source)(name); o != LoadOrder::unsaid) return o;
+    return LoadOrder::unsaid;
+}
+
 } // namespace fh2platform
