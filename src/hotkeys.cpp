@@ -13,6 +13,7 @@
 // the XInput pads, judged by hud_state.cpp. Without one, poll() is 2.8.0's exactly.
 #include "hud_layer.hpp"
 #include "hud_state.hpp"
+#include "lang.hpp"
 #include "platform.hpp"
 #include "updates.hpp"
 
@@ -419,5 +420,23 @@ void device_sweep_start() {
 }
 
 int device_auto_kbd() { return g_auto_kbd.load(); }
+
+// The rows' text, in the game's language now: before the pages are written.
+void hotkeys_refresh_text() {
+    struct Text {
+        FH2Mod* mod;
+        std::string key, label;
+    };
+    std::vector<Text> rows;
+    {
+        std::scoped_lock lk{g_mu};
+        for (const Hotkey& h : g_hotkeys) rows.push_back({h.mod, h.key, h.label});
+    }
+    const std::string desc = tr("A hotkey. Off turns it off; the game still gets the key or buttons as ever.");
+    for (const Text& r : rows) {
+        settings_set_text(r.mod, ("Hotkey_" + r.key).c_str(), trf("{0}: key", {r.label}).c_str(), desc.c_str(), nullptr, 0);
+        settings_set_text(r.mod, ("HotkeyPad_" + r.key).c_str(), trf("{0}: controller", {r.label}).c_str(), desc.c_str(), nullptr, 0);
+    }
+}
 
 } // namespace fh2platform

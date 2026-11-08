@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define FH2MOD_API_VERSION 9
+#define FH2MOD_API_VERSION 10
 
 #ifdef __cplusplus
 #define FH2MOD_EXPORT extern "C" __declspec(dllexport)
@@ -262,7 +262,8 @@ typedef struct FH2ModApi {
        next to every other mod's. The tile and the page only appear when at
        least one mod adds a row. Add your rows from fh2mod_init: the page is
        written when every mod's fh2mod_init has returned, and rows added
-       after that only show from the next launch.
+       after that only show from the next launch. (Their text can change
+       later, in the game's language: see set_setting_text, API 10.)
 
        Your mod keeps owning the value: pass the current one in, and when the
        player changes it, on_change tells you the new one, so you can save it
@@ -504,6 +505,38 @@ typedef struct FH2ModApi {
        run one at a time, on the platform's command thread (see
        FH2CommandFn). Returns 1 if added, 0 if not (the log says why). */
     int (*add_command)(FH2Mod* mod, const char* name, const char* help, FH2CommandFn fn, void* user);
+
+    /* ==== API version 10 (platform 2.9.0): check api_version >= 10 ======= */
+
+    /* ---- Text in the game's language -------------------------------------
+       The game picks its text language (EN, DE, CHT...) a few seconds after
+       it starts, from its own option, well after fh2mod_init: rows added
+       there can only be in a language you guess. game_language tells you
+       the language once the game has it, and set_setting_text and
+       set_mod_description change your text then. The Mods page, the MODS
+       tab and your mod's page are written each time they're opened, so new
+       text shows the next time the player opens them. Call them any time,
+       from any thread.
+
+       game_language: the game's text language, the code its string tables
+       are named by: "EN", "GB", "DE", "FR", "ES", "MX", "IT", "BR", "NL",
+       "PL", "RU", "JP", "KO", "CHT", "CZ", "HU" (Czech and Hungarian are the
+       game's English text). Returns 1 with the code in `code`, NUL-
+       terminated, or 0 before the game has a language, or with no game.
+       Cheap enough to ask every frame.
+
+       set_setting_text: a row's label, description and, for a choice row,
+       the choices' names. NULL leaves that part as it was; `choices` must
+       have as many names as the row has (`choice_count`). Link rows take a
+       label and a description. Returns 1, or 0 if you have no row called
+       `key` or the choices don't match (the log says why).
+
+       set_mod_description: your FH2ModInfo.description, shown on the MODS
+       tab and with your mod's Load row. */
+    int (*game_language)(char* code, size_t size);
+    int (*set_setting_text)(FH2Mod* mod, const char* key, const char* label, const char* description,
+                            const char* const* choices, uint32_t choice_count);
+    void (*set_mod_description)(FH2Mod* mod, const char* description);
 } FH2ModApi;
 
 /* Called on the game's UI thread when the player changes a row: keep it
