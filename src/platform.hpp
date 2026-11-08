@@ -149,6 +149,11 @@ std::string mod_sql_warning(const std::string& mod);
 // Proton load their own winmm.dll instead of the one beside azimuth.exe unless told otherwise
 // (WINEDLLOVERRIDES="winmm=n,b"), and still report that file's path for it.
 std::filesystem::path extra_options_dir();
+// Under Wine or Proton, whether Extra Options' winmm.dll is next to azimuth.exe and Wine is set to
+// load it rather than its own (WINEDLLOVERRIDES, or winecfg's DLL overrides), so it's on its way even
+// when it isn't loaded yet: it has loaded after the platform started under Proton. Worked out once.
+// Always false on Windows, where it's loaded before the platform starts.
+bool extra_options_expected();
 void fill_hook_api(FH2ModApi& api);
 bool hook_at(const void* p, char* out, std::size_t n); // p is in a hook's trampoline or stub
 // Whether the exe on disk holds `expect` at game address p, n <= 256 bytes (the HUD layer's code checks).

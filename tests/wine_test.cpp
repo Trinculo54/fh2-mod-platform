@@ -44,6 +44,40 @@ int main() {
           "the image's last byte is in it");
     check(!same_pointer(kBase - 1, kBase - 1, kBase, kBase, kSize), "the address before the image isn't in it");
 
+    // Load orders, as Wine reads them (WINEDLLOVERRIDES values and winecfg's registry values).
+    check(parse_load_order("n,b") == LoadOrder::native_first, "\"n,b\" is native first");
+    check(parse_load_order("native,builtin") == LoadOrder::native_first, "\"native,builtin\" (winecfg) is native first");
+    check(parse_load_order("n") == LoadOrder::native_first, "\"n\" is native first");
+    check(parse_load_order("N, B") == LoadOrder::native_first, "capitals and spaces are fine");
+    check(parse_load_order("b,n") == LoadOrder::builtin_first, "\"b,n\" is builtin first");
+    check(parse_load_order("builtin") == LoadOrder::builtin_first, "\"builtin\" is builtin first");
+    check(parse_load_order("") == LoadOrder::disabled, "nothing is disabled");
+    check(parse_load_order(" , ") == LoadOrder::disabled, "only separators is disabled");
+    check(parse_load_order("x,n") == LoadOrder::native_first, "a word that's neither is skipped");
+
+    // WINEDLLOVERRIDES
+    check(env_load_order("winmm=n,b", "winmm") == LoadOrder::native_first, "winmm=n,b (docs/linux.md)");
+    check(env_load_order("winmm,d3dcompiler_47=n,b", "winmm") == LoadOrder::native_first,
+          "winmm first of two names (docs/linux.md, step 2)");
+    check(env_load_order("winmm,dwrite=n,b", "winmm") == LoadOrder::native_first, "winmm with dwrite (Azimuth 1.0.3)");
+    check(env_load_order("dxgi,winmm=n,b", "winmm") == LoadOrder::native_first, "winmm second of two names");
+    check(env_load_order("WinMM=n,b", "winmm") == LoadOrder::native_first, "names without regard to case");
+    check(env_load_order("steam.exe=b;dotnetfx35.exe=b;d3d11=n;dxgi=n;winmm=n,b", "winmm") == LoadOrder::native_first,
+          "winmm after Proton's own entries");
+    check(env_load_order("steam.exe=b;d3d11=n;dxgi=n", "winmm") == LoadOrder::unsaid,
+          "Proton's own entries alone say nothing about winmm");
+    check(env_load_order("", "winmm") == LoadOrder::unsaid, "no WINEDLLOVERRIDES says nothing");
+    check(env_load_order("winmm=b,n", "winmm") == LoadOrder::builtin_first, "winmm=b,n is builtin first");
+    check(env_load_order("winmm=", "winmm") == LoadOrder::disabled, "winmm= is disabled");
+    check(env_load_order("winmm=n,b;winmm=b", "winmm") == LoadOrder::builtin_first, "the later entry counts");
+    check(env_load_order("winmmx=n;xwinmm=n", "winmm") == LoadOrder::unsaid, "only the whole name counts");
+    check(env_load_order("winmm.dll=n,b", "winmm") == LoadOrder::unsaid,
+          "winmm.dll isn't winmm (Wine looks the name up without .dll)");
+    check(env_load_order("*winmm=n,b", "*winmm") == LoadOrder::native_first, "*winmm, the other name Wine tries");
+    check(env_load_order("winmm", "winmm") == LoadOrder::unsaid, "an entry without = is skipped");
+    check(env_load_order(";;winmm=n,b;", "winmm") == LoadOrder::native_first, "empty entries are skipped");
+    check(env_load_order("d3d11=n;winmm=n,b", "d3d11") == LoadOrder::native_first, "other names are read too");
+
     std::printf(g_failed ? "\n%d FAILED\n" : "\nALL PASSED\n", g_failed);
     return g_failed ? 1 : 0;
 }

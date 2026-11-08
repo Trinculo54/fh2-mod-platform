@@ -426,7 +426,9 @@ fs::path instance_media() { return temp_drive() / L"fh2-platform" / L"media"; }
 
 bool instance_layer() {
     std::error_code ec;
-    return !game_mount().empty() && extra_options_dir().empty() && fs::is_directory(azimuth_dir() / L"data" / L"titles", ec);
+    // Extra Options still on its way under Wine counts as here: it mounts mediaoverride, not this layer.
+    return !game_mount().empty() && extra_options_dir().empty() && !extra_options_expected() &&
+           fs::is_directory(azimuth_dir() / L"data" / L"titles", ec);
 }
 
 fs::path override_root() {

@@ -6,7 +6,8 @@
 // doesn't support yet, or Wine without the winmm override), the platform
 // does the same itself. Only then, because Extra Options checks every place
 // it patches and refuses all of its patches if any one was changed first,
-// this one included.
+// this one included. Under Wine it can still be on its way when the platform
+// starts (extra_options_expected): that counts as loaded.
 //
 // Under Proton the game isn't mapped at 0x140000000, so the pointers the
 // checks below compare with the exe on disk are moved by the same amount
@@ -352,12 +353,43 @@ void watch() {
          (code_was_running ? "already executable" : "not executable yet"));
 }
 
+// Says whether Extra Options came, when it was expected but not loaded yet: it patches the game right
+// after it's mapped, so 20 seconds after that it isn't coming.
+void wait_for_extra_options() {
+    ULONGLONG mapped = 0;
+    for (unsigned i = 0;; ++i) {
+        if (!extra_options_dir().empty()) {
+            plog("media overrides: Extra Options has loaded, so mediaoverride is left to it");
+            return;
+        }
+        if (launched_game() == Launched::other) return;
+        if (!mapped && i % 10 == 0 && find_game()) mapped = GetTickCount64();
+        if (mapped && GetTickCount64() - mapped > 20000) {
+            plog("media overrides: Extra Options' winmm.dll still isn't loaded 20 seconds after the game was mapped, "
+                 "though Wine is set to load it, so nothing mounts mediaoverride this time; check that "
+                 "FH2_ExtraOptions.log next to azimuth.exe is from this launch");
+            return;
+        }
+        Sleep(50);
+    }
+}
+
 } // namespace
 
 void start_media_overrides() {
     if (!extra_options_dir().empty()) {
         plog("media overrides: Extra Options is here, so mediaoverride is left to it");
         car_packs_unavailable("Extra Options is loaded");
+        return;
+    }
+    if (extra_options_expected()) {
+        // Under Wine, set to load but not loaded yet (seen under Proton). Swapping the game's file
+        // lookup first would make Extra Options refuse every patch ("unexpected loaded bytes at
+        // media_override_native_resolver"), so mediaoverride is left to it as when it's loaded.
+        plog("media overrides: Extra Options' winmm.dll is next to azimuth.exe and Wine is set to load it, but it "
+             "isn't loaded yet; mediaoverride is left to it");
+        car_packs_unavailable("Extra Options is set to load");
+        std::thread(wait_for_extra_options).detach();
         return;
     }
     plog("media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride and mediapc itself");

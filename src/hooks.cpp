@@ -22,6 +22,7 @@
 // before writing any, and refuses every patch if one doesn't match.
 #include "platform.hpp"
 #include "updates.hpp"
+#include "wine.hpp"
 
 #include <windows.h>
 #include <tlhelp32.h>
@@ -298,6 +299,56 @@ int matches_disk(const void* p, std::size_t n, bool pointer) {
 
 // ---- waiting for Extra Options -----------------------------------------------------
 
+bool under_wine() {
+    HMODULE n = GetModuleHandleW(L"ntdll.dll");
+    return n && GetProcAddress(n, "wine_get_version");
+}
+
+// Whether the winmm.dll next to azimuth.exe is Extra Options': its export's name is in the file.
+bool extra_options_file_here() {
+    HANDLE f = CreateFileW((azimuth_dir() / L"winmm.dll").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    std::string data(4 * 1024 * 1024, '\0');
+    DWORD got = 0;
+    if (!ReadFile(f, data.data(), static_cast<DWORD>(data.size()), &got, nullptr)) got = 0;
+    CloseHandle(f);
+    data.resize(got);
+    return data.find(std::string("Fh2TweaksStatus", 16)) != std::string::npos;
+}
+
+// A DLL override from Wine's registry (what winecfg's Libraries tab writes), as plain text.
+LoadOrder registry_load_order(const std::wstring& key, const wchar_t* name) {
+    wchar_t value[256];
+    DWORD size = sizeof value;
+    if (RegGetValueW(HKEY_CURRENT_USER, key.c_str(), name, RRF_RT_REG_SZ, nullptr, value, &size) != ERROR_SUCCESS)
+        return LoadOrder::unsaid;
+    return parse_load_order(narrow(value));
+}
+
+// Which winmm.dll Wine loads first for azimuth.exe, looked up as Wine does (dlls/ntdll/loadorder.c):
+// "*winmm", then "winmm", each in WINEDLLOVERRIDES, then winecfg's settings for azimuth.exe, then
+// its settings for every program.
+LoadOrder wine_winmm_order() {
+    std::string env;
+    if (const DWORD n = GetEnvironmentVariableA("WINEDLLOVERRIDES", nullptr, 0); n > 1) {
+        env.resize(n);
+        env.resize(GetEnvironmentVariableA("WINEDLLOVERRIDES", env.data(), n));
+    }
+    wchar_t exe[MAX_PATH];
+    const DWORD m          = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const std::wstring app = L"Software\\Wine\\AppDefaults\\" +
+                             (m && m < MAX_PATH ? fs::path{exe}.filename().wstring() : std::wstring{L"azimuth.exe"}) +
+                             L"\\DllOverrides";
+    for (const wchar_t* name : {L"*winmm", L"winmm"}) {
+        LoadOrder o = env_load_order(env, narrow(name));
+        if (o == LoadOrder::unsaid) o = registry_load_order(app, name);
+        if (o == LoadOrder::unsaid) o = registry_load_order(L"Software\\Wine\\DllOverrides", name);
+        if (o != LoadOrder::unsaid) return o;
+    }
+    return LoadOrder::unsaid;
+}
+
 std::atomic<bool> g_code_ready{false};
 constexpr ULONGLONG kExtraOptionsTimeout = 20000;
 
@@ -315,7 +366,8 @@ FILETIME process_start() {
 // launch. Returns "" while it's still to come, or what settled it.
 std::string extra_options_state() {
     const fs::path dir = extra_options_dir();
-    if (dir.empty()) return "no Extra Options";
+    // Under Wine, Extra Options' winmm.dll can still be on its way (extra_options_expected).
+    if (dir.empty()) return extra_options_expected() ? "" : "no Extra Options";
     const fs::path log = dir / L"FH2_ExtraOptions.log";
     HANDLE f = CreateFileW(log.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -346,17 +398,7 @@ bool code_ready() { return g_code_ready.load(std::memory_order_acquire); }
 // Proton use their own unless WINEDLLOVERRIDES="winmm=n,b" says otherwise. (Windows always takes
 // the one in the program's folder.) The file is recognised by its export's name in it.
 bool extra_options_left_out_by_wine() {
-    HMODULE n = GetModuleHandleW(L"ntdll.dll");
-    if (!n || !GetProcAddress(n, "wine_get_version") || !extra_options_dir().empty()) return false;
-    HANDLE f = CreateFileW((azimuth_dir() / L"winmm.dll").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return false;
-    std::string data(4 * 1024 * 1024, '\0');
-    DWORD got = 0;
-    if (!ReadFile(f, data.data(), static_cast<DWORD>(data.size()), &got, nullptr)) got = 0;
-    CloseHandle(f);
-    data.resize(got);
-    return data.find(std::string("Fh2TweaksStatus", 16)) != std::string::npos;
+    return under_wine() && extra_options_dir().empty() && extra_options_file_here();
 }
 
 void open_disk_image();
@@ -448,6 +490,13 @@ std::vector<std::unique_ptr<Site>> g_sites;
 bool g_minhook = false;
 
 } // namespace
+
+bool extra_options_expected() {
+    // Worked out once, so every part of the platform goes by the same answer.
+    static const bool expected = under_wine() && extra_options_file_here() &&
+                                 wine_winmm_order() == LoadOrder::native_first;
+    return expected;
+}
 
 fs::path extra_options_dir() {
     HMODULE w = GetModuleHandleW(L"winmm.dll");
