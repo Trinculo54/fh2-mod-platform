@@ -295,9 +295,11 @@ DWORD WINAPI poll(LPVOID) {
             }
         }
         for (int i = 0; i < 4; ++i) last_pads[i] = pads[i];
-        for (Hotkey* h : fire)
+        for (Hotkey* h : fire) {
+            if (stopped_online(h->mod)) continue;   // stopped for online play (platform.cpp's go_online)
             if (!call_press(h->on_press, h->user, h->key.c_str()))
                 log_line(h->mod->name, "crashed in its on_press for hotkey " + h->key);
+        }
     }
 }
 

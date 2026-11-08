@@ -426,8 +426,10 @@ typedef struct FH2ModApi {
 
     /* ---- Online play -------------------------------------------------------
        1 when the game was started from the FH2MP launcher (online play on the
-       FH2MP servers), 0 otherwise. It's decided once, before any mod loads,
-       and doesn't change during the session. Use it to turn off just the part
+       FH2MP servers), 0 otherwise. It's decided before any mod loads; from
+       platform 2.9.0 it can turn from 0 to 1 later in the session (FH2MP's
+       session found once the mods had started), never back, so check it
+       when it matters rather than once. Use it to turn off just the part
        of your mod that shouldn't run online; for the whole mod, set
        FH2ModInfo.offline_only instead. Call it from anywhere, fh2mod_init
        included. */
@@ -728,6 +730,31 @@ struct FH2PageRow {
     int style;                     /* FH2_ROW_NORMAL, FH2_ROW_DIM or FH2_ROW_HEADING */
     int value_alert;               /* nonzero: the value in red */
 };
+
+/* Online play, for FH2MP (platform 2.9.0): the platform's own interface,
+   there from every mod's fh2mod_init on:
+       const FH2PlatformOnline* o = (const FH2PlatformOnline*)
+           api->get_interface(FH2_ONLINE_INTERFACE, 1);
+   NULL on an older platform. docs/api.md, "Online play", has the rest.
+
+   playing_online: the same as FH2ModApi.playing_online (1 online, 0 not).
+
+   going_online: call it before connecting. From then on the game counts as
+   online: mods that shouldn't run online and had already started (offline,
+   before FH2MP's session was found) are stopped, with their hooks and byte
+   patches off until the game restarts. Returns how many such mods had
+   started in this game, 0 for none, and puts their names in `names` as
+   "Nitro, Other" (cut short to fit `size`, NUL-terminated; NULL for none).
+   Over 0, they ran offline first and may have changed the game in ways the
+   platform can't undo: don't connect, and ask the player to start the game
+   from the FH2MP launcher. Call it from any thread, as often as you like. */
+#define FH2_ONLINE_INTERFACE "FH2Platform.Online"
+
+typedef struct FH2PlatformOnline {
+    uint32_t size;                 /* sizeof(FH2PlatformOnline) */
+    int (*playing_online)(void);
+    int (*going_online)(char* names, size_t size);
+} FH2PlatformOnline;
 
 /* What a mod exports. */
 typedef int (*FH2ModInitFn)(const FH2ModApi* api);

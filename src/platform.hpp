@@ -3,6 +3,7 @@
 
 #include "fh2mod.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -18,6 +19,10 @@ struct FH2Mod {
     std::wstring wname, dll;
     bool check_updates = true;
     bool offline_only  = false;      // FH2ModInfo.offline_only (API 9)
+    // Stopped for online play (platform 2.9.0): it had started offline, then FH2MP went online. Its
+    // hooks are off and stay off, and its hotkeys and commands aren't called, until the game restarts.
+    // Read and written through fh2platform::stopped_online and stop_online (atomic).
+    bool stopped_online = false;
     // table (lower case) -> edits
     std::map<std::string, std::map<uint16_t, std::wstring>> set;
     std::map<std::string, std::map<std::wstring, std::wstring>> repl;
@@ -197,10 +202,17 @@ std::vector<ModEntry> mod_entries();  // in load order, turned-off ones included
 // fh2-mods\platform-disabled.txt: the DLLs the MODS tab turned off (lower case).
 std::set<std::wstring> disabled_mods();
 void set_mod_enabled(const std::wstring& dll, bool on);
-// Online play (platform 2.8.0): the game was started from the FH2MP launcher. Decided once,
-// before the mods load.
+// Online play (platform 2.8.0): FH2MP is on and has a session to play online with. Decided before
+// the mods load; from 2.9.0 it can also turn true later (FH2MP's session found once it has started,
+// or FH2MP saying it's going online), never back.
 bool playing_online();
-bool fh2mp_installed();               // FH2MP.dll is in fh2-mods (turned on or not)
+bool fh2mp_installed();               // FH2MP is in fh2-mods (turned on or not), as FH2MP.dll or under another name
+bool is_fh2mp(const ModEntry& e);     // that entry is FH2MP itself (it always loads online)
+// FH2Mod::stopped_online, from any thread.
+inline bool stopped_online(const FH2Mod* m) {
+    return m && std::atomic_ref<bool>(const_cast<FH2Mod*>(m)->stopped_online).load();
+}
+inline void stop_online(FH2Mod* m) { std::atomic_ref<bool>(m->stopped_online).store(true); }
 // fh2-mods\platform-online.txt: the player's choice per DLL, "Load when playing online".
 void set_mod_online(const std::wstring& dll, bool on);
 // The latest release of a mod on GitHub, once checked ("" before that, or if unknown).

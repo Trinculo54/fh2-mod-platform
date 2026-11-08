@@ -845,6 +845,10 @@ void set_records(Site* s) {
 // Enables or disables `hook`, or every hook of `m` if it's null.
 int switch_hooks(FH2Mod* m, FH2Hook* hook, bool on) {
     if (!m) return 0;
+    if (on && stopped_online(m)) {
+        log_line(m->name, "can't enable hooks: it was stopped for online play (FH2MP went online after it had started)");
+        return 0;
+    }
     std::scoped_lock lk{g_mu};
     if (hook && std::none_of(g_hooks.begin(), g_hooks.end(), [&](const auto& h) { return h.get() == hook; })) {
         log_line(m->name, "can't switch a hook: that's not a hook handle");
