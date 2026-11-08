@@ -136,6 +136,11 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_library(legacy_mod SHARED tests/legacy_mod.cpp)
         set_target_properties(legacy_mod PROPERTIES OUTPUT_NAME Legacy PREFIX "")
         target_link_options(legacy_mod PRIVATE -static)
+        # A stand-in for FH2MP's DLL that registers as FH2MP (the online phases from "online-late" on).
+        add_library(fake_fh2mp SHARED tests/fake_fh2mp.cpp)
+        target_link_libraries(fake_fh2mp PRIVATE fh2mod_api)
+        set_target_properties(fake_fh2mp PROPERTIES OUTPUT_NAME FakeFH2MP PREFIX "")
+        target_link_options(fake_fh2mp PRIVATE -static)
         # The database test, run by tests/run_platform_test.sh too; DbMod.dll plays each mod it needs.
         add_executable(database_test tests/database_test.cpp ${_sqlite_src})
         target_include_directories(database_test PRIVATE third_party/sqlite)

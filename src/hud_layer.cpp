@@ -1394,20 +1394,22 @@ int i_add_hud_layer(FH2Mod* m, const FH2HudLayer* layer) {
                               (layer->lease_ms == 0 ? " (the default)" : ""));
     return 1;
 }
+// A mod stopped for online play (platform.cpp's go_online) can only take its layer down: hide it, let
+// go of the game's HUD, and read its status. Its layer lapses once its lease runs out.
 int i_set_hud_state(FH2Mod* m, const FH2HudState* s) {
-    const int i = g_eng.layer_of(m);
+    const int i = stopped_online(m) ? -1 : g_eng.layer_of(m);
     return i < 0 ? 0 : g_eng.set_state(i, s);
 }
 int i_set_hud_value(FH2Mod* m, int which, float v) {
-    const int i = g_eng.layer_of(m);
+    const int i = stopped_online(m) ? -1 : g_eng.layer_of(m);
     return i < 0 ? 0 : g_eng.set_value(i, which, v);
 }
 int i_show_hud_layer(FH2Mod* m, uint32_t parts) {
-    const int i = g_eng.layer_of(m);
+    const int i = stopped_online(m) && parts ? -1 : g_eng.layer_of(m);
     return i < 0 ? 0 : g_eng.show(i, parts);
 }
 int i_pulse_hud(FH2Mod* m, int pulse) {
-    const int i = g_eng.layer_of(m);
+    const int i = stopped_online(m) ? -1 : g_eng.layer_of(m);
     return i < 0 ? 0 : g_eng.pulse(i, pulse);
 }
 uint32_t i_hud_status(FH2Mod* m) {
@@ -1415,14 +1417,15 @@ uint32_t i_hud_status(FH2Mod* m) {
     return i < 0 ? 0 : g_eng.status(i);
 }
 int i_hold_game_hud(FH2Mod* m, int hold) {
-    const int i = g_eng.layer_of(m);
+    const int i = stopped_online(m) && hold ? -1 : g_eng.layer_of(m);
     return i < 0 ? 0 : g_eng.hold(i, hold);
 }
 int i_play_ui_sound(FH2Mod* m, uint32_t sound) {
-    const int i = g_eng.layer_of(m);
+    const int i = stopped_online(m) ? -1 : g_eng.layer_of(m);
     return i < 0 ? 0 : g_eng.play_sound(i, sound);
 }
 int i_post_hud_feed(FH2Mod* m, const FH2HudFeedLine* line) {
+    if (stopped_online(m)) return 0;
     const int i = g_eng.layer_of(m);
     if (i < 0 && m) {
         static std::atomic<bool> told{false};

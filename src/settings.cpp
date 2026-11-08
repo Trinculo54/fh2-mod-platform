@@ -1712,7 +1712,7 @@ void add_hub_rows() {
         r.on_change = &hub_switch_changed;
         r.user     = reinterpret_cast<void*>(static_cast<std::uintptr_t>(i));
         g_entry_row.push_back(static_cast<int>(g_rows.size() - 1));
-        if (!fh2mp || _wcsicmp(e.dll.c_str(), L"FH2MP.dll") == 0) {
+        if (!fh2mp || is_fh2mp(e)) {
             g_entry_online_row.push_back(-1);
             continue;
         }
@@ -1887,6 +1887,9 @@ std::string mod_note(const ModEntry& e) {
     if (e.online_off)
         return tr("Off for online play: you started the game from the FH2MP launcher, and it's set not to load then "
                   "(\"Load when playing online\" on its page).");
+    if (stopped_online(e.mod))
+        return tr("Stopped for online play: FH2MP went online after this mod had started, so its hooks are off until "
+                  "you restart the game. Start the game from the FH2MP launcher to leave it out from the start.");
     if (_wcsicmp(e.dll.c_str(), L"fh2wheel.dll") == 0) return tr("Not a platform mod: its settings are in fh2wheel-config.exe.");
     if (!e.platform_mod) return tr("A mod from before the platform: it has no settings here.");
     return "";
@@ -1906,7 +1909,7 @@ void add_mod_lines(PageItem& it, const ModEntry& e) {
         it.version = tr("Version unknown");   // the note and the row's value say whether it's on
     } else {
         const char* line = !e.enabled                                               ? "Version {0} (turned off)"
-                           : e.online_off                                           ? "Version {0} (off for online play)"
+                           : e.online_off || stopped_online(e.mod)                  ? "Version {0} (off for online play)"
                            : !e.problem.empty()                                     ? "Version {0} (didn't load)"
                            : !e.mod || e.mod->repo.empty() || !e.mod->check_updates ? "Version {0} (doesn't check for updates)"
                            : latest.empty()                                         ? "Version {0} (not checked yet)"
@@ -1986,7 +1989,8 @@ std::vector<PageItem> installed_items() {
     for (std::size_t i = 0; i < g_entries.size(); ++i) {
         const ModEntry& e = g_entries[i];
         PageItem it = info(e.name, about_mod(e));
-        it.value    = (!e.enabled ? tr("Off") + "  " : e.online_off ? tr("Off online") + "  " : "") + (e.version.empty() ? std::string() : e.version);
+        it.value    = (!e.enabled ? tr("Off") + "  " : e.online_off || stopped_online(e.mod) ? tr("Off online") + "  " : "") +
+                      (e.version.empty() ? std::string() : e.version);
         it.button   = i < kMaxModPages ? static_cast<int>(i) : -1;
         add_mod_lines(it, e);
         if (!it.version_alert.empty()) {   // a newer version is out: the version in red, with a !
@@ -3783,6 +3787,7 @@ bool d_splash_button(void* page, int button, bool pressed) {
         return ours || o_splash_button(page, button, pressed);
     }
     if (splash_state(page) != 0) return o_splash_button(page, button, pressed);   // already signing in
+    if (stopped_online(mod)) return o_splash_button(page, button, pressed);   // stopped for online play (go_online)
     g_title_handled[code] = true;
     if (!loc.empty()) {   // the list (the message box plays its own sound)
         if (!show_title_list(page, j, 0)) log_line(mod->name, "couldn't show the list for title entry " + key);
@@ -3878,6 +3883,7 @@ void handle_title_choice(PopupFn* self) {
         key   = e.key;
         label = e.choices[choice];
     }
+    if (stopped_online(mod)) return;   // stopped for online play (go_online) while its list was open
     int r = FH2_TITLE_HANDLED;
     if (!call_on_choose(fn, user, key.c_str(), static_cast<uint32_t>(choice), &r)) {
         log_line(mod->name, "crashed in its on_choose for title entry " + key);

@@ -846,6 +846,12 @@ void set_records(Site* s) {
 int switch_hooks(FH2Mod* m, FH2Hook* hook, bool on) {
     if (!m) return 0;
     std::scoped_lock lk{g_mu};
+    // Under the lock: go_online sets the flag before its disable_hooks takes this lock, so an enable
+    // that comes after that disable sees it.
+    if (on && stopped_online(m)) {
+        log_line(m->name, "can't enable hooks: it was stopped for online play (FH2MP went online after it had started)");
+        return 0;
+    }
     if (hook && std::none_of(g_hooks.begin(), g_hooks.end(), [&](const auto& h) { return h.get() == hook; })) {
         log_line(m->name, "can't switch a hook: that's not a hook handle");
         return 0;

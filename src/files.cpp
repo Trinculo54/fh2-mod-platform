@@ -130,6 +130,11 @@ int set_file(FH2Mod* mod, const char* media_path, const void* data, std::size_t 
         return 0;
     }
     std::scoped_lock lk{g_files_mu};
+    if (stopped_online(mod)) {   // checked under the lock: go_online sets it before it clears the mod's files
+        log_line(mod->name, "set_file: " + shown(rel) + " isn't replaced: this mod was stopped for online play (FH2MP went "
+                                "online after it had started)");
+        return 0;
+    }
     if (auto it = g_owner.find(key); it != g_owner.end() && it->second != mod) {
         log_line(mod->name, "can't replace " + shown(rel) + ": " + it->second->name + " already does");
         return 0;
@@ -175,14 +180,17 @@ void clear_file(FH2Mod* mod, const char* media_path) {
     auto manifest = read_files_manifest();
     for (const auto& rel : which) {
         const auto key = lower_w(rel);
+        const auto it  = find_ci(manifest, rel);
+        // the path as the mod gave it (the manifest has it; `which` is lower case when every file goes)
+        const std::wstring as_given = it != manifest.end() ? it->first : rel;
         if (remove_file(override_root() / rel))
-            log_line(mod->name, "stopped replacing " + shown(rel));
+            log_line(mod->name, "stopped replacing " + shown(as_given));
         else
-            log_line(mod->name, "couldn't delete the " + shown(rel) + " override (error " +
+            log_line(mod->name, "couldn't delete the " + shown(as_given) + " override (error " +
                                     std::to_string(GetLastError()) + ")");
         mod->files.erase(key);
         g_owner.erase(key);
-        if (auto it = find_ci(manifest, rel); it != manifest.end()) manifest.erase(it);
+        if (it != manifest.end()) manifest.erase(it);
     }
     write_files_manifest(manifest);
 }

@@ -102,6 +102,8 @@ std::string handle(std::string line) {
     }
     if (!known_mod) return "error: no mod called \"" + mod + "\" has commands (fh2mod list shows them)\n";
     if (!fn) return "error: " + mod + " has no command called \"" + name + "\" (fh2mod list shows them)\n";
+    if (stopped_online(owner))
+        return "error: " + owner->name + " was stopped for online play (FH2MP went online after it had started)\n";
     static char reply[kReplyMax];
     reply[0] = '\0';
     log_line(owner->name, "command: " + cname + (args.empty() ? "" : " " + args));
