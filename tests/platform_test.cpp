@@ -44,8 +44,9 @@ static fs::path layer() {
     return own_layer() ? fs::path{L"data\\titles\\1A96545B\\tmp\\fh2-platform\\media"} : fs::path{L"FH2\\Mount\\mediaoverride"};
 }
 
-static std::wstring str(const char* table, uint16_t key) {
-    auto d = slurp(layer() / L"Stripped\\StringTables\\EN" / table);
+// `key` in `table` as the platform wrote it for the language `lang` (a zip's name: EN, PL, br).
+static std::wstring str_in(const wchar_t* lang, const char* table, uint16_t key) {
+    auto d = slurp(layer() / L"Stripped\\StringTables" / lang / table);
     if (d.empty()) return L"<none>";
     std::wstring found = L"<missing>";
     edit_lsb2(std::vector<char>(d.begin(), d.end()), [&](uint16_t k, const std::wstring& t) {
@@ -54,6 +55,7 @@ static std::wstring str(const char* table, uint16_t key) {
     });
     return found;
 }
+static std::wstring str(const char* table, uint16_t key) { return str_in(L"EN", table, key); }
 
 static bool ai_has(const wchar_t* name) {
     auto d = slurp(layer() / L"Stripped\\StringTables\\EN\\AIPlayers.str");
@@ -347,6 +349,11 @@ int wmain(int argc, wchar_t** argv) {
         const auto title = str("Main.str", 0x18F0);
         std::printf("title: [%ls]\n", title.c_str());
         CHECK(title == L"\n\n\n\nTO START\nTest notice line\nsecond line\nOld FH2 Mod Platform: reinstall TestMod");
+        // TestMod's notice is tr()'s text (API 10): each language's Main.str has it in that language's words, with the
+        // platform's line after it; English where there's no translation (TestMod's Brazilian Portuguese has none)
+        CHECK(str_in(L"PL", "Main.str", 0x18F0) ==
+              L"\n\n\n\nTO START\nTestowa linia og\u0142oszenia\ndruga linia\nOld FH2 Mod Platform: reinstall TestMod");
+        CHECK(str_in(L"br", "Main.str", 0x18F0) == title);
         CHECK(slurp(L"fh2-mods\\platform-tables.txt").find("AIPlayers.str") != std::string::npos);
         if (argc > 2) CHECK(log.find("the game is mapped at") != std::string::npos);
 
@@ -414,6 +421,29 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] playing offline") && !has(log, "started from the FH2MP launcher"));
         // text in the game's language (API 10)
         CHECK(has(log, "[TestMod] no game language yet") && has(log, "[TestMod] setting text ok"));
+        // translations (API 10): Polish last time (the runner's platform-language.ini), Polish and Brazilian Portuguese built
+        // into TestMod (tests/l10n), and a Brazilian Portuguese file in fh2-mods\lang\TestMod that's used instead
+        CHECK(has(log, "Language: mods' text starts in Polish (pl), the game's language last time, and follows the game's own once it has picked it"));
+        CHECK(has(log, "[TestMod] language pl"));
+        CHECK(has(log, "[TestMod] translation: Polish (pl), 6 strings"));
+        CHECK(has(log, "[TestMod] translation: Brazilian Portuguese (pt-BR) from fh2-mods\\lang\\TestMod\\pt_BR.po, 2 strings; it's used instead "
+                       "of any the mod has built in"));
+        CHECK(has(log, "[TestMod] add_translation: pt-BR comes from fh2-mods\\lang\\TestMod\\pt_BR.po this time, not from the mod"));
+        CHECK(has(log, "[TestMod] translation pt-BR (pt_BR.po): line 10, \"row.Bad.label\": its placeholders ({n\u00famero}) don't match the "
+                       "English's ({count}), so it's left out and English shows there"));
+        CHECK(has(log, "[TestMod] Mods page row: Testowe powitanie \u2013 cze\u015b\u0107"));
+        CHECK(has(log, "[TestMod] plural: 5 samochod\u00f3w"));
+        CHECK(has(log, "[TestMod] the pl text for \"row.Stale.label\" was translated from different English, so it isn't used until it's "
+                       "translated again") &&
+              has(log, "[TestMod] stale: New English"));
+        CHECK(has(log, "[TestMod] fuzzy: Not sure yet"));
+        CHECK(has(log, "[TestMod] number: 1\u00a0" "234,5, date: 08.11.2026"));
+        // set_string_tr: each language's table in its own words
+        CHECK(str("LoadingMessages.str", 0x5507) == L"A loading tip from TestMod");
+        CHECK(str_in(L"PL", "LoadingMessages.str", 0x5507) == L"Wskaz\u00f3wka z TestMod");
+        CHECK(str_in(L"br", "LoadingMessages.str", 0x5507) == L"Uma dica do TestMod");
+        CHECK(str_in(L"PL", "LoadingMessages.str", 0x6875) == L"from TestMod");   // set_string's: the same in every language
+        CHECK(has(log, "wrote LoadingMessages.str for 3 languages (2 key edits, 1 of them in each language's own words, "));
         CHECK(has(log, "[TestMod] set_setting_text: Button has 3 choices, not 2") &&
               has(log, "[TestMod] set_setting_text: there's no row called Nope"));
         // commands (API 9): through fh2mod.exe, as a tool would
@@ -526,6 +556,8 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(!has(installed, "Load when playing online"));   // no FH2MP here: no such row
             // text given after add_setting and register_mod (API 10)
             CHECK(has(mods, "Test button, renamed") && !has(mods, "\"Test button\"") && has(mods, "Text=\"RB &amp; &lt;renamed&gt;\""));
+            // a row from tr() (API 10): in Polish, the language last time
+            CHECK(has(mods, "Testowe powitanie &#8211; cze&#347;&#263;") && has(mods, "Wiersz, kt&#243;rego tekst jest w j&#281;zyku gry."));
             CHECK(has(installed, "set later."));
         }
         // No mod adds a HUD layer here, so the preview behaves as 2.8.0: nothing of the layer in the log,
@@ -622,7 +654,9 @@ int wmain(int argc, wchar_t** argv) {
         // TestMod gone: its tables and notice are cleaned up, HelloMod's stays.
         CHECK(str("LoadingMessages.str", 0x6875) == L"Fast Traveling to Destination (hello from HelloMod!)");
         CHECK(str("AIPlayers.str", 0) == L"<none>");
-        CHECK(str("Main.str", 0x18F0) == L"<none>");
+        CHECK(str("Main.str", 0x18F0) == L"<none>" && str_in(L"PL", "Main.str", 0x18F0) == L"<none>");
+        CHECK(str("LoadingMessages.str", 0x5507) != L"A loading tip from TestMod" &&
+              str_in(L"PL", "LoadingMessages.str", 0x5507) != L"Wskaz\u00f3wka z TestMod");
         CHECK(slurp(L"fh2-mods\\platform-tables.txt").find("AIPlayers.str") == std::string::npos);
         const fs::path ov = layer();
         CHECK(!fs::exists(ov / "UI" / "keep.xml") && !fs::exists(ov / "UI" / "handmade.xml"));

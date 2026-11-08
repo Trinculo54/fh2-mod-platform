@@ -11,6 +11,8 @@
 # The phases run twice, each time in a fresh folder (platform 2.9.0): first as an Azimuth before
 # 1.0 (no data\titles), where the platform's files go to mediaoverride; then as Azimuth 1.0 or
 # later without Extra Options (a data\titles folder), where they go to the folder's own layer.
+# EN.zip is copied as PL.zip and br.zip too, for the tables each language gets in its own words
+# (API 10), and the language last time is Polish (fh2-mods\platform-language.ini).
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 b=$root/build-test
@@ -34,6 +36,14 @@ run_layout() {   # run_layout mediaoverride|own
     cp "$b/d3dcompiler_47.dll" "$b/database_test.exe" "$b/DbMod.dll" "$b/fh2mod.exe" "$dir/"
     cp "$b/AaaMod.dll" "$b/HelloMod.dll" "$b/TestMod.dll" "$b/Legacy.dll" "$dir/fh2-mods/"
     cp "$en" "$dir/FH2/Mount/media/Stripped/StringTables/EN.zip"
+    cp "$en" "$dir/FH2/Mount/media/Stripped/StringTables/PL.zip"
+    cp "$en" "$dir/FH2/Mount/media/Stripped/StringTables/br.zip"
+    # Translations (API 10): Polish last time, and a Brazilian Portuguese file for TestMod that wins
+    # over the one built into it (with an entry whose placeholder is wrong, on line 10)
+    printf '; written by the test\r\nlast=pl\r\n' > "$dir/fh2-mods/platform-language.ini"
+    mkdir -p "$dir/fh2-mods/lang/TestMod"
+    printf 'msgctxt "row.Greeting.label"\nmsgid "Test greeting"\nmsgstr "Sauda\303\247\303\243o de teste"\n\nmsgctxt "loading.tip"\nmsgid "A loading tip from TestMod"\nmsgstr "Uma dica do TestMod"\n\nmsgctxt "row.Bad.label"\nmsgid "{count} unlocked"\nmsgstr "{n\303\272mero} desbloqueados"\n' \
+        > "$dir/fh2-mods/lang/TestMod/pt_BR.po"
     cp "$gamedb" "$dir/FH2/Mount/media/Stripped/gamedbRC.slt"
     chmod u+w "$dir/FH2/Mount/media/Stripped/gamedbRC.slt"
     printf 'made by hand' > "$dir/FH2/Mount/mediaoverride/UI/handmade.xml"
@@ -72,9 +82,17 @@ run_layout() {   # run_layout mediaoverride|own
     cd - >/dev/null
 }
 
-# Mods' text in the pages (src/xml_text.cpp) and car packs' car Ids (src/car_ids.cpp) on their own, then the
-# platform.
+# Mods' text in the pages (src/xml_text.cpp), car packs' car Ids (src/car_ids.cpp) and mods' translations
+# (src/l10n.cpp) on their own, then the platform. With Python 3, TestMod's translation files are checked to be
+# up to date with tools/l10n (its .pot from its source, its built-in .inc from tests/l10n/*.po).
 wine "$b/xml_text_test.exe"
 wine "$b/car_ids_test.exe"
+wine "$b/l10n_test.exe"
+if command -v python3 > /dev/null; then
+    python3 -I "$root/tools/l10n/extract.py" --check --domain TestMod -o "$root/tests/l10n/test_mod.pot" "$root/tests/test_mod.cpp"
+    python3 -I "$root/tools/l10n/po2inc.py" --check "$root/tests/l10n/test_mod_l10n.inc" test_mod_translations \
+        "$root/tests/l10n/pl.po" "$root/tests/l10n/pt_BR.po" 2> /dev/null
+    echo "ok   tools/l10n: TestMod's .pot and .inc are up to date"
+fi
 run_layout mediaoverride
 run_layout own
