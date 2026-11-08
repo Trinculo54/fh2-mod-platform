@@ -35,6 +35,7 @@
 // exactly that one, so the database is built there as before.
 #include "car_ids.hpp"
 #include "platform.hpp"
+#include "text.hpp"
 #include "updates.hpp"
 
 #include <windows.h>
@@ -568,7 +569,7 @@ std::string lower_ascii(std::string s) {
 // What in a pack's or mod's SQL could clash with car packs' cars (car_ids::plan), for the MODS tab:
 // pack -> its warnings, and mod -> its warnings, from this session's last build.
 std::mutex g_warn_mu;
-std::map<std::string, std::string> g_pack_warnings, g_mod_warnings;
+std::map<std::string, std::vector<std::string>> g_pack_warnings, g_mod_warnings;   // messages from later()
 
 void clear_sql_warnings() {
     std::scoped_lock lk{g_warn_mu};
@@ -578,8 +579,7 @@ void clear_sql_warnings() {
 
 void note_sql_warning(const Sql& s, const std::string& why) {
     std::scoped_lock lk{g_warn_mu};
-    std::string& w = s.pack ? g_pack_warnings[s.pack->name] : g_mod_warnings[s.name];
-    w += (w.empty() ? "" : " ") + why + ".";
+    (s.pack ? g_pack_warnings[s.pack->name] : g_mod_warnings[s.name]).push_back(why);
 }
 
 // The cars packs add (pack.ini) get their Ids here: a pack's SQL gives a car's Id as
@@ -621,7 +621,7 @@ std::vector<Sql> with_car_ids(const Files& f, const fs::path& base, const std::s
         const Sql& s = given[i];
         const car_ids::Outcome& o = plan[i];
         for (const auto& w : o.warnings) {
-            log_line(s.name, "database: warning: " + w);
+            log_line(s.name, "database: warning: " + english(w));
             note_sql_warning(s, w);
         }
         for (const auto& n : o.notes) log_line(s.name, "database: " + n);
@@ -630,8 +630,8 @@ std::vector<Sql> with_car_ids(const Files& f, const fs::path& base, const std::s
             continue;
         }
         if (!o.problem.empty()) {
-            log_line(s.name, "database: left out, so none of its changes were made: " + o.problem);
-            note_car_pack_problem(s.pack->name, "it was left out, as " + o.problem + ".");
+            log_line(s.name, "database: left out, so none of its changes were made: " + english(o.problem));
+            note_car_pack_problem(s.pack->name, o.problem);
             continue;
         }
         for (const auto& [car, id] : o.given) {
@@ -768,7 +768,7 @@ void reuse_strings(const fs::path& file) {
 void note_pack_result(const std::string& source, const std::string& result) {
     const std::string pack = "car pack ", failed = "FAILED, so none of its changes were made: ";
     if (source.rfind(pack, 0) == 0 && result.rfind(failed, 0) == 0)
-        note_car_pack_problem(source.substr(pack.size()), "its database changes failed: " + result.substr(failed.size()));
+        note_car_pack_problem(source.substr(pack.size()), later("Its database changes failed: {0}.", {result.substr(failed.size())}));
 }
 
 void replay(const State& st) {
@@ -946,17 +946,18 @@ std::map<uint16_t, std::wstring> database_strings() {
     return g_strings;
 }
 
-std::string car_pack_sql_warning(const std::string& pack) {
+// The warnings for a pack or mod, in the game's language now, one sentence after another.
+static std::string shown_warnings(const std::map<std::string, std::vector<std::string>>& all, const std::string& who) {
     std::scoped_lock lk{g_warn_mu};
-    const auto it = g_pack_warnings.find(pack);
-    return it == g_pack_warnings.end() ? std::string{} : it->second;
+    std::string text;
+    if (const auto it = all.find(who); it != all.end())
+        for (const std::string& w : it->second) text = join_sentences(text, shown(w));
+    return text;
 }
 
-std::string mod_sql_warning(const std::string& mod) {
-    std::scoped_lock lk{g_warn_mu};
-    const auto it = g_mod_warnings.find(mod);
-    return it == g_mod_warnings.end() ? std::string{} : it->second;
-}
+std::string car_pack_sql_warning(const std::string& pack) { return shown_warnings(g_pack_warnings, pack); }
+
+std::string mod_sql_warning(const std::string& mod) { return shown_warnings(g_mod_warnings, mod); }
 
 void apply_database(const std::vector<FH2Mod*>& mods) {
     std::scoped_lock lk{g_db_mu};

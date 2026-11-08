@@ -24,6 +24,7 @@
 #include "platform.hpp"
 #include "platform_version.h"
 #include "strings.hpp"
+#include "text.hpp"
 #include "updates.hpp"
 
 #ifdef _MSC_VER
@@ -332,6 +333,7 @@ void apply_all() {
 
 void refresh_notice(FH2Mod* m) {
     std::vector<std::string> lines = m->notice;
+    if (!m->update_notice.empty()) lines.push_back(m->update_notice);
     lines.insert(lines.end(), m->status.begin(), m->status.end());
     write_notice_file(g_azimuth, m->wname, m->dll, lines);
     g_dirty.insert("main.str");
@@ -436,15 +438,12 @@ void check_updates(FH2Mod* m) {
                                           "); couldn't reach GitHub this time"
                                     : "newer than the latest release on GitHub (" + latest + ")")
                           : "up to date (latest release " + latest + when + ")");
-    const std::string line = m->name + " " + (latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest) +
-                             " is available";
-    auto& st     = m->status;
-    const auto it = std::find_if(st.begin(), st.end(), [](const std::string& s) {
-        return s.size() > 13 && s.compare(s.size() - 13, 13, " is available") == 0;
-    });
-    const bool had = it != st.end();
-    if (had) st.erase(it);
-    if (newer) st.insert(st.begin(), line);
+    // The platform's own notice has a place of its own (update_notice), so it's found whatever language it's in.
+    // It's in English for now, as the old-platform notice is: it goes into Main.str for every language, and
+    // translated it would be in English or the player's language depending on when the check finishes.
+    const bool had   = !m->update_notice.empty();
+    m->update_notice = newer ? fill("{0} {1} is available", {m->name, latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest})
+                             : std::string();
     if (newer || had) {
         refresh_notice(m);
         apply_all();
@@ -490,7 +489,7 @@ FH2Mod* api_register(const FH2ModInfo* info) {
         std::scoped_lock lk{g_mu};
         m->dll = g_current_dll;
         if (!m->platform_version.empty() && compare_versions(m->platform_version, FH2MOD_PLATFORM_VERSION) > 0) {
-            m->status.push_back("Old FH2 Mod Platform: reinstall " + m->name);
+            m->status.push_back(fill("Old FH2 Mod Platform: reinstall {0}", {m->name}));   // in English (see check_updates)
             log_line(m->name, "built for FH2 Mod Platform " + m->platform_version + ", but this is " +
                                   FH2MOD_PLATFORM_VERSION + "; reinstall it to get the platform it came with");
         }
@@ -838,7 +837,7 @@ DWORD WINAPI load_mods(LPVOID) {
                 const DWORD err = GetLastError();
                 plog("FAILED to load fh2wheel.dll (error " + std::to_string(err) + ")");
                 std::scoped_lock lk{g_mu};
-                g_found.back().problem = "Windows couldn't load it (error " + std::to_string(err) + ").";
+                g_found.back().problem = later("Windows couldn't load it (error {0}).", {std::to_string(err)});
             }
         }
     }
@@ -885,7 +884,7 @@ DWORD WINAPI load_mods(LPVOID) {
             const DWORD err = GetLastError();
             plog("FAILED to load " + narrow(f) + " (error " + std::to_string(err) + ")");
             std::scoped_lock lk{g_mu};
-            g_found.back().problem = "Windows couldn't load it (error " + std::to_string(err) + ").";
+            g_found.back().problem = later("Windows couldn't load it (error {0}).", {std::to_string(err)});
         }
     }
     if (files.empty()) plog("no mods in fh2-mods");
@@ -918,7 +917,7 @@ DWORD WINAPI load_mods(LPVOID) {
                     plog("FAILED to load " + narrow(f) + " (error " + std::to_string(err) + ")");
                     std::scoped_lock lk{g_mu};
                     for (auto& e : g_found)
-                        if (e.file == f) e.problem = "Windows couldn't load it (error " + std::to_string(err) + ").";
+                        if (e.file == f) e.problem = later("Windows couldn't load it (error {0}).", {std::to_string(err)});
                 }
             }
         },
@@ -963,10 +962,10 @@ DWORD WINAPI load_mods(LPVOID) {
             char b[16];
             std::snprintf(b, sizeof b, "%08lX", code);
             plog(narrow(l.file) + ": fh2mod_init crashed (exception 0x" + b + ")");
-            problem = std::string("It crashed while starting (exception 0x") + b + ").";
+            problem = later("It crashed while starting (exception 0x{0}).", {b});
         } else if (rc) {
             plog(narrow(l.file) + ": fh2mod_init returned " + std::to_string(rc));
-            problem = "It reported a problem while starting (it returned " + std::to_string(rc) + ").";
+            problem = later("It reported a problem while starting (it returned {0}).", {std::to_string(rc)});
         }
         std::scoped_lock lk{g_mu};
         g_current_dll.clear();
@@ -1165,8 +1164,8 @@ std::vector<ModEntry> mod_entries() {
                 }
         if (!e.mod && lower_w(f.file) == L"fh2wheel.dll") {
             e.name        = "fh2wheel";
-            e.description = "Racing wheels with force feedback, by iamAzoDx. Loaded by the platform from next to azimuth.exe, "
-                            "in place of fh2wheel's own d3dcompiler_47.dll.";
+            e.description = later("Racing wheels with force feedback, by iamAzoDx. Loaded by the platform from next to azimuth.exe, "
+                                  "in place of fh2wheel's own d3dcompiler_47.dll.");   // shown in the game's language
             e.repo        = "iamAzoDx/fh2wheel";
         } else if (!told) {
             if (auto it = known.find(lower_w(f.file)); it != known.end()) {

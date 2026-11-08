@@ -38,6 +38,7 @@
 #include "lang.hpp"
 #include "platform.hpp"
 #include "strings.hpp"
+#include "text.hpp"
 #include "updates.hpp"
 #include "xml_text.hpp"
 
@@ -1110,7 +1111,7 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
             const Row& r     = g_rows[it.row];
             const std::string label = it.label.empty() ? r.label : it.label;
             std::string desc = it.description.empty() ? r.description : it.description;
-            if (r.restart) desc += (desc.empty() ? "" : " ") + tr("Takes effect the next time you start the game.");
+            if (r.restart) desc = join_sentences(desc, tr("Takes effect the next time you start the game."));
             if (r.mod != &g_hub_owner) desc += (desc.empty() ? "" : " ") + std::string("(") + r.mod->name + ")";
             data_item(label, desc);
             if (!r.choices.empty()) {
@@ -1498,8 +1499,7 @@ bool write_list_page(const char* file, const std::string& title, const std::vect
             blocks = "<Grid>\r\n                        " + held(0, block);
             for (std::size_t k = 1; k <= views->size() && k <= view_titles->size(); ++k) {
                 std::string vt = block;
-                std::string name = (*view_titles)[k - 1].title;
-                for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                const std::string name = upper_game((*view_titles)[k - 1].title);
                 swap_attr(vt, "Content", xml_escape(name));
                 if ((*view_titles)[k - 1].settings) swap_attr(vt, "Tag", "{local:Loc ScreenTitles.IDS_MyProfile}");   // the game's grey "SETTINGS"
                 blocks += "\r\n                        " + held(k, vt);
@@ -1606,6 +1606,7 @@ void hub_rows_text();   // with the MODS tab's rows, below
 // The Mods page (Settings > Mods, and the MODS tab's All settings): every mod's rows.
 bool write_mods_page() {
     hotkeys_refresh_text();
+    hud_layer_refresh_text();
     std::vector<PageItem> items;
     {
         std::scoped_lock lk{g_mu};
@@ -1679,6 +1680,17 @@ void hub_online_changed(void* user, const char*, int v) {
     if (i < g_entries.size()) set_mod_online(g_entries[i].dll, v != 0);
 }
 
+// A mod's "Load when playing online" row's text, in the game's language now (English before it has one).
+void online_row_text(Row& o, const ModEntry& e) {
+    o.label       = tr("Load when playing online");
+    o.description = e.offline_only
+                        ? trf("Off: when you start the game from the FH2MP launcher, the game doesn't load {0}, so it can't change "
+                              "online play. Its author made it for offline play, so it's off unless you turn it on. Takes effect the "
+                              "next time you start the game from the launcher.", {e.name})
+                        : trf("Off: when you start the game from the FH2MP launcher, the game doesn't load {0}, so it can't change "
+                              "online play. Takes effect the next time you start the game from the launcher.", {e.name});
+}
+
 void add_hub_rows() {
     g_entries = mod_entries();
     // "Load when playing online" (platform 2.8.0), only where FH2MP is installed, and not for FH2MP
@@ -1704,11 +1716,7 @@ void add_hub_rows() {
         Row& o       = g_rows.emplace_back();
         o.mod        = &g_hub_owner;
         o.key        = "ModOnline_" + std::to_string(i);
-        o.label      = "Load when playing online";
-        o.description = std::string("Off: when you start the game from the FH2MP launcher, the game doesn't load ") + e.name +
-                        ", so it can't change online play. " +
-                        (e.offline_only ? "Its author made it for offline play, so it's off unless you turn it on. " : "") +
-                        "Takes effect the next time you start the game from the launcher.";
+        online_row_text(o, e);
         o.prop       = "FH2Mod_" + std::to_string(g_rows.size() - 1);
         o.value      = e.loads_online ? 1 : 0;
         o.boot       = o.value;
@@ -1722,24 +1730,17 @@ std::string with_v(const std::string& version) { return version.empty() ? "" : "
 
 const char* const kHubTileNames[kHubTiles] = {"INSTALLED MODS", "UPDATES", "GET MODS", "ABOUT", "ALL SETTINGS"};
 std::string hub_tile_text(int k) {
-    std::string s = tr(kHubTileNames[k]);
-    if (k == 0) s += " (" + std::to_string(g_entries.size()) + ")";   // in fh2-mods, on or off
+    if (k == 0) return trf("INSTALLED MODS ({0})", {std::to_string(g_entries.size())});   // in fh2-mods, on or off
     if (k == 1)
-        if (const int out = updates_out(); out > 0) s += " (" + std::to_string(out) + ")";
-    return s;
+        if (const int out = updates_out(); out > 0) return trf("UPDATES ({0})", {std::to_string(out)});
+    return tr(kHubTileNames[k]);
 }
 
 // The "Load when playing online" rows' text, in the game's language now (under g_mu).
 void hub_rows_text() {
     for (std::size_t i = 0; i < g_entries.size() && i < g_entry_online_row.size(); ++i) {
         if (g_entry_online_row[i] < 0) continue;
-        const ModEntry& e = g_entries[i];
-        Row& o            = g_rows[g_entry_online_row[i]];
-        o.label           = tr("Load when playing online");
-        o.description     = trf("Off: when you start the game from the FH2MP launcher, the game doesn't load {0}, so it can't "
-                                "change online play.", {e.name}) +
-                            (e.offline_only ? " " + tr("Its author made it for offline play, so it's off unless you turn it on.") : "") +
-                            " " + tr("Takes effect the next time you start the game from the launcher.");
+        online_row_text(g_rows[g_entry_online_row[i]], g_entries[i]);
     }
 }
 
@@ -1839,7 +1840,7 @@ std::vector<RowAct> row_acts(const std::vector<PageItem>& items, const std::stri
 
 // what a mod is, for its description: what it does, and whether it's loaded
 std::string about_mod(const ModEntry& e) {
-    return e.description.empty() ? tr("No description.") : e.description;
+    return e.description.empty() ? tr("No description.") : shown(e.description);   // the platform's own for fh2wheel
 }
 
 std::string mod_note(const ModEntry& e) {
@@ -1853,23 +1854,25 @@ std::string mod_note(const ModEntry& e) {
 }
 
 // the lines under a mod's description: its version (in red with a ! when a newer one is out),
-// and its GitHub page
+// and its GitHub page. A whole line for each state, so each language words it its own way.
 void add_mod_lines(PageItem& it, const ModEntry& e) {
     if (it.note.empty()) it.note = mod_note(e);
-    const std::string v = e.version.empty() ? tr("Version unknown") : trf("Version {0}", {e.version});
     std::string latest;
     if (e.enabled && e.mod && !e.mod->repo.empty() && e.mod->check_updates) latest = latest_known(e.mod);
     if (!latest.empty() && compare_versions(latest, e.version) > 0) {
         const std::string l = latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest;
-        it.version_alert    = "! " + v + " (" + trf("{0} is out", {l}) + ")";
+        it.version_alert    = "! " + (e.version.empty() ? trf("Version unknown ({0} is out)", {l})
+                                                         : trf("Version {0} ({1} is out)", {e.version, l}));
+    } else if (e.version.empty()) {
+        it.version = tr("Version unknown");   // the note and the row's value say whether it's on
     } else {
-        std::string state;
-        if (!e.enabled) state = tr("turned off");
-        else if (e.online_off) state = tr("off for online play");
-        else if (!e.problem.empty()) state = tr("didn't load");
-        else if (!e.mod || e.mod->repo.empty() || !e.mod->check_updates) state = tr("doesn't check for updates");
-        else state = latest.empty() ? tr("not checked yet") : tr("up to date");
-        it.version = v + " (" + state + ")";
+        const char* line = !e.enabled                                               ? "Version {0} (turned off)"
+                           : e.online_off                                           ? "Version {0} (off for online play)"
+                           : !e.problem.empty()                                     ? "Version {0} (didn't load)"
+                           : !e.mod || e.mod->repo.empty() || !e.mod->check_updates ? "Version {0} (doesn't check for updates)"
+                           : latest.empty()                                         ? "Version {0} (not checked yet)"
+                                                                                    : "Version {0} (up to date)";
+        it.version = trf(line, {e.version});
     }
     if (!e.repo.empty()) it.link = "github.com/" + e.repo;
 }
@@ -1889,7 +1892,7 @@ bool any_update_out() { return updates_out() > 0; }
 // why a mod (turned on) isn't working: it didn't load or start, or it needs a newer platform
 std::string mod_problem(const ModEntry& e) {
     if (!e.enabled) return "";
-    if (!e.problem.empty()) return e.problem;
+    if (!e.problem.empty()) return shown(e.problem);
     if (e.mod && !e.mod->platform_version.empty() && compare_versions(e.mod->platform_version, FH2MOD_PLATFORM_VERSION) > 0)
         return trf("It needs FH2 Mod Platform {0} or newer; this is {1}. Reinstall it to get the platform it came with.",
                    {e.mod->platform_version, FH2MOD_PLATFORM_VERSION});
@@ -1907,30 +1910,30 @@ std::vector<PageItem> car_pack_items() {
     std::vector<PageItem> items;
     const std::string unread = car_packs_unread();
     if (car_packs().empty() && unread.empty()) return items;
-    PageItem heading = info("Car packs", "Packs in the fh2-cars folder: new cars for the Autoshow.");
+    PageItem heading = info(tr("Car packs"), tr("Packs in the fh2-cars folder: new cars for the Autoshow."));
     heading.style    = FH2_ROW_HEADING;
     heading.skip     = true;
     items.push_back(heading);
-    if (!unread.empty()) items.push_back(info("Car packs aren't read", unread));
+    if (!unread.empty()) items.push_back(info(tr("Car packs aren't read"), shown(unread)));
     for (const CarPack& p : car_packs()) {
-        std::string cars;
+        std::string cars;   // the cars' names, as the Autoshow shows them
         for (std::size_t i = 0; i < p.cars.size(); ++i)
             cars += (i ? ", " : "") + (i < p.car_names.size() && !p.car_names[i].empty() ? p.car_names[i] : p.cars[i]);
         PageItem it = info(p.title.empty() ? p.name : p.title,
-                           p.cars.empty() ? std::string("A car pack that changes the game's own cars, and adds none.")
-                                          : "A car pack. It adds " +
-                                                (p.cars.size() == 1 ? std::string("a car") : std::to_string(p.cars.size()) + " cars") +
-                                                " to the Autoshow: " + cars + ".");
+                           p.cars.empty()        ? tr("A car pack that changes the game's own cars, and adds none.")
+                           : p.cars.size() == 1 ? trf("A car pack. It adds a car to the Autoshow: {0}.", {cars})
+                                                : trf("A car pack. It adds {0} cars to the Autoshow: {1}.",
+                                                      {std::to_string(p.cars.size()), cars}));
         it.value   = p.version;
-        it.version = p.version.empty() ? "Version unknown" : "Version " + p.version;
+        it.version = p.version.empty() ? tr("Version unknown") : trf("Version {0}", {p.version});
         it.link    = "fh2-cars\\" + p.name;
         if (const std::string why = car_pack_problem(p.name); !why.empty()) {   // it isn't working: says so, in red
-            it.value_alert = "! Error !";
+            it.value_alert = "! " + tr("Error") + " !";
             it.value.clear();
-            it.note       = "It isn't working: " + why + " fh2-mods\\platform.log has more.";
+            it.note       = trf("It isn't working: {0} fh2-mods\\platform.log has more.", {shown(why)});
             it.note_alert = true;
         } else if (const std::string warn = car_pack_sql_warning(p.name); !warn.empty()) {   // it works, but could clash
-            it.note       = "Warning: " + warn + " fh2-mods\\platform.log has more.";
+            it.note       = trf("Warning: {0} fh2-mods\\platform.log has more.", {warn});
             it.note_alert = true;
         }
         items.push_back(it);
@@ -1954,10 +1957,10 @@ std::vector<PageItem> installed_items() {
         if (const std::string why = mod_problem(e); !why.empty()) {   // it isn't working: says so, in red
             it.value_alert = "! " + tr("Error") + " !";
             it.value.clear();
-            it.note       = trf("It isn't working: {0}", {why}) + " " + tr("fh2-mods\\platform.log has more.");
+            it.note       = trf("It isn't working: {0} fh2-mods\\platform.log has more.", {why});
             it.note_alert = true;
         } else if (const std::string warn = e.enabled ? mod_sql_warning(e.name) : ""; !warn.empty()) {   // its SQL could clash
-            it.note       = "Warning: " + warn + " fh2-mods\\platform.log has more.";
+            it.note       = trf("Warning: {0} fh2-mods\\platform.log has more.", {warn});
             it.note_alert = true;
         }
         items.push_back(it);
@@ -1977,7 +1980,7 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
     sw.note = mod_note(e);
     if (const std::string why = mod_problem(e); !why.empty()) sw.note = trf("It isn't working: {0}", {why});
     else if (const std::string warn = e.enabled ? mod_sql_warning(e.name) : ""; !warn.empty()) sw.note = trf("Warning: {0}", {warn});
-    sw.note += (sw.note.empty() ? "" : " ") + tr("Off leaves it in fh2-mods, but the game doesn't load it.");
+    sw.note = join_sentences(sw.note, tr("Off leaves it in fh2-mods, but the game doesn't load it."));
     add_mod_lines(sw, e);
     items.push_back(sw);
     if (i < g_entry_online_row.size() && g_entry_online_row[i] >= 0) items.push_back({g_entry_online_row[i], "", ""});
@@ -2004,12 +2007,10 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
                 PageItem it = info(pg.label, pg.description);
                 const bool on_tile = pg.tile >= 0 && g_tile_page[pg.tile] == static_cast<int>(j);
                 if (pg.custom && pg.rows.empty())   // only on its tile
-                    it.description += (it.description.empty() ? "" : " ") +
-                                      (on_tile ? trf("Open it from the pause menu's {0} tile.", {tr(kTiles[pg.tile].name)})
-                                               : tr("It needs a pause-menu tile to open from, and doesn't have one."));
+                    it.description = join_sentences(it.description, on_tile ? trf("Open it from the pause menu's {0} tile.", {tr(kTiles[pg.tile].name)})
+                                                                            : tr("It needs a pause-menu tile to open from, and doesn't have one."));
                 else if (on_tile)
-                    it.description += (it.description.empty() ? "" : " ") +
-                                      trf("The pause menu's {0} tile opens it too.", {tr(kTiles[pg.tile].name)});
+                    it.description = join_sentences(it.description, trf("The pause menu's {0} tile opens it too.", {tr(kTiles[pg.tile].name)}));
                 it.open_view = j < g_page_view.size() ? g_page_view[j] : 0;
                 it.name      = "PART_Button_FH2Mod_Page_" + std::to_string(j);
                 items.push_back(it);
@@ -2037,16 +2038,15 @@ std::vector<PageItem> updates_items() {
         if (latest.empty() || compare_versions(latest, e.version) <= 0) continue;
         const std::string l = latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest;
         PageItem it = info(e.name, trf("Version {0} is out. Get it from the mod's GitHub page (below): extract its zip into your "
-                                       "Azimuth folder, then start the game again.", {l}));
+                                       "Azimuth folder, then start the game again. Press A to open it.", {l}));
         it.value_alert = "! " + e.version + " !";
         add_mod_lines(it, e);
-        it.description += " " + tr("Press A to open it.");
         items.push_back(it);
         urls.push_back("https://github.com/" + e.mod->repo + "/releases/latest");
     }
     const std::string how = tr("Mods that name their GitHub page check it for new releases at most every 6 hours. A mod with a new "
                                "release also says so on the title screen, under PRESS (A) TO START, and with a ! on the MODS tab.");
-    items.push_back(info(tr("How update checks work"), items.empty() ? tr("There aren't any updates at the moment.") + " " + how : how));
+    items.push_back(info(tr("How update checks work"), items.empty() ? join_sentences(tr("There aren't any updates at the moment."), how) : how));
     urls.push_back("");
     g_update_urls = urls;
     return items;
@@ -2093,8 +2093,8 @@ std::vector<PageItem> about_items() {
     // fh2-cars, where car packs are read (Azimuth 1.0 or later without Extra Options) and it's there
     if (std::error_code ec; instance_layer() && std::filesystem::is_directory(azimuth_dir() / L"fh2-cars", ec)) {
         const std::string cars = narrow((azimuth_dir() / L"fh2-cars").wstring());
-        PageItem packs = info("Open car packs folder", "Opens fh2-cars in File Explorer, to add or remove car packs. Packs you add "
-                                                       "there are read the next time you start the game.");
+        PageItem packs = info(tr("Open car packs folder"), tr("Opens fh2-cars in File Explorer, to add or remove car packs. Packs you add "
+                                                              "there are read the next time you start the game."));
         packs.link = cars;
         items.push_back(packs);
         urls.push_back(cars);
@@ -2128,6 +2128,7 @@ std::atomic<void*> g_tile_page_obj[kTileCount] = {};   // the page object showin
 
 bool write_hub_page(int p) {
     hotkeys_refresh_text();
+    hud_layer_refresh_text();
     {
         std::scoped_lock lk{g_mu};
         hub_rows_text();
@@ -2211,15 +2212,12 @@ bool write_hub_page(int p) {
             g_tile_acts[t].clear();
             return write_custom_page(hub_file(p).c_str(), res, content, help);
         }
-        for (char& c : title) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
         g_tile_acts[t] = row_acts(items, "FirstItem");
-        return write_list_page(hub_file(p).c_str(), title, items, true, nullptr, nullptr, select ? "{local:Loc HelpButtons.IDS_Select}" : nullptr);
+        return write_list_page(hub_file(p).c_str(), upper_game(title), items, true, nullptr, nullptr, select ? "{local:Loc HelpButtons.IDS_Select}" : nullptr);
     }
     if (p >= kHubModPage && p < kHubTilePage && static_cast<std::size_t>(p - kHubModPage) < g_entries.size()) {
         const ModEntry& e = g_entries[p - kHubModPage];
-        std::string title = e.name;
-        for (char& c : title) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        return write_list_page(hub_file(p).c_str(), title, mod_page_items(p - kHubModPage));
+        return write_list_page(hub_file(p).c_str(), upper_game(e.name), mod_page_items(p - kHubModPage));
     }
     return false;
 }
@@ -3559,7 +3557,7 @@ constexpr uintptr_t RVA_SPLASH_BUTTON_SLOT = 0x2E53940;   // Splash vtable +0x57
 constexpr uintptr_t RVA_SPLASH_ON_START    = 0x0EA0D40;   // Splash::OnStart (A)
 constexpr uintptr_t RVA_SPLASH_A_HANDLER   = 0x0E8F9A5;   // Splash shown: registers A (key 18)
 constexpr std::size_t kSplashState         = 0x448;       // int, see above
-constexpr std::size_t kMaxTitleLabel       = 32;          // bytes; the panel is 326 px wide (about 24 characters)
+constexpr std::size_t kMaxTitleLabel       = 32;          // characters (text_chars); the panel is 326 px wide (about 24 capitals)
 constexpr std::size_t kTitleListFits       = 10;          // choices one box shows, with Back
 constexpr std::size_t kTitlePageSize       = 8;           // choices on a page of a longer list, with Previous, Next and Back
 const char* const kTitleFile               = "UI/Scenes/Anthem/A_Splash.xaml";
@@ -3600,12 +3598,6 @@ const char* button_letters(int b) {
         case FH2_BUTTON_RB: return "RB";
         default: return nullptr;
     }
-}
-
-std::string ascii_upper(std::string s) {
-    for (char& c : s)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return s;
 }
 
 // A_Splash.xaml with every entry's line in it, or remove_leftover_file when there are none.
@@ -3660,7 +3652,7 @@ bool write_title_page() {
         panel += std::string("\r\n                        <StackPanel Orientation=\"Horizontal\" HorizontalAlignment=\"Center\" Margin=\"0, 4, 0, 0\">\r\n"
                              "                            <local:FZMaterial ImageSource=\"{StaticResource A_BitmapImage_ControllerButton_") +
                  button_letters(button) + "}\" Width=\"32\" Height=\"32\" />\r\n"
-                 "                            <local:FZTextBlock Text=\"" + xml_escape(ascii_upper(label)) +
+                 "                            <local:FZTextBlock Text=\"" + xml_escape(upper_game(label)) +
                  "\" Style=\"{StaticResource A_Style_Text_LoadingSmall}\" Margin=\"8, 0, 0, 0\" />\r\n"
                  "                        </StackPanel>";
     panel += "\r\n                    </StackPanel>";
@@ -4430,10 +4422,8 @@ int title_add(FH2Mod* m, const FH2TitleEntry* e) {
                               " gets " + button_letters(button));
     }
     std::string label = e->label;
-    if (label.size() > kMaxTitleLabel) {
-        std::size_t cut = kMaxTitleLabel;
-        while (cut > 0 && (static_cast<unsigned char>(label[cut]) & 0xC0) == 0x80) --cut;   // not inside a character
-        label.resize(cut);
+    if (text_chars(label) > kMaxTitleLabel) {   // characters, not bytes: a Polish letter is one, as an English one
+        label = cut_text(label, kMaxTitleLabel);
         log_line(m->name, std::string("add_title_entry: ") + e->key + "'s label is cut to \"" + label + "\"");
     }
     TitleEntry& t = g_titles.emplace_back();
@@ -4450,7 +4440,7 @@ int title_add(FH2Mod* m, const FH2TitleEntry* e) {
         t.list_title   = widen(e->list_title && *e->list_title ? e->list_title : label.c_str());
         t.list_message = widen(e->list_message ? e->list_message : "");
         for (const std::string& c : t.choices) t.wchoices.push_back(widen(c));
-        t.wchoices.push_back(L"Back");
+        t.wchoices.push_back(L"Back");   // in the game's language as it's shown (tr_w)
         t.loc.push_back(loc_string(t.list_title.c_str()));
         t.loc.push_back(loc_string(t.list_message.c_str()));
         for (const std::wstring& c : t.wchoices) t.loc.push_back(loc_string(c.c_str()));
@@ -4471,7 +4461,7 @@ int title_add(FH2Mod* m, const FH2TitleEntry* e) {
         if (!t.page_loc.empty()) list += ", in " + std::to_string(t.page_loc.size()) + " pages of " + std::to_string(kTitlePageSize);
         list += ")";
     }
-    log_line(m->name, std::string("title-screen entry: (") + button_letters(button) + ") " + ascii_upper(label) + list);
+    log_line(m->name, std::string("title-screen entry: (") + button_letters(button) + ") " + upper_game(label) + list);
     return 1;
 }
 
@@ -4538,11 +4528,12 @@ bool write_hud_notice() {
         return false;
     }
     if (!names.empty()) {   // the notice only when a mod didn't load (a HUD layer may need the page anyway)
-        std::string title = names.size() == 1 ? "A MOD DIDN'T LOAD" : std::to_string(names.size()) + " MODS DIDN'T LOAD";
-        std::string which;
+        const std::string title = names.size() == 1 ? tr("A MOD DIDN'T LOAD") : trf("{0} MODS DIDN'T LOAD", {std::to_string(names.size())});
+        std::string which;   // the mods' names: not translated
         for (std::size_t i = 0; i < names.size() && i < 3; ++i) which += (i ? ", " : "") + names[i];
-        if (names.size() > 3) which += " and " + std::to_string(names.size() - 3) + " more";
-        const std::string text = which + (names.size() == 1 ? " isn't" : " aren't") + " working. See MODS in the pause menu.";
+        if (names.size() > 3) which = trf("{0} and {1} more", {which, std::to_string(names.size() - 3)});
+        const std::string text = trf(names.size() == 1 ? "{0} isn't working. See MODS in the pause menu."
+                                                       : "{0} aren't working. See MODS in the pause menu.", {which});
         auto key = [](double v, double t, bool ease_in) {
             char b[256];
             std::snprintf(b, sizeof b,

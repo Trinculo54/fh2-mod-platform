@@ -11,7 +11,7 @@ namespace fh2platform {
 int game_language(char* code, size_t size);
 // `english` in the game's language now; itself before the game has one, or when there's no translation.
 std::string tr(const char* english);
-// The same, with {0}, {1}... filled in from `args`.
+// The same, with {0}, {1}... filled in from `args` as fill() does (text.hpp): every time each appears, in one pass.
 std::string trf(const char* english, std::initializer_list<std::string> args);
 // For text the game asks for as it shows it: a pointer that stays valid.
 const wchar_t* tr_w(const wchar_t* english);

@@ -400,7 +400,10 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] add_title_entry: Second has choices but no on_choose"));
         CHECK(has(log, "[TestMod] add_title_entry: there's already an entry called Garage"));
         CHECK(has(log, "[TestMod] add_title_entry: Y is TestMod's Garage; Third gets RB"));
-        CHECK(has(log, "[TestMod] add_title_entry: Third's label is cut to \"Third entry with a label that is\""));
+        // cut at 32 characters, not 32 bytes (which left 27 of these), and in capitals beyond a-z (platform 2.9.0)
+        CHECK(has(log, "[TestMod] add_title_entry: Third's label is cut to \"\xC5\xBB\xC3\xB3\xC5\x82ta trasa z bardzo d\xC5\x82ug\xC4\x85 nazw\xC4\x85\""));
+        CHECK(has(log, "[TestMod] title-screen entry: (RB) \xC5\xBB\xC3\x93\xC5\x81TA TRASA Z BARDZO D\xC5\x81UG\xC4\x84 NAZW\xC4\x84\n") ||
+              has(log, "[TestMod] title-screen entry: (RB) \xC5\xBB\xC3\x93\xC5\x81TA TRASA Z BARDZO D\xC5\x81UG\xC4\x84 NAZW\xC4\x84\r\n"));
         CHECK(has(log, "[TestMod] title-screen entry: (LB) FOURTH & <LAST> (a list of 20, in 3 pages of 8)"));
         CHECK(has(log, "[TestMod] add_title_entry: no button left for Fifth (four entries at most, from every mod)"));
         CHECK(has(log, "[TestMod] add_title_entry: \"bad key\" isn't a usable key (letters, digits, _)"));
@@ -516,6 +519,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(splash, "{Binding FH2Mod_TitleReady}") && has(splash, "<Setter Property=\"Visibility\" Value=\"Collapsed\" />"));
             CHECK(has(splash, "A_BitmapImage_ControllerButton_Y}") && has(splash, "Text=\"DRIVE THE TEST GARAGE\""));
             CHECK(has(splash, "A_BitmapImage_ControllerButton_LB}") && has(splash, "Text=\"FOURTH &amp; &lt;LAST&gt;\""));
+            CHECK(has(splash, "Text=\"&#379;&#211;&#321;TA TRASA Z BARDZO D&#321;UG&#260; NAZW&#260;\""));   // Polish capitals
             // the choice row on Settings > Mods: a slider shown like the game's option rows, a name per value
             const auto mods = slurp(scenes / "A_ModOptions.xaml");
             CHECK(has(mods, "Style=\"{StaticResource FH2Mod_Choice_") && has(mods, "<Setter Property=\"Maximum\" Value=\"2\" />"));
@@ -527,6 +531,11 @@ int wmain(int argc, wchar_t** argv) {
             // text given after add_setting and register_mod (API 10)
             CHECK(has(mods, "Test button, renamed") && !has(mods, "\"Test button\"") && has(mods, "Text=\"RB &amp; &lt;renamed&gt;\""));
             CHECK(has(installed, "set later."));
+            // the platform's own lines as whole sentences, one for each state (platform 2.9.0)
+            CHECK(has(installed, "Heading=\"Version 0.5.0 (doesn't check for updates)\""));
+            CHECK(has(installed, "It isn't working: It needs FH2 Mod Platform 9.9.9 or newer; this is 2.9.0. Reinstall it to get the "
+                                 "platform it came with. fh2-mods\\platform.log has more."));
+            CHECK(has(installed, "Reinstall it to get the platform it came with. Off leaves it in fh2-mods, but the game doesn't load it."));
         }
         // No mod adds a HUD layer here, so the preview behaves as 2.8.0: nothing of the layer in the log,
         // no file of its own, no layer in any A_Hud.xaml written; only line 1 names the build.
@@ -601,6 +610,8 @@ int wmain(int argc, wchar_t** argv) {
                 CHECK(has(installed, "local:BindingProxy.C=\"Off online  1.0.0\""));
                 // each mod's page is a view of Installed mods: OfflineMod's has the switch, FH2MP's doesn't
                 CHECK(has(installed, "Heading=\"Load when playing online\"") && has(installed, "Its author made it for offline play"));
+                CHECK(has(installed, "the game doesn't load OfflineMod, so it can't change online play. Its author made it for offline play, so "
+                                     "it's off unless you turn it on. Takes effect the next time you start the game from the launcher."));
                 CHECK(!has(installed, "the game doesn't load FH2MP"));
                 CHECK(!has(slurp(layer() / L"UI\\Scenes\\Anthem\\A_Hud.xaml"), "OfflineMod"));   // not an error
             }

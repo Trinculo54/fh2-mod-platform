@@ -72,8 +72,9 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
         api->log(g_mod, "tile text ok");
 
     // Title-screen entries: Y by default, X asked for (a list), Y asked for again (taken: the next
-    // free one, RB), LB, then none left; a repeated key, a bad one, a long label cut to 32 bytes,
-    // lists with too many choices, an empty choice or no on_choose.
+    // free one, RB), LB, then none left; a repeated key, a bad one, a long Polish label cut to 32
+    // characters (not bytes) and shown in capitals beyond a-z (platform 2.9.0), lists with too many
+    // choices, an empty choice or no on_choose.
     FH2TitleEntry te{sizeof te};
     te.key = "Garage"; te.label = "Drive the test garage";
     te.on_press = [](void*, const char*) { return FH2_TITLE_START; };
@@ -100,7 +101,7 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->add_title_entry(g_mod, &te);
     te.choices = nullptr; te.choice_count = 0; te.on_choose = nullptr; te.list_title = nullptr; te.list_message = nullptr;
     te.on_press = [](void*, const char*) { return FH2_TITLE_START; };
-    te.key = "Third"; te.label = "Third entry with a label that is far too long"; te.button = FH2_BUTTON_Y;
+    te.key = "Third"; te.label = "\xC5\xBB\xC3\xB3\xC5\x82ta trasa z bardzo d\xC5\x82ug\xC4\x85 nazw\xC4\x85 testow\xC4\x85"; te.button = FH2_BUTTON_Y;   // 40 characters, 47 bytes
     api->add_title_entry(g_mod, &te);
     te.key = "Fourth"; te.label = "Fourth & <last>"; te.button = 0;
     te.choices = many; te.choice_count = 20;              // a list in pages: 3 of 8

@@ -22,7 +22,8 @@ struct FH2Mod {
     std::map<std::string, std::map<uint16_t, std::wstring>> set;
     std::map<std::string, std::map<std::wstring, std::wstring>> repl;
     std::vector<std::string> notice; // from set_notice
-    std::vector<std::string> status; // the platform's own: update available, platform too old
+    std::string update_notice;       // the platform's own title notice that a newer version is out ("" for none)
+    std::vector<std::string> status; // the platform's other title notices: platform too old
     std::set<std::wstring> files;    // mediaoverride paths this mod owns (lower case)
     std::vector<std::string> sql;    // database statements, in the order given
     std::string latest;              // latest release on GitHub, once checked
@@ -124,11 +125,11 @@ void prepare_car_packs();
 // name (<car>.part-ids.txt), set in their zips on the temp drive.
 void place_car_ids(const CarPack& pack, const std::vector<std::pair<std::string, int64_t>>& cars);
 // Without the layer the packs in fh2-cars aren't read: says so (with `why`) when there are any.
-void car_packs_unavailable(const std::string& why);
+void car_packs_unavailable(const std::string& why);   // why: a sentence, as a message from later() (text.hpp)
 // Why the packs in fh2-cars aren't read this session (for the MODS tab), or "".
 std::string car_packs_unread();
 // Why a pack (by folder name) isn't working this session, or "": the first reason given.
-void note_car_pack_problem(const std::string& pack, const std::string& why);
+void note_car_pack_problem(const std::string& pack, const std::string& why);   // why: a message from later() (text.hpp)
 std::string car_pack_problem(const std::string& pack);
 
 // database.cpp: SQL patches applied to a copy of the game database.
