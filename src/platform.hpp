@@ -19,8 +19,9 @@ struct FH2Mod {
     std::wstring wname, dll;
     bool check_updates = true;
     bool offline_only  = false;      // FH2ModInfo.offline_only (API 9)
-    // Stopped for online play (platform 2.9.0): it had started offline, then FH2MP went online. Its
-    // hooks are off and stay off, and its hotkeys and commands aren't called, until the game restarts.
+    // Stopped for online play (platform 2.9.0): it had started offline, then FH2MP went online. Until
+    // the game restarts its hooks are off, its text, SQL and files are out and new ones refused, and
+    // its hotkeys, commands, pad layers, HUD layer calls and title-screen entries do nothing.
     // Read and written through fh2platform::stopped_online and stop_online (atomic).
     bool stopped_online = false;
     // table (lower case) -> edits
@@ -207,7 +208,9 @@ void set_mod_enabled(const std::wstring& dll, bool on);
 // or FH2MP saying it's going online), never back.
 bool playing_online();
 bool fh2mp_installed();               // FH2MP is in fh2-mods (turned on or not), as FH2MP.dll or under another name
-bool is_fh2mp(const ModEntry& e);     // that entry is FH2MP itself (it always loads online)
+// That entry is FH2MP itself (it always loads online): FH2MP.dll, or the DLL FH2MP registered from. A
+// mod that only registers under the name FH2MP isn't.
+bool is_fh2mp(const ModEntry& e);
 // FH2Mod::stopped_online, from any thread.
 inline bool stopped_online(const FH2Mod* m) {
     return m && std::atomic_ref<bool>(const_cast<FH2Mod*>(m)->stopped_online).load();

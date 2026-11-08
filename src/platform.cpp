@@ -75,8 +75,11 @@ std::vector<std::unique_ptr<FH2Mod>> g_held;      // mods that registered but do
 // FH2MP is on and has a session to play online with: set before any mod loads, and from false to
 // true at most once after that (go_online), never back.
 std::atomic<bool> g_online{false};
-std::wstring g_fh2mp_dll;                         // the DLL that registered as FH2MP this launch, or ""
+// FH2MP this launch: FH2MP.dll when it's there and turned on, else the first DLL to register as
+// FH2MP, or "" (under g_mu)
+std::wstring g_fh2mp_dll;
 std::vector<std::string> g_started_offline;       // what go_online found running that shouldn't run online
+bool g_first_write = false;                       // the loader has begun its first write of the tables and the database (under g_mu)
 
 std::mutex g_log_mu;
 FILE* g_log = nullptr;
@@ -280,6 +283,7 @@ void apply_all() {
         std::map<uint16_t, std::wstring> keys;
         std::map<std::wstring, std::wstring> texts;
         for (const auto& m : g_mods) {
+            if (stopped_online(m.get())) continue;   // stopped for online play: its edits were taken out (go_online)
             if (auto it = m->set.find(table); it != m->set.end())
                 for (const auto& [k, v] : it->second) {
                     if (keys.count(k) && keys[k] != v)
@@ -461,6 +465,7 @@ bool remembered_offline_only(const std::wstring& dll);
 // In the online play section below.
 bool fh2mp_session(std::string* why);
 void go_online(const std::string& why);
+bool is_the_fh2mp(const std::wstring& dll);
 
 FH2Mod* api_register(const FH2ModInfo* info) {
     if (!info || info->size < offsetof(FH2ModInfo, check_updates) + sizeof(int) || !info->name) return nullptr;
@@ -493,18 +498,23 @@ FH2Mod* api_register(const FH2ModInfo* info) {
         // One hold of the lock from the online check to the list: go_online (FH2MP going online
         // from its own thread) then either sees this mod in g_mods or has set g_online before it.
         std::scoped_lock lk{g_mu};
-        if (m->offline_only && g_online) {
+        if (g_online && !is_the_fh2mp(g_current_dll)) {
+            // The same rule as at load (loads_online): the player's "Load when playing online" switch,
+            // else its author's offline_only. That matters here when FH2MP went online after this DLL
+            // was loaded, or for a mod that registers outside its fh2mod_init.
             const auto choices = online_choices();
             const auto chosen  = choices.find(lower_w(g_current_dll));
-            if (chosen == choices.end() || !chosen->second) {
-                // Its author says it shouldn't run online, and the player hasn't said otherwise. It
-                // isn't registered, so its fh2mod_init returns; it's remembered (platform-mods.txt),
-                // so the next online launch doesn't load it at all.
+            const bool player  = chosen != choices.end();
+            if (player ? !chosen->second : m->offline_only) {
+                // It isn't registered, so its fh2mod_init returns; an offline-only one is remembered
+                // (platform-mods.txt), so the next online launch doesn't load it at all.
                 m->dll = g_current_dll;
                 for (auto& f : g_found)
                     if (lower_w(f.file) == lower_w(g_current_dll)) f.online_off = true;
-                log_line(m->name, m->version + " doesn't run in online play (its author says so), so it isn't started; "
-                                               "MODS > Installed mods has its \"Load when playing online\" switch");
+                log_line(m->name, m->version +
+                                      (player ? " is set to stay off when playing online, so it isn't started"
+                                              : " doesn't run in online play (its author says so), so it isn't started") +
+                                      "; MODS > Installed mods has its \"Load when playing online\" switch");
                 g_held.push_back(std::move(m));
                 return nullptr;
             }
@@ -534,6 +544,7 @@ void touch(const char* table) {
 void api_set_string(FH2Mod* m, const char* table, uint16_t key, const wchar_t* text) {
     if (!m || !table) return;
     std::scoped_lock lk{g_mu};
+    if (stopped_online(m)) return;   // stopped for online play (go_online)
     m->set[lower(table)][key] = text ? text : L"";
     touch(table);
 }
@@ -541,6 +552,7 @@ void api_set_string(FH2Mod* m, const char* table, uint16_t key, const wchar_t* t
 void api_replace_string(FH2Mod* m, const char* table, const wchar_t* from, const wchar_t* to) {
     if (!m || !table || !from) return;
     std::scoped_lock lk{g_mu};
+    if (stopped_online(m)) return;   // stopped for online play (go_online)
     m->repl[lower(table)][from] = to ? to : L"";
     touch(table);
 }
@@ -588,6 +600,7 @@ void api_clear_file(FH2Mod* m, const char* path) { clear_file(m, path); }
 void api_add_sql(FH2Mod* m, const char* sql) {
     if (!m || !sql || !*sql) return;
     std::scoped_lock lk{g_mu};
+    if (stopped_online(m)) return;   // stopped for online play (go_online)
     m->sql.emplace_back(sql);
 }
 
@@ -598,11 +611,16 @@ void api_clear_sql(FH2Mod* m) {
 }
 
 void build_database() {
+    // One build at a time, from snapshot to file, so a build from an older snapshot (a mod stopped for
+    // online play since) can't finish after a newer one.
+    static std::mutex build_mu;
+    std::scoped_lock build{build_mu};
     // Work from a snapshot, so mods can keep adding while it's built.
     std::vector<FH2Mod> snap;
     {
         std::scoped_lock lk{g_mu};
         for (const auto& m : g_mods) {
+            if (stopped_online(m.get())) continue;   // stopped for online play (go_online)
             FH2Mod c;
             c.name = m->name;
             c.sql  = m->sql;
@@ -738,13 +756,38 @@ bool fh2mp_session(std::string* why) {
 // The DLLs that registered as FH2MP at earlier launches (platform-mods.txt), lower case.
 std::set<std::wstring> remembered_fh2mp();
 
-// Whether `dll` (in fh2-mods) is FH2MP: FH2MP.dll, or a DLL that registered as FH2MP, this launch or
-// an earlier one.
+// Whether `dll` (in fh2-mods) may be FH2MP: FH2MP.dll, or a DLL that registered as FH2MP, this launch or
+// an earlier one. Only for finding out whether the game is online, where taking a mod that merely calls
+// itself FH2MP for it errs on the safe side.
 bool fh2mp_dll(const std::wstring& dll, const std::set<std::wstring>& remembered) {
     const std::wstring l = lower_w(dll);
     if (l == L"fh2mp.dll" || remembered.count(l)) return true;
     std::scoped_lock lk{g_mu};
     return !g_fh2mp_dll.empty() && lower_w(g_fh2mp_dll) == l;
+}
+
+// Whether `dll` is FH2MP itself, which always loads online and is never stopped: FH2MP.dll; else the
+// DLL that registered as FH2MP first this launch; before that, the only DLL in fh2-mods that registered
+// as FH2MP at an earlier launch, when there's no FH2MP.dll. Another mod that registers as FH2MP gets
+// none of that, so the player's "Load when playing online" switch still counts for it.
+bool is_the_fh2mp(const std::wstring& dll) {
+    const std::wstring l = lower_w(dll);
+    if (l.empty()) return false;
+    if (l == L"fh2mp.dll") return true;
+    {
+        std::scoped_lock lk{g_mu};
+        if (!g_fh2mp_dll.empty()) return lower_w(g_fh2mp_dll) == l;
+    }
+    std::error_code ec;
+    if (fs::is_regular_file(g_azimuth / "fh2-mods" / "FH2MP.dll", ec)) return false;
+    std::wstring only;
+    int n = 0;
+    for (const auto& r : remembered_fh2mp())
+        if (fs::is_regular_file(g_azimuth / "fh2-mods" / r, ec)) {
+            only = r;
+            ++n;
+        }
+    return n == 1 && only == l;
 }
 
 // Online at load: FH2MP is among the DLLs about to load (`files`, less those turned off), and has a
@@ -764,31 +807,43 @@ bool detect_online(const std::set<std::wstring>& off, const std::vector<std::wst
 // Whether `dll` loads when playing online: the player's choice, else not if its author marked it
 // offline-only at an earlier launch, else yes. FH2MP itself always does.
 bool loads_online(const std::wstring& dll, const std::map<std::wstring, bool>& choices) {
-    if (fh2mp_dll(dll, remembered_fh2mp())) return true;
+    if (is_the_fh2mp(dll)) return true;
     if (const auto it = choices.find(lower_w(dll)); it != choices.end()) return it->second;
     return !remembered_offline_only(dll);
 }
 
 // FH2MP is online, or about to be, after the mods started offline. From now on the game counts as
-// online: playing_online() says so, offline-only mods that register from here on are held back, and
-// the ones that shouldn't run online (their author's offline_only, or the player's "Load when
-// playing online" switch) and had started are stopped: their hooks and byte patches go off, and
-// enable_hooks, their hotkeys and their commands are refused until the game restarts. What they did
-// to the game some other way can't be undone, so FH2Platform.Online's going_online tells FH2MP
-// about them. Mods from before the platform can't be stopped at all: they're named in the log, and
-// told to FH2MP the same way.
+// online: playing_online() says so, mods that shouldn't run online and start or register from here on
+// are held back, and the ones that had started (their author's offline_only, or the player's "Load
+// when playing online" switch) are stopped until the game restarts:
+// - their hooks and byte patches go off, and enable_hooks is refused;
+// - their game text, SQL and files (set_file) are taken out, and new ones refused; once the loader
+//   has written the tables and the database, they're written again without them;
+// - their hotkeys, commands, pad layers, HUD layer calls and title-screen entries do nothing.
+// What they did to the game some other way can't be undone, so FH2Platform.Online's going_online
+// tells FH2MP about them. Mods from before the platform can't be stopped at all: they're named in the
+// log, and told to FH2MP the same way.
 void go_online(const std::string& why) {
     std::vector<FH2Mod*> stop;
     std::vector<std::wstring> others;   // mods from before the platform (fh2wheel too) already loaded
+    bool strings = false, sql = false, rewrite = false;
     {
         std::scoped_lock lk{g_mu};
         if (g_online.exchange(true)) return;
         const auto choices = online_choices();
         for (const auto& m : g_mods) {
-            if (lstrcmpiA(m->name.c_str(), "FH2MP") == 0) continue;
+            if (is_the_fh2mp(m->dll)) continue;
             const auto c = choices.find(lower_w(m->dll));
             if (c != choices.end() ? c->second : !m->offline_only) continue;
             stop_online(m.get());
+            // its text and SQL go: the tables it edits are written again, and the database built again
+            for (const auto& [t, _] : m->set) g_dirty.insert(t);
+            for (const auto& [t, _] : m->repl) g_dirty.insert(t);
+            strings = strings || !m->set.empty() || !m->repl.empty();
+            sql     = sql || !m->sql.empty();
+            m->set.clear();
+            m->repl.clear();
+            m->sql.clear();
             stop.push_back(m.get());
             g_started_offline.push_back(m->name);
         }
@@ -801,18 +856,27 @@ void go_online(const std::string& why) {
             others.push_back(f.file);
             g_started_offline.push_back(narrow(f.file));
         }
+        // Before the loader's first write of the tables and the database, that write leaves them out.
+        rewrite = g_first_write;
     }
     plog("online play after all: " + why + ". The mods had started as for offline play; from now on the game counts as "
          "online");
     for (FH2Mod* m : stop) {
-        g_api.disable_hooks(m, nullptr);
-        log_line(m->name, "stopped for online play: it shouldn't run online, and FH2MP went online after it had started. Its "
-                          "hooks and byte patches are off, and stay off until the game restarts");
+        const int off = g_api.disable_hooks(m, nullptr);
+        clear_file(m, nullptr);
+        log_line(m->name, off ? "stopped for online play: it shouldn't run online, and FH2MP went online after it had started. Its "
+                                "hooks and byte patches are off, and its game text, database changes and files are taken out, "
+                                "until the game restarts"
+                              : "stopped for online play: it shouldn't run online, and FH2MP went online after it had started. "
+                                "Its game text, database changes and files are taken out, but some of its hooks or byte patches "
+                                "couldn't be turned off (the lines above say which)");
     }
     for (const auto& f : others)
         plog(narrow(f) + " shouldn't run online, but it's a mod from before the platform, so it can't be stopped; start the "
              "game from the FH2MP launcher to leave it out");
     if (stop.empty() && others.empty()) plog("no mod that shouldn't run online had started");
+    if (rewrite && strings) apply_all();
+    if (rewrite && sql) build_database();
 }
 
 // ---- FH2Platform.Online (platform 2.9.0): for FH2MP ---------------------------------
@@ -825,7 +889,10 @@ int online_going(char* names, size_t size) {
     std::string list;
     for (const auto& n : g_started_offline) list += (list.empty() ? "" : ", ") + n;
     if (names && size) {
-        const std::size_t n = std::min(list.size(), static_cast<std::size_t>(size - 1));
+        std::size_t n = std::min(list.size(), static_cast<std::size_t>(size - 1));
+        // cut short between characters, not inside one (UTF-8 continuation bytes are 10xxxxxx)
+        if (n < list.size())
+            while (n > 0 && (static_cast<unsigned char>(list[n]) & 0xC0) == 0x80) --n;
         std::memcpy(names, list.data(), n);
         names[n] = '\0';
     }
@@ -943,6 +1010,11 @@ DWORD WINAPI load_mods(LPVOID) {
     std::sort(files.begin(), files.end());
     std::vector<LoadedDll> dlls;
     const auto off = disabled_mods();
+    for (const auto& f : files)   // FH2MP.dll, turned on, is FH2MP (is_the_fh2mp), whatever else registers as FH2MP
+        if (lower_w(f) == L"fh2mp.dll" && !off.count(L"fh2mp.dll")) {
+            std::scoped_lock lk{g_mu};
+            g_fh2mp_dll = f;
+        }
     g_online       = detect_online(off, files);
     const auto online_choice = online_choices();
     if (g_online) plog("started from the FH2MP launcher (online play): mods set to stay off online aren't loaded");
@@ -1104,6 +1176,15 @@ DWORD WINAPI load_mods(LPVOID) {
             plog(narrow(l.file) + " has no fh2mod_init (a mod from before the platform); it runs on its own");
             continue;
         }
+        if (g_online && !loads_online(l.file, online_choices())) {
+            // FH2MP went online after this DLL was loaded (go_online): it isn't started, as it
+            // wouldn't have been loaded had the loader known
+            plog(narrow(l.file) + " is set to stay off when playing online; not started (FH2MP went online after it was loaded)");
+            std::scoped_lock lk{g_mu};
+            for (auto& f : g_found)
+                if (lower_w(f.file) == lower_w(l.file)) f.online_off = true;
+            continue;
+        }
         {
             std::scoped_lock lk{g_mu};
             g_current_dll = l.file;
@@ -1153,6 +1234,7 @@ DWORD WINAPI load_mods(LPVOID) {
     // First write of everything edited so far, and the title notices.
     {
         std::scoped_lock lk{g_mu};
+        g_first_write = true;   // a mod stopped for online play from here on has the tables and the database written again
         g_dirty.insert("main.str");
         g_table_names.emplace("main.str", "Main.str");
     }
@@ -1287,7 +1369,7 @@ bool fh2mp_installed() {
     return !g_fh2mp_dll.empty();
 }
 
-bool is_fh2mp(const ModEntry& e) { return _wcsicmp(e.dll.c_str(), L"FH2MP.dll") == 0 || e.name == "FH2MP"; }
+bool is_fh2mp(const ModEntry& e) { return is_the_fh2mp(e.dll); }
 
 void set_mod_online(const std::wstring& dll, bool on) {
     auto choices = online_choices();

@@ -741,10 +741,12 @@ struct FH2PageRow {
 
    going_online: call it before connecting. From then on the game counts as
    online: mods that shouldn't run online and had already started (offline,
-   before FH2MP's session was found) are stopped, with their hooks and byte
-   patches off until the game restarts. Returns how many such mods had
-   started in this game, 0 for none, and puts their names in `names` as
-   "Nitro, Other" (cut short to fit `size`, NUL-terminated; NULL for none).
+   before FH2MP's session was found) are stopped until the game restarts:
+   their hooks and byte patches go off, and their game text, SQL and files
+   are taken out. Returns how many such mods had started in this game, 0
+   for none, and puts their names in `names` as "Nitro, Other", UTF-8, cut
+   short between characters to fit `size` and NUL-terminated. `names` may
+   be NULL (or `size` 0) to get only the count.
    Over 0, they ran offline first and may have changed the game in ways the
    platform can't undo: don't connect, and ask the player to start the game
    from the FH2MP launcher. Call it from any thread, as often as you like. */
