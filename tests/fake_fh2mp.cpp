@@ -1,8 +1,9 @@
 // A stand-in for FH2MP's DLL in the platform test's later online phases (platform 2.9.0). It registers
-// as FH2MP from a DLL with another name (ZzFH2MP.dll), as a renamed FH2MP.dll would. In fh2mod_init it
+// as FH2MP from a DLL with another name (ZzFH2MP.dll, MpClient.dll), as a renamed FH2MP.dll would. In fh2mod_init it
 // writes the session file the FH2MP launcher writes, where FH2MP looks for it (data\bin when that's
 // there, else next to azimuth.exe), if it isn't there yet: a Play pressed while the game was starting.
-// Once every mod has started, it asks FH2Platform.Online, as FH2MP would before it connects.
+// Once every mod has started, it asks FH2Platform.Online, as FH2MP would before it connects. With
+// FH2_TEST_NO_SESSION set ("online-ready") it writes no session, so only that call makes the game online.
 #include "fh2mod.h"
 #include <windows.h>
 
@@ -24,7 +25,8 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     const DWORD a          = GetFileAttributesW(bin.c_str());
     if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) dir = bin;
     const std::wstring session = dir + L"\\fh2mp-session.txt";
-    if (GetFileAttributesW(session.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    if (GetFileAttributesW(session.c_str()) == INVALID_FILE_ATTRIBUTES &&
+        GetEnvironmentVariableW(L"FH2_TEST_NO_SESSION", nullptr, 0) == 0) {
         HANDLE f = CreateFileW(session.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (f != INVALID_HANDLE_VALUE) {
             DWORD n = 0;
