@@ -768,7 +768,7 @@ void reuse_strings(const fs::path& file) {
 void note_pack_result(const std::string& source, const std::string& result) {
     const std::string pack = "car pack ", failed = "FAILED, so none of its changes were made: ";
     if (source.rfind(pack, 0) == 0 && result.rfind(failed, 0) == 0)
-        note_car_pack_problem(source.substr(pack.size()), later("Its database changes failed: {0}", {result.substr(failed.size())}));
+        note_car_pack_problem(source.substr(pack.size()), later("Its database changes failed: {0}.", {result.substr(failed.size())}));
 }
 
 void replay(const State& st) {
