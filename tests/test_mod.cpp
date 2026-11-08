@@ -132,6 +132,17 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->add_setting(g_mod, &ch);                         // refused: too many
     api->log(g_mod, api->playing_online() ? "playing online" : "playing offline");
 
+    // Text in the game's language (API 10): no game here, so no language yet. The choice row's label
+    // and its second choice renamed (the pages are written after this, so they show it), the
+    // description left as it is; refused: the wrong number of choices, a row that isn't there.
+    char lang[8];
+    if (!api->game_language(lang, sizeof lang) && !lang[0]) api->log(g_mod, "no game language yet");
+    static const char* const renamed[] = {"LB", "RB & <renamed>", "A & <B>"};
+    if (api->set_setting_text(g_mod, "Button", "Test button, renamed", nullptr, renamed, 3)) api->log(g_mod, "setting text ok");
+    api->set_setting_text(g_mod, "Button", nullptr, nullptr, renamed, 2);   // refused: it has 3
+    api->set_setting_text(g_mod, "Nope", "x", nullptr, nullptr, 0);          // refused: no such row
+    api->set_mod_description(g_mod, "TestMod's description, set later.");
+
     // Sessions: the id, and a log of our own named after it (three kept); a bad folder name.
     api->log(g_mod, (std::string("session id ") + api->session_id()).c_str());
     if (const wchar_t* p = api->session_log_path(g_mod, L"TestModData", 3)) {

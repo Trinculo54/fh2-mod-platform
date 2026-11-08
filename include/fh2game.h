@@ -264,6 +264,15 @@
 /* Calls MSVCR110's rand (import slot 0x141DD0A90). */
 #define FH2_GAME_RAND 0x1259200
 #define FH2_GAME_RAND_BYTES "\x48\x83\xEC\x28\xFF\x15\x86\x78\xB7\x00"
+
+/* ---- Text ---------------------------------------------------------------------------------------- */
+
+/* A pointer to the string tables' manager. At its +0x30, the text language's code, an MSVC
+ * std::string ("EN", "CHT", "br"...: short, so in place, its length at +0x40), set once the game
+ * has read its language option. The platform's game_language() (API 10) reads it for you.
+ * Extra Options, FH2 ANNA. */
+#define FH2_GAME_STRING_TABLES 0x3662990
+
 /* ---- The platform's own ----------------------------------------------------------------------- */
 
 /* Hooked by the platform for the Mods page, its own pages, the MODS tab and the title-screen

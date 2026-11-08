@@ -94,6 +94,9 @@ int settings_get(FH2Mod* mod, const char* key);
 void settings_set(FH2Mod* mod, const char* key, int value);
 float settings_get_slider(FH2Mod* mod, const char* key);
 void settings_set_slider(FH2Mod* mod, const char* key, float value);
+// A row's text, in the game's language (API 10).
+int settings_set_text(FH2Mod* mod, const char* key, const char* label, const char* description, const char* const* choices,
+                      uint32_t choice_count);
 // Pages of the mods' own (API 8).
 int pages_add(FH2Mod* mod, const FH2Page* page);
 int pages_set_rows(FH2Mod* mod, const char* page_key, const FH2PageRow* rows, uint32_t count);
@@ -163,6 +166,8 @@ void add_dump_memory(FH2Mod* mod, const void* p, std::size_t n); // memory a mod
 
 // hotkeys.cpp: keys and controller chords that call mods back, with rows on the Mods page (API 9).
 int hotkey_add(FH2Mod* mod, const FH2Hotkey* hotkey);
+// Their rows' text, in the game's language now (before the pages are written).
+void hotkeys_refresh_text();
 
 // commands.cpp: mods' commands, run through a named pipe (API 9).
 int command_add(FH2Mod* mod, const char* name, const char* help, FH2CommandFn fn, void* user);
