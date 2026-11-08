@@ -1,6 +1,6 @@
 # FH2 mods on Linux (Wine and Proton)
 
-FH2 mods run on Linux wherever Azimuth runs, under Wine or Proton. The platform needs nothing extra. Extra Options needs one setting, and a few mods have limits there. What's here was tested with Wine 9.0 or seen in Linux players' logs; Proton itself hasn't been tested directly.
+FH2 mods run on Linux wherever Azimuth runs, under Wine or Proton. The platform needs nothing extra. Extra Options needs one setting, and a few mods have limits there. What's here was tested with Wine 9.0 or seen in Linux players' logs; Proton hasn't been tested here, but what's said about it below comes from a Steam Deck player's runs (SteamOS, Proton Experimental, Azimuth 1.0.1).
 
 ## Setting up
 
@@ -15,6 +15,13 @@ WINEDLLOVERRIDES="winmm=n,b"
 - Wine on its own: start Azimuth with `WINEDLLOVERRIDES="winmm=n,b" wine azimuth.exe`, or add `winmm` (native, builtin) under Libraries in `winecfg`.
 
 Without it Extra Options doesn't run. The platform's text, file and database changes reach the game through the `mediaoverride` folder: up to 2.7.2 only Extra Options made the game read it, so none of them showed up. From 2.7.3 the platform mounts the folder itself when Extra Options isn't loaded, so mods' changes still show up (from 2.9.0, on Azimuth 1.0 or later, through the Azimuth folder's own layer and with car packs, which hasn't been tried under Wine yet); Extra Options' own features (and the menus that come from it) still need the override. From 2.7.1, `fh2-mods\platform.log` says so ("Extra Options isn't running: its winmm.dll is next to azimuth.exe, but Wine is using its own winmm.dll instead"); older versions said nothing, and waited 20 seconds for Extra Options before mods could hook the game.
+
+**Under Proton, use platform 2.9.0 or newer.** Two things kept the platform's own `mediaoverride` mount from working there before:
+
+- Proton can't map the game where Windows does (0x140000000), so Azimuth maps it somewhere else and moves its pointers by the same amount. The platform compared some of those pointers with the exe on disk as they were, so it always said "media overrides: the game's code isn't what this build expects; left alone", and without Extra Options no text, file or database change reached the game. From 2.9.0 it allows for the move, and `platform.log` says where the game is ("media overrides: the game is mapped at 0x18940000, not at 0x140000000").
+- Extra Options' `winmm.dll` can load after the platform under Proton. The platform then mounted the folder itself, and Extra Options refused all of its patches (`FH2_ExtraOptions.log`: "REFUSED: unexpected loaded bytes at media_override_native_resolver"), in about half the launches. From 2.9.0, when Extra Options' `winmm.dll` is next to `azimuth.exe` and Wine is set to load it (`winmm` native first, in `WINEDLLOVERRIDES` or in `winecfg` for every program or for `azimuth.exe`), the platform waits for it and leaves `mediaoverride` to it, as when it's already loaded ("media overrides: Extra Options' winmm.dll is next to azimuth.exe and Wine is set to load it, but it isn't loaded yet", then "Extra Options has loaded"). Mods also wait for Extra Options' patches before they hook the game, as on Windows.
+
+With Extra Options running, the platform's files go to `mediaoverride` and car packs aren't read, as on Windows.
 
 **2. The platform loads as it is.** With Wine 9.0, the `d3dcompiler_47.dll` next to `azimuth.exe` is used without an override. If `fh2-mods\platform.log` never appears, your Wine or Proton build is using its own copy: add it to the override, `WINEDLLOVERRIDES="winmm,d3dcompiler_47=n,b"`. Azimuth 1.0.3 no longer loads `d3dcompiler_47.dll`; there the platform is the `DWrite.dll` next to `azimuth.exe` (platform 2.7.4 and newer), and Wine has its own `dwrite.dll` too. If `platform.log` never appears on 1.0.3, use `WINEDLLOVERRIDES="winmm,dwrite=n,b"`.
 
@@ -34,6 +41,8 @@ Without it Extra Options doesn't run. The platform's text, file and database cha
 
 - **There's no `fh2-mods\platform.log`.** The platform didn't load: add `d3dcompiler_47` (on Azimuth 1.0.3, `dwrite`) to the override (step 2).
 - **`platform.log` is there, but there's no MODS tile and no changed text.** With platform 2.7.2 or older, Extra Options isn't running: check the `winmm` override (step 1), or update the platform. From 2.7.3 look for "media overrides:" lines in `platform.log`. From 2.7.1 `platform.log` says "Extra Options isn't running" when Wine is the reason. `FH2_ExtraOptions.log` next to `azimuth.exe` is rewritten every time Extra Options starts, so an old date on it means it didn't.
+- **`FH2_ExtraOptions.log` says "REFUSED: unexpected loaded bytes at media_override_native_resolver".** The platform mounted `mediaoverride` before Extra Options loaded (Proton): use platform 2.9.0 or newer. If 2.9.0 still does it, the platform didn't see the override: write it as `winmm`, as above: the platform doesn't count `winmm.dll=n,b`.
+- **`platform.log` says "Extra Options' winmm.dll still isn't loaded 20 seconds after the game was mapped".** Wine was set to load Extra Options, but it didn't, so nothing mounted `mediaoverride` that time. Check that `FH2_ExtraOptions.log` next to `azimuth.exe` is from that launch, and remove the override if you don't want Extra Options: the platform then mounts the folder itself.
 - **`platform.log` says database changes are off.** The platform is older than 2.7.1 (step 3).
 - Crash reports go to `fh2-mods\crashes` as on Windows. Paths in logs start with `Z:\`, which is your Linux root, `/`.
 
