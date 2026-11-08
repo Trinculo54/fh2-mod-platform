@@ -732,6 +732,33 @@ api->add_command(g_mod, "debris", "debris clear: removes every broken piece now"
                  }, nullptr);
 ```
 
+## Text in the game's language (API 10)
+
+```c
+int game_language(char* code, size_t size);
+int set_setting_text(FH2Mod* mod, const char* key, const char* label, const char* description,
+                     const char* const* choices, uint32_t choice_count);
+void set_mod_description(FH2Mod* mod, const char* description);
+```
+
+The game picks its text language a few seconds after it starts, from its own language option, well after `fh2mod_init`. Rows added there can only be in a language you guess, and when the player has just changed the game's language the guess is wrong: Japanese, Korean or Chinese text in another language's font even shows as boxes. These let your text follow the game:
+
+- **`game_language`** puts the game's text language in `code`: the code its string tables are named by, in capitals (`EN`, `GB`, `DE`, `FR`, `ES`, `MX`, `IT`, `BR`, `NL`, `PL`, `RU`, `JP`, `KO`, `CHT`, `CZ`, `HU`; the game's Czech and Hungarian text is English). It returns 1, or 0 before the game has a language, or with no game. Cheap enough to ask every frame.
+- **`set_setting_text`** changes a row's label, description and, for a choice row, its choices' names. `NULL` leaves that part as it was; `choices` must have as many names as the row has. Link rows take a label and a description. It returns 1, or 0 when you have no row called `key` or the choices don't match, and the log says why.
+- **`set_mod_description`** changes your `FH2ModInfo.description`, shown on the MODS tab and with your mod's Load row on the Mods page.
+
+The Mods page, the MODS tab and your mod's page are written each time they're opened, so new text shows the next time the player opens them. Call these from any thread, as often as you like: from your own thread once `game_language` answers, say.
+
+```cpp
+// in your own thread
+char lang[8];
+while (!api->game_language(lang, sizeof lang)) Sleep(500);
+api->set_setting_text(g_mod, "Trees", my_text(lang, "Breakable trees"), my_text(lang, "Trees break when you hit them."), nullptr, 0);
+api->set_mod_description(g_mod, my_text(lang, "Breakable trees and bushes."));
+```
+
+In Japanese, Korean and Chinese the game's fonts only have the characters its own text uses, so check your translations against them (`media\ui\Fonts.zip`; its `fontsettings.xml` says which font each language uses): a character the font lacks shows as a box.
+
 ## Crash reports
 
 These need no code from you. If the game crashes, the platform writes `fh2-mods\crashes\crash-<date>-<time>.txt` and a minidump (`.dmp`) beside it, and adds the summary to `platform.log`. The report has the exception, the call stack as module+offset (`game+0x...`, `YourMod.dll+0x...`), the mod the crash came from, if any, and every hook in place (see above). When Azimuth 1.0.1 was running another game, it says which, so a crash there isn't taken for a mod's. The ten newest reports are kept. Open the minidump in Visual Studio or WinDbg with your mod's debug symbols to see the exact line.

@@ -185,7 +185,7 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("---- platform.log\n%s----\n", log.c_str());
 
     if (phase == L"full") {
-        CHECK(has(log, "FH2 Mod Platform 2.8.0 (API 9)"));
+        CHECK(has(log, "FH2 Mod Platform 2.9.0 (API 10)"));
         CHECK(has(log, "media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride"));
         CHECK(log.find("loaded HelloMod.dll") != std::string::npos);
         CHECK(log.find("Legacy.dll has no fh2mod_init") != std::string::npos);
@@ -260,6 +260,10 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] add_setting: One is a choice row but needs 2 to 32 choices"));
         CHECK(has(log, "[TestMod] add_setting: Lots is a choice row but needs 2 to 32 choices"));
         CHECK(has(log, "[TestMod] playing offline") && !has(log, "started from the FH2MP launcher"));
+        // text in the game's language (API 10)
+        CHECK(has(log, "[TestMod] no game language yet") && has(log, "[TestMod] setting text ok"));
+        CHECK(has(log, "[TestMod] set_setting_text: Button has 3 choices, not 2") &&
+              has(log, "[TestMod] set_setting_text: there's no row called Nope"));
         // commands (API 9): through fh2mod.exe, as a tool would
         {
             const std::wstring pid = L"--pid " + std::to_wstring(GetCurrentProcessId()) + L" ";
@@ -298,7 +302,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(id.size() >= 17 && id[8] == '-' && id[15] == '-' && id.substr(16) == std::to_string(GetCurrentProcessId()));
             CHECK(has(log, ("session " + id + ": started ").c_str()));
             const std::string copy = slurp(fs::path(L"fh2-mods\\platform-logs") / ("platform-" + id + ".log"));
-            CHECK(has(copy, "FH2 Mod Platform 2.8.0 (API 9)") && has(copy, "[TestMod] session id "));
+            CHECK(has(copy, "FH2 Mod Platform 2.9.0 (API 10)") && has(copy, "[TestMod] session id "));
             CHECK(slurp(fs::path(L"TestModData\\logs") / (id + ".log")) == "test mod's own log\n");
             CHECK(has(log, ("[TestMod] session log: TestModData\\logs\\" + id + ".log (the newest 3 kept)").c_str()));
             CHECK(has(log, "[TestMod] bad log folder refused") &&
@@ -312,7 +316,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(slurp(fs::path(L"fh2-mods\\save-snapshots") / id / L"1A96545B" / L"test.sav") == "save data");
             CHECK(slurp(L"data\\titles\\1A96545B\\saves\\1A96545B\\test.sav") == "save data");
             CHECK(has(status, ("\"session\": \"" + id + "\"").c_str()) && has(status, "\"state\": \"running\"") &&
-                  has(status, "\"platform\": \"2.8.0\"") && has(status, "\"TestMod\": \"1.0.0\""));
+                  has(status, "\"platform\": \"2.9.0\"") && has(status, "\"TestMod\": \"1.0.0\""));
         }
         // The game's menus were given: the pages are written. (Not with the game mapped: this
         // test's copy of it doesn't pass the menus' code checks, so the platform takes them out.)
@@ -338,6 +342,14 @@ int wmain(int argc, wchar_t** argv) {
                   has(pause, "Template=\"{StaticResource FH2Mod_Template_IconTile_0}\""));
             CHECK(has(pause, "Color=\"{Binding FH2Mod_TileBack_0, RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type Page}}}\"") &&
                   has(pause, "{Binding FH2Mod_TileTitle_0,") && has(pause, "{Binding FH2Mod_TileLine_0,") && has(pause, "{Binding FH2Mod_TileIcon_0,"));
+            // the MODS tab's own tiles: their names come from FH2Mod_HubTile_<k> (in the game's language), shown as their Tag
+            bool hub_tags = true;
+            for (int k = 0; k < 5; ++k)
+                hub_tags = hub_tags && has(pause, ("Tag=\"{Binding FH2Mod_HubTile_" + std::to_string(k) +
+                                                   ", RelativeSource={RelativeSource AncestorType=Page, Mode=FindAncestor}}\"").c_str());
+            CHECK(hub_tags && !has(pause, "FH2Mod_HubTile_5") &&
+                  has(pause, "<ControlTemplate x:Key=\"FH2Mod_Tile_Installed_Template\"") &&
+                  has(pause, "<local:FZTextBlock Text=\"{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}\" Style=\"{StaticResource A_Style_FZTextBlock_TileTitle}\""));
             // the title screen: the entries' lines under PRESS (A) TO START, fading with it in all five states
             const auto splash = slurp(scenes / "A_Splash.xaml");
             std::size_t refs = 0;
@@ -354,6 +366,9 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(mods, "<Trigger Property=\"Value\" Value=\"2\">") && has(mods, "A_Style_Arrow_Left") &&
                   has(mods, "<Setter TargetName=\"RightArrow\" Property=\"Visibility\" Value=\"Hidden\" />"));
             CHECK(!has(installed, "Load when playing online"));   // no FH2MP here: no such row
+            // text given after add_setting and register_mod (API 10)
+            CHECK(has(mods, "Test button, renamed") && !has(mods, "\"Test button\"") && has(mods, "Text=\"RB &amp; &lt;renamed&gt;\""));
+            CHECK(has(installed, "set later."));
         }
     } else if (online_phase) {
         const auto known = slurp("fh2-mods\\platform-mods.txt");

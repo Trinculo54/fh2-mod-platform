@@ -19,6 +19,7 @@
 #include <windows.h>
 #include <psapi.h>
 
+#include "lang.hpp"
 #include "platform.hpp"
 #include "platform_version.h"
 #include "strings.hpp"
@@ -640,6 +641,16 @@ const char* api_mod_version(const char* name) {
     return nullptr;
 }
 
+// ---- the game's language (API 10): see lang.cpp -----------------------------------
+
+int api_game_language(char* code, size_t size) { return game_language(code, size); }
+
+void api_set_mod_description(FH2Mod* m, const char* description) {
+    if (!m) return;
+    std::scoped_lock lk{g_mu};
+    m->description = description ? description : "";
+}
+
 // ---- loading mods --------------------------------------------------------------
 
 int api_playing_online() { return g_online ? 1 : 0; }
@@ -1251,6 +1262,9 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.add_dump_memory   = add_dump_memory;
                 g_api.add_hotkey        = hotkey_add;
                 g_api.add_command       = command_add;
+                g_api.game_language     = api_game_language;
+                g_api.set_setting_text  = settings_set_text;
+                g_api.set_mod_description = api_set_mod_description;
                 return load_mods(nullptr);
             },
             nullptr, 0, nullptr))

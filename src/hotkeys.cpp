@@ -7,6 +7,7 @@
 // (and the mod's own default if it's none of those), and its chord, Off or LB+RB with a face
 // button or a d-pad direction. A change there takes effect straight away, and on_rebind tells
 // the mod, which keeps the bindings.
+#include "lang.hpp"
 #include "platform.hpp"
 #include "updates.hpp"
 
@@ -281,6 +282,24 @@ int hotkey_add(FH2Mod* m, const FH2Hotkey* k) {
     log_line(m->name, "hotkey " + h->key + " (" + h->label + "): " + binding_name(h->vk, h->modifiers) + ", controller " +
                           chord_name(h->chord));
     return 1;
+}
+
+// The rows' text, in the game's language now: before the pages are written.
+void hotkeys_refresh_text() {
+    struct Text {
+        FH2Mod* mod;
+        std::string key, label;
+    };
+    std::vector<Text> rows;
+    {
+        std::scoped_lock lk{g_mu};
+        for (const Hotkey& h : g_hotkeys) rows.push_back({h.mod, h.key, h.label});
+    }
+    const std::string desc = tr("A hotkey. Off turns it off; the game still gets the key or buttons as ever.");
+    for (const Text& r : rows) {
+        settings_set_text(r.mod, ("Hotkey_" + r.key).c_str(), trf("{0}: key", {r.label}).c_str(), desc.c_str(), nullptr, 0);
+        settings_set_text(r.mod, ("HotkeyPad_" + r.key).c_str(), trf("{0}: controller", {r.label}).c_str(), desc.c_str(), nullptr, 0);
+    }
 }
 
 } // namespace fh2platform
