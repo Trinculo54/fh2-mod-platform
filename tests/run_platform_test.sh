@@ -110,9 +110,9 @@ run_layout() {   # run_layout mediaoverride|own
 }
 
 # Mods' text in the pages (src/xml_text.cpp), the platform's text in any language (src/text.cpp), car packs'
-# car Ids (src/car_ids.cpp) and mods' translations (src/l10n.cpp) on their own, then the platform. With Python 3,
-# TestMod's translation files are checked to be up to date with tools/l10n (its .pot from its source, its built-in
-# .inc from tests/l10n/*.po).
+# car Ids (src/car_ids.cpp), mods' translations (src/l10n.cpp) and what's different under Wine and Proton
+# (src/wine.cpp) on their own, then the platform. With Python 3, TestMod's translation files are checked to be up
+# to date with tools/l10n (its .pot from its source, its built-in .inc from tests/l10n/*.po).
 wine "$b/xml_text_test.exe"
 wine "$b/text_test.exe"
 # Every English text the code translates is in src/lang.cpp's table, with its placeholders kept (and with
@@ -130,5 +130,6 @@ if command -v python3 > /dev/null; then
         "$root/tests/l10n/pl.po" "$root/tests/l10n/pt_BR.po" 2> /dev/null
     echo "ok   tools/l10n: TestMod's .pot and .inc are up to date"
 fi
+wine "$b/wine_test.exe"
 run_layout mediaoverride
 run_layout own

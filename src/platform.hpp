@@ -153,11 +153,24 @@ std::string car_pack_sql_warning(const std::string& pack);
 std::string mod_sql_warning(const std::string& mod);
 
 // hooks.cpp: the hook API, and what crash reports say about hooks.
-// The folder of Extra Options' winmm.dll if that's the winmm.dll loaded, else empty. Extra
-// Options is recognised by its Fh2TweaksStatus export, not by where winmm.dll is: Wine and
-// Proton load their own winmm.dll instead of the one beside azimuth.exe unless told otherwise
-// (WINEDLLOVERRIDES="winmm=n,b"), and still report that file's path for it.
+// The folder of Extra Options' winmm.dll if it's loaded, else empty. Extra Options is recognised
+// by its Fh2TweaksStatus export, looked for in every loaded DLL, not by the name winmm.dll: it
+// loads the system's own winmm.dll as well, and Wine and Proton load their own winmm.dll instead
+// of the one beside azimuth.exe unless told otherwise (WINEDLLOVERRIDES="winmm=n,b"), and still
+// report that file's path for it.
 std::filesystem::path extra_options_dir();
+// Under Wine or Proton, when the list of loaded DLLs can't be read, so whether Extra Options is
+// loaded can't be told: whether its winmm.dll is next to azimuth.exe and Wine is set to load it
+// rather than its own (WINEDLLOVERRIDES, or winecfg's DLL overrides). It then counts as loaded:
+// mounting mediaoverride under it would make it refuse all of its patches. Worked out once.
+// False whenever the list can be read, and always on Windows.
+bool extra_options_expected();
+// Whether FH2_ExtraOptions.log next to azimuth.exe was written this launch: Extra Options rewrites
+// it every time it starts.
+bool extra_options_log_is_new();
+// How long after the game is mapped Extra Options can still be waited for: it patches the game
+// right away.
+inline constexpr unsigned long long kExtraOptionsTimeoutMs = 20000;
 void fill_hook_api(FH2ModApi& api);
 bool hook_at(const void* p, char* out, std::size_t n); // p is in a hook's trampoline or stub
 // Whether the exe on disk holds `expect` at game address p, n <= 256 bytes (the HUD layer's code checks).

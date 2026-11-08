@@ -22,8 +22,10 @@
 // before writing any, and refuses every patch if one doesn't match.
 #include "platform.hpp"
 #include "updates.hpp"
+#include "wine.hpp"
 
 #include <windows.h>
+#include <psapi.h>
 #include <tlhelp32.h>
 
 #include "MinHook.h"
@@ -288,7 +290,8 @@ int matches_disk(const void* p, std::size_t n, bool pointer) {
             std::memcpy(&want, disk, 8);
             std::memcpy(&have, p, 8);
             if (want < g_disk.image_base || want >= g_disk.image_base + kGameSizeOfImage) return -1;
-            return have == want + (reinterpret_cast<uint64_t>(base) - g_disk.image_base) ? 1 : 0;
+            const uint64_t mapped = reinterpret_cast<uint64_t>(base);
+            return same_pointer(want, have, g_disk.image_base, mapped, kGameSizeOfImage) ? 1 : 0;
         }
         if (reinterpret_cast<uint64_t>(base) != g_disk.image_base) return -1; // relocated code differs anyway
         return std::memcmp(disk, p, n) == 0 ? 1 : 0;
@@ -298,13 +301,106 @@ int matches_disk(const void* p, std::size_t n, bool pointer) {
 
 // ---- waiting for Extra Options -----------------------------------------------------
 
+bool under_wine() {
+    HMODULE n = GetModuleHandleW(L"ntdll.dll");
+    return n && GetProcAddress(n, "wine_get_version");
+}
+
+// Whether the winmm.dll next to azimuth.exe is Extra Options': its export's name is in the file.
+bool extra_options_file_here() {
+    HANDLE f = CreateFileW((azimuth_dir() / L"winmm.dll").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    std::string data(4 * 1024 * 1024, '\0');
+    DWORD got = 0;
+    if (!ReadFile(f, data.data(), static_cast<DWORD>(data.size()), &got, nullptr)) got = 0;
+    CloseHandle(f);
+    data.resize(got);
+    return data.find(std::string("Fh2TweaksStatus", 16)) != std::string::npos;
+}
+
+// A DLL override from Wine's registry (what winecfg's Libraries tab writes), as plain text.
+LoadOrder registry_load_order(const std::wstring& key, const wchar_t* name) {
+    wchar_t value[256];
+    DWORD size = sizeof value;
+    if (RegGetValueW(HKEY_CURRENT_USER, key.c_str(), name, RRF_RT_REG_SZ, nullptr, value, &size) != ERROR_SUCCESS)
+        return LoadOrder::unsaid;
+    return parse_load_order(narrow(value));
+}
+
+// Which winmm.dll Wine loads first for azimuth.exe: what WINEDLLOVERRIDES, then winecfg's settings for
+// azimuth.exe, then its settings for every program say about the names Wine looks the winmm.dll next to
+// azimuth.exe up by (wine.cpp).
+LoadOrder wine_winmm_order() {
+    std::string env;
+    if (const DWORD n = GetEnvironmentVariableA("WINEDLLOVERRIDES", nullptr, 0); n > 1) {
+        env.resize(n);
+        env.resize(GetEnvironmentVariableA("WINEDLLOVERRIDES", env.data(), n));
+    }
+    wchar_t exe[MAX_PATH];
+    const DWORD m          = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const std::wstring app = L"Software\\Wine\\AppDefaults\\" +
+                             (m && m < MAX_PATH ? fs::path{exe}.filename().wstring() : std::wstring{L"azimuth.exe"}) +
+                             L"\\DllOverrides";
+    LoadOrderSources from;
+    from.env    = [&](const std::string& name) { return env_load_order(env, name); };
+    from.app    = [&](const std::string& name) { return registry_load_order(app, widen(name).c_str()); };
+    from.global = [](const std::string& name) {
+        return registry_load_order(L"Software\\Wine\\DllOverrides", widen(name).c_str());
+    };
+    return wine_load_order(wine_override_names(narrow((azimuth_dir() / L"winmm.dll").wstring())), from);
+}
+
+// A loaded DLL with Extra Options' export, or null. Asking for "winmm.dll" by name isn't enough: Extra
+// Options' winmm.dll loads the system's own winmm.dll too, both have that name, and the name can find
+// either of them (under Wine as well). So every loaded DLL is looked at. *unsure says that the list of
+// loaded DLLs couldn't be read, so whether Extra Options is loaded can't be told.
+HMODULE find_extra_options(bool* unsure) {
+    if (unsure) *unsure = false;
+    if (HMODULE w = GetModuleHandleW(L"winmm.dll"); w && GetProcAddress(w, "Fh2TweaksStatus")) return w;
+    std::vector<HMODULE> mods(512);
+    for (int tries = 0; tries < 3; ++tries) {
+        DWORD need = 0;
+        if (!K32EnumProcessModules(GetCurrentProcess(), mods.data(), static_cast<DWORD>(mods.size() * sizeof(HMODULE)),
+                                   &need))
+            continue; // the list changed while it was read
+        if (need > mods.size() * sizeof(HMODULE)) {
+            mods.resize(need / sizeof(HMODULE) + 64);
+            continue;
+        }
+        for (DWORD i = 0; i < need / sizeof(HMODULE); ++i)
+            if (GetProcAddress(mods[i], "Fh2TweaksStatus")) return mods[i];
+        return nullptr;
+    }
+    if (unsure) *unsure = true;
+    return nullptr;
+}
+
 std::atomic<bool> g_code_ready{false};
-constexpr ULONGLONG kExtraOptionsTimeout = 20000;
 
 FILETIME process_start() {
     FILETIME c{}, e{}, k{}, u{};
     GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u);
     return c;
+}
+
+// FH2_ExtraOptions.log in `dir`, if it was written this launch: false for an older one.
+bool read_new_extra_options_log(const fs::path& dir, std::string* text) {
+    HANDLE f = CreateFileW((dir / L"FH2_ExtraOptions.log").c_str(), GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    FILETIME written{};
+    const FILETIME started = process_start();
+    const bool fresh = GetFileTime(f, nullptr, nullptr, &written) && CompareFileTime(&written, &started) >= 0;
+    if (fresh && text) {
+        text->resize(64 * 1024);
+        DWORD got = 0;
+        if (ReadFile(f, text->data(), static_cast<DWORD>(text->size()), &got, nullptr)) text->resize(got);
+        else text->clear();
+    }
+    CloseHandle(f);
+    return fresh;
 }
 
 // Extra Options patches the game while Azimuth loads its TLS helper, right
@@ -314,22 +410,15 @@ FILETIME process_start() {
 // "AZIMUTH: winmm proxy initialized". Before that, it writes nothing this
 // launch. Returns "" while it's still to come, or what settled it.
 std::string extra_options_state() {
-    const fs::path dir = extra_options_dir();
-    if (dir.empty()) return "no Extra Options";
-    const fs::path log = dir / L"FH2_ExtraOptions.log";
-    HANDLE f = CreateFileW(log.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return "";
-    std::string text;
-    FILETIME written{};
-    const FILETIME started = process_start();
-    if (GetFileTime(f, nullptr, nullptr, &written) && CompareFileTime(&written, &started) >= 0) {
-        text.resize(64 * 1024);
-        DWORD got = 0;
-        if (ReadFile(f, text.data(), static_cast<DWORD>(text.size()), &got, nullptr)) text.resize(got);
-        else text.clear();
+    fs::path dir = extra_options_dir();
+    if (dir.empty()) {
+        // Counted as loaded when that can't be told under Wine (extra_options_expected): then its log next
+        // to azimuth.exe says whether it has started.
+        if (!extra_options_expected()) return "no Extra Options";
+        dir = azimuth_dir();
     }
-    CloseHandle(f);
+    std::string text;
+    read_new_extra_options_log(dir, &text);
     if (text.find("\nAZIMUTH: winmm proxy initialized") != std::string::npos)
         return "Extra Options has applied its patches";
     const auto nl = text.find('\n');
@@ -346,17 +435,7 @@ bool code_ready() { return g_code_ready.load(std::memory_order_acquire); }
 // Proton use their own unless WINEDLLOVERRIDES="winmm=n,b" says otherwise. (Windows always takes
 // the one in the program's folder.) The file is recognised by its export's name in it.
 bool extra_options_left_out_by_wine() {
-    HMODULE n = GetModuleHandleW(L"ntdll.dll");
-    if (!n || !GetProcAddress(n, "wine_get_version") || !extra_options_dir().empty()) return false;
-    HANDLE f = CreateFileW((azimuth_dir() / L"winmm.dll").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return false;
-    std::string data(4 * 1024 * 1024, '\0');
-    DWORD got = 0;
-    if (!ReadFile(f, data.data(), static_cast<DWORD>(data.size()), &got, nullptr)) got = 0;
-    CloseHandle(f);
-    data.resize(got);
-    return data.find(std::string("Fh2TweaksStatus", 16)) != std::string::npos;
+    return under_wine() && extra_options_dir().empty() && extra_options_file_here();
 }
 
 void open_disk_image();
@@ -394,18 +473,25 @@ void watch_for_code() {
         const ULONGLONG seen = GetTickCount64();
         std::string why;
         while ((why = extra_options_state()).empty()) {
-            if (GetTickCount64() - seen >= kExtraOptionsTimeout) {
+            if (GetTickCount64() - seen >= kExtraOptionsTimeoutMs) {
                 why = "Extra Options didn't say it had finished within 20 seconds of the game being mapped; "
                       "going ahead";
                 break;
             }
             Sleep(50);
         }
-        if (why == "no Extra Options" && extra_options_left_out_by_wine())
-            plog("Extra Options isn't running: its winmm.dll is next to azimuth.exe, but Wine is using its own "
-                 "winmm.dll instead. Set WINEDLLOVERRIDES=\"winmm=n,b\" for Azimuth (the FH2 Mod Platform's "
-                 "docs/linux.md). Until then Extra Options' own features are off; the platform mounts mediaoverride "
-                 "itself, so text, file and database changes still reach the game");
+        if (why == "no Extra Options" && extra_options_left_out_by_wine()) {
+            if (wine_winmm_order() == LoadOrder::native_first)
+                plog("Extra Options isn't running: its winmm.dll is next to azimuth.exe and Wine's DLL overrides say "
+                     "to load it, but it isn't loaded. Check the override is written as in the FH2 Mod Platform's "
+                     "docs/linux.md. Until then Extra Options' own features are off; the platform mounts "
+                     "mediaoverride itself, so text, file and database changes still reach the game");
+            else
+                plog("Extra Options isn't running: its winmm.dll is next to azimuth.exe, but Wine is using its own "
+                     "winmm.dll instead. Set WINEDLLOVERRIDES=\"winmm=n,b\" for Azimuth (the FH2 Mod Platform's "
+                     "docs/linux.md). Until then Extra Options' own features are off; the platform mounts "
+                     "mediaoverride itself, so text, file and database changes still reach the game");
+        }
         wait_for_executable_code();
         plog("hooks: game code is ready (" + why + ")");
         g_code_ready.store(true, std::memory_order_release);
@@ -449,9 +535,26 @@ bool g_minhook = false;
 
 } // namespace
 
+bool extra_options_expected() {
+    // Worked out once, so every part of the platform goes by the same answer.
+    static const bool expected = [] {
+        bool unsure = false;
+        if (find_extra_options(&unsure) || !unsure) return false; // loaded, or certainly not
+        return under_wine() && extra_options_file_here() && wine_winmm_order() == LoadOrder::native_first;
+    }();
+    return expected;
+}
+
+bool extra_options_log_is_new() { return read_new_extra_options_log(azimuth_dir(), nullptr); }
+
 fs::path extra_options_dir() {
-    HMODULE w = GetModuleHandleW(L"winmm.dll");
-    if (!w || !GetProcAddress(w, "Fh2TweaksStatus")) return {};
+    // Once found it stays: nothing unloads it.
+    static std::atomic<HMODULE> found{nullptr};
+    HMODULE w = found.load(std::memory_order_acquire);
+    if (!w) {
+        if (!(w = find_extra_options(nullptr))) return {};
+        found.store(w, std::memory_order_release);
+    }
     wchar_t path[MAX_PATH];
     const DWORD n = GetModuleFileNameW(w, path, MAX_PATH);
     if (!n || n >= MAX_PATH) return {};

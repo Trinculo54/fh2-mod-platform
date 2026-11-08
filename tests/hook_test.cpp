@@ -8,7 +8,11 @@
 // mapped (an old log from before this launch must not count). "wine-builtin":
 // the stand-in is next to azimuth.exe, but Wine loads its own winmm.dll (no
 // override), as for a Linux player who hasn't set one: no waiting for Extra
-// Options, and the log says how to fix it. "changed-code": as "plain", but
+// Options, and the log says how to fix it. "eo-hidden": as "eo", but the
+// system's own winmm.dll is loaded first, so asking for "winmm.dll" by name
+// finds that one and not the stand-in (Extra Options' proxy loads the
+// system's too); the platform still has to find Extra Options and leave
+// mediaoverride to it. "changed-code": as "plain", but
 // one of the game functions the media overrides use has a changed byte, so
 // they must leave the game's file lookup alone. "crash": a hooked function
 // crashes, and the report has to list the hooks.
@@ -140,7 +144,7 @@ static LONG WINAPI after_crash(EXCEPTION_POINTERS*) {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc < 3) {
-        std::printf("usage: azimuth.exe plain|eo|wine-builtin|changed-code|crash|other-game|skip-launcher "
+        std::printf("usage: azimuth.exe plain|eo|eo-hidden|wine-builtin|changed-code|crash|other-game|skip-launcher "
                     "<forza_durango_release_final.exe> [--skip-launcher]\n");
         return 2;
     }
@@ -151,7 +155,20 @@ int wmain(int argc, wchar_t** argv) {
     }
     const bool other_game = phase == L"other-game" || phase == L"skip-launcher";
     if (other_game) std::ofstream{"other_game.txt"} << "1"; // for HookMod
-    if (phase == L"eo") CHECK(GetProcAddress(LoadLibraryW(L".\\winmm.dll"), "Fh2TweaksStatus")); // Extra Options' proxy
+    const bool eo = phase == L"eo" || phase == L"eo-hidden";
+    if (phase == L"eo-hidden") {
+        // The system's winmm.dll first: then GetModuleHandleW(L"winmm.dll") answers with it, not the stand-in.
+        wchar_t sys[MAX_PATH];
+        const UINT n = GetSystemDirectoryW(sys, MAX_PATH);
+        CHECK(n && n < MAX_PATH && LoadLibraryW((std::wstring(sys) + L"\\winmm.dll").c_str()) != nullptr);
+    }
+    if (eo) CHECK(GetProcAddress(LoadLibraryW(L".\\winmm.dll"), "Fh2TweaksStatus")); // Extra Options' proxy
+    if (phase == L"eo-hidden") {
+        // Under Wine which of the two the name finds isn't fixed, so only Windows checks it's the system's.
+        HMODULE n = GetModuleHandleW(L"ntdll.dll");
+        if (!n || !GetProcAddress(n, "wine_get_version"))
+            CHECK(!GetProcAddress(GetModuleHandleW(L"winmm.dll"), "Fh2TweaksStatus"));
+    }
     if (phase == L"wine-builtin") {
         HMODULE w = LoadLibraryW(L".\\winmm.dll"); // Wine's own, though it says it's this one
         CHECK(w && !GetProcAddress(w, "Fh2TweaksStatus"));
@@ -161,7 +178,7 @@ int wmain(int argc, wchar_t** argv) {
     char* game = map_game(argv[2], phase == L"changed-code", other_game);
     CHECK(game != nullptr); // "press Play"
     if (phase == L"plain") check_fh2game(argv[2]);
-    if (phase == L"eo") {
+    if (eo) {
         Sleep(3000);
         std::ofstream{"FH2_ExtraOptions.log", std::ios::app} << "AZIMUTH: winmm proxy initialized; original TLS helper retained.\r\n";
     }
@@ -231,7 +248,7 @@ int wmain(int argc, wchar_t** argv) {
     const auto at = log.find("wait_for_code took ");
     CHECK(at != std::string::npos);
     const unsigned long waited = at == std::string::npos ? 0 : std::stoul(log.substr(at + 19));
-    if (phase == L"eo") {
+    if (eo) {
         CHECK(has(log, "hooks: game code is ready (Extra Options has applied its patches)"));
         CHECK(waited >= 2000);
     } else {
@@ -244,7 +261,7 @@ int wmain(int argc, wchar_t** argv) {
     MEMORY_BASIC_INFORMATION mbi{};
     const bool platforms = lookup && VirtualQuery(lookup, &mbi, sizeof mbi) == sizeof mbi &&
                            mbi.AllocationBase == GetModuleHandleW(L"d3dcompiler_47.dll");
-    if (phase == L"eo") {
+    if (eo) {
         CHECK(has(log, "media overrides: Extra Options is here, so mediaoverride is left to it"));
         CHECK(lookup == game + 0x11F49B0);
     } else if (phase == L"changed-code") {

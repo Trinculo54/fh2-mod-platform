@@ -6,7 +6,14 @@
 // doesn't support yet, or Wine without the winmm override), the platform
 // does the same itself. Only then, because Extra Options checks every place
 // it patches and refuses all of its patches if any one was changed first,
-// this one included.
+// this one included. Extra Options' winmm.dll is loaded before the platform
+// starts (azimuth.exe imports winmm.dll), so whether it's loaded is decided
+// then. Under Wine, when that can't be told and Wine is set to load it
+// (extra_options_expected), it counts as loaded.
+//
+// Under Proton the game isn't mapped at 0x140000000, so the pointers the
+// checks below compare with the exe on disk are moved by the same amount
+// (wine.cpp's same_pointer).
 //
 // The game finds a file through its file system's resolver, a function the
 // pointer at game+0x2E6EF28 points to (game+0x11F49B0). That pointer is
@@ -37,6 +44,7 @@
 #include "platform.hpp"
 #include "text.hpp"
 #include "updates.hpp"
+#include "wine.hpp"
 
 #include <windows.h>
 
@@ -233,6 +241,19 @@ bool same_as_disk(const Disk& d, uint32_t rva, DWORD n) {
     return safe_copy(mem, g_base + rva, n) && std::memcmp(disk, mem, n) == 0;
 }
 
+// The same for `count` absolute pointers (the folder volume's vtable): where the image isn't mapped at
+// its preferred base, as under Proton, each one differs from the file's by how far the image moved.
+// (The code checked with same_as_disk has nothing the loader changes.)
+bool same_pointers_as_disk(const Disk& d, uint32_t rva, int count) {
+    uint64_t disk[4], mem[4];
+    if (count < 1 || count > 4 || !disk_bytes(d, rva, disk, count * 8) || !safe_copy(mem, g_base + rva, count * 8))
+        return false;
+    for (int i = 0; i < count; ++i)
+        if (!same_pointer(disk[i], mem[i], kPreferredBase, reinterpret_cast<uint64_t>(g_base), kGameSizeOfImage))
+            return false;
+    return true;
+}
+
 bool header_is_game(const char* base) {
     // A copy of the headers' page, as Azimuth may still be writing (or unmapping) it.
     static char head[0x1000];
@@ -274,6 +295,12 @@ void watch() {
     }
     const ULONGLONG mapped = GetTickCount64();
     g_base = base;
+    if (reinterpret_cast<uintptr_t>(base) != kPreferredBase) { // under Proton, for one
+        char at[24];
+        std::snprintf(at, sizeof at, "0x%llX", static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(base)));
+        plog(std::string("media overrides: the game is mapped at ") + at +
+             ", not at 0x140000000; the pointers in it are checked with that taken into account");
+    }
     void** slot              = reinterpret_cast<void**>(base + RVA_RESOLVE_SLOT);
     const uint64_t original  = reinterpret_cast<uint64_t>(base + RVA_RESOLVE);
 
@@ -297,11 +324,15 @@ void watch() {
         if (disk.file != INVALID_HANDLE_VALUE) CloseHandle(disk.file);
         return;
     }
-    const bool ok = same_as_disk(disk, RVA_RESOLVE, 16) && same_as_disk(disk, RVA_ALLOCATE, 16) &&
-                    same_as_disk(disk, RVA_CONSTRUCT, 16) && same_as_disk(disk, RVA_FOLDER_VT + 8, 16);
+    const char* differs = nullptr;
+    if (!same_as_disk(disk, RVA_RESOLVE, 16)) differs = "game+0x11F49B0 (the resolver)";
+    else if (!same_as_disk(disk, RVA_ALLOCATE, 16)) differs = "game+0x3229C0 (operator new)";
+    else if (!same_as_disk(disk, RVA_CONSTRUCT, 16)) differs = "game+0x11E05A0 (the folder volume constructor)";
+    else if (!same_pointers_as_disk(disk, RVA_FOLDER_VT + 8, 2)) differs = "game+0x2EAB918 (the folder volume's vtable)";
     CloseHandle(disk.file);
-    if (!ok) {
+    if (differs) {
         plog("media overrides: the game's code isn't what this build expects; left alone");
+        plog(std::string("media overrides: ") + differs + " isn't the same as in the exe on disk");
         return;
     }
 
@@ -325,12 +356,48 @@ void watch() {
          (code_was_running ? "already executable" : "not executable yet"));
 }
 
+// When whether Extra Options is loaded couldn't be told (extra_options_expected): says whether it ran,
+// once it's found or writes its log this launch. It patches the game right after it's mapped, so
+// kExtraOptionsTimeoutMs after that it hasn't.
+void wait_for_extra_options() {
+    ULONGLONG mapped = 0;
+    for (unsigned i = 0;; ++i) {
+        if (!extra_options_dir().empty()) {
+            plog("media overrides: Extra Options is loaded after all, so mediaoverride is left to it");
+            return;
+        }
+        if (extra_options_log_is_new()) {
+            plog("media overrides: Extra Options wrote FH2_ExtraOptions.log this launch, so it's running and "
+                 "mediaoverride is left to it");
+            return;
+        }
+        if (launched_game() == Launched::other) return;
+        if (!mapped && i % 10 == 0 && find_game()) mapped = GetTickCount64();
+        if (mapped && GetTickCount64() - mapped > kExtraOptionsTimeoutMs) {
+            plog("media overrides: Extra Options still hasn't written FH2_ExtraOptions.log 20 seconds after the "
+                 "game was mapped, so it seems not to be running, and nothing mounts mediaoverride this time");
+            return;
+        }
+        Sleep(50);
+    }
+}
+
 } // namespace
 
 void start_media_overrides() {
     if (!extra_options_dir().empty()) {
         plog("media overrides: Extra Options is here, so mediaoverride is left to it");
         car_packs_unavailable(later("Extra Options is loaded."));
+        return;
+    }
+    if (extra_options_expected()) {
+        // Under Wine, set to load, but the list of loaded DLLs couldn't be read. Swapping the game's
+        // file lookup under Extra Options would make it refuse every patch ("unexpected loaded bytes
+        // at media_override_native_resolver"), so mediaoverride is left to it as when it's loaded.
+        plog("media overrides: Extra Options' winmm.dll is next to azimuth.exe and Wine is set to load it, but the "
+             "list of loaded DLLs can't be read to see whether it has; mediaoverride is left to it");
+        car_packs_unavailable("Extra Options is set to load");
+        std::thread(wait_for_extra_options).detach();
         return;
     }
     plog("media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride and mediapc itself");
