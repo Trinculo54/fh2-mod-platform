@@ -13,6 +13,7 @@
 // as boxes. Names the player sees in English stay so: MODS, GET MODS, FH2 Mod Platform, Extra Options, FH2MP.
 #include "lang.hpp"
 #include "platform.hpp"
+#include "text.hpp"
 
 #include <windows.h>
 
@@ -1762,13 +1763,7 @@ std::string tr(const char* english) {
 }
 
 std::string trf(const char* english, std::initializer_list<std::string> args) {
-    std::string s = tr(english);
-    int n = 0;
-    for (const std::string& a : args) {
-        const std::string mark = "{" + std::to_string(n++) + "}";
-        if (const std::size_t at = s.find(mark); at != std::string::npos) s.replace(at, mark.size(), a);
-    }
-    return s;
+    return fill(tr(english), std::vector<std::string>(args));   // the same placeholders as later() messages
 }
 
 const wchar_t* tr_w(const wchar_t* english) {
