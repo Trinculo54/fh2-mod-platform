@@ -30,6 +30,7 @@
 // engine_sound when its synth is complete, plays engine_synth for it, and gives the game engine_sound_base's events.
 // Without such a mod the car plays its stock engine_sound_base; a real base car keeps its own sound either way.
 #include "platform.hpp"
+#include "text.hpp"
 #include "updates.hpp"
 
 #include <windows.h>
@@ -146,7 +147,7 @@ void write_manifest() {
             from[game_path] = pack.name;
             if (!zip_dir(e.path(), d)) {
                 plog("car packs: " + pack.name + ": couldn't read the zip directory of " + game_path + "; left out");
-                note_car_pack_problem(pack.name, "the game can't read its " + game_path.substr(12) + ".");
+                note_car_pack_problem(pack.name, later("The game can't read its {0}.", {game_path.substr(12)}));
                 continue;
             }
             zips.emplace_back(game_path, d);
@@ -324,7 +325,7 @@ void mirror_pack(const CarPack& pack) {
          std::to_string(linked) + " linked, " + std::to_string(copied) + " copied, " + std::to_string(removed) +
          " removed" + (failed ? ", " + std::to_string(failed) + " FAILED" : std::string{}));
     if (failed)
-        note_car_pack_problem(pack.name, std::to_string(failed) + " of its files couldn't be put on the game's temp drive.");
+        note_car_pack_problem(pack.name, later("{0} of its files couldn't be put on the game's temp drive.", {std::to_string(failed)}));
 }
 
 // A car's engine sound bank: the base car's bank, linked (or copied) into the pack's temp-drive folder under the car's
@@ -343,7 +344,7 @@ void link_engine_sounds(const CarPack& pack) {
         if (from.empty()) {
             plog("car packs: " + pack.name + ": " + es.car + "'s engine_sound_base " + es.base + " has no PG_" + es.base +
                  ".bank in the game; the car has no engine sound");
-            note_car_pack_problem(pack.name, es.car + " has no engine sound: the game has no " + es.base + " sound.");
+            note_car_pack_problem(pack.name, later("{0} has no engine sound: the game has no {1} sound.", {es.car, es.base}));
             fs::remove(to, ec);
             continue;
         }
@@ -356,7 +357,7 @@ void link_engine_sounds(const CarPack& pack) {
         else {
             plog("car packs: " + pack.name + ": couldn't put PG_" + es.sound + ".bank on the temp drive (error " +
                  std::to_string(GetLastError()) + ")");
-            note_car_pack_problem(pack.name, es.car + "'s engine sound couldn't be put on the game's temp drive.");
+            note_car_pack_problem(pack.name, later("{0}'s engine sound couldn't be put on the game's temp drive.", {es.car}));
         }
     }
 }
@@ -441,9 +442,9 @@ void car_packs_unavailable(const std::string& why) {
     for (const auto& e : fs::directory_iterator(azimuth_dir() / "fh2-cars", ec))
         n += e.is_directory(ec) && fs::is_directory(e.path() / "media", ec);
     if (!n) return;
-    g_unread = "The " + std::to_string(n) + " car pack(s) in fh2-cars aren't read: " + why +
-               ". They need Azimuth 1.0 or later, without Extra Options.";
-    plog("car packs: " + g_unread);
+    g_unread = later("The {0} car pack(s) in fh2-cars aren't read: {1} They need Azimuth 1.0 or later, without Extra Options.",
+                     {std::to_string(n), why});
+    plog("car packs: " + english(g_unread));
 }
 
 std::string car_packs_unread() { return g_unread; }
@@ -475,7 +476,7 @@ void place_car_ids(const CarPack& pack, const std::vector<std::pair<std::string,
         }
         const auto fail = [&](const std::string& why) {
             plog("car packs: " + pack.name + ": " + car + "'s rear wing parts: " + why);
-            note_car_pack_problem(pack.name, car + "'s rear wing may not show: " + why + ".");
+            note_car_pack_problem(pack.name, later("{0}'s rear wing may not show.", {car}));   // the log says why
         };
         if (zip_rel.empty() || at.empty()) {
             fail(car + ".part-ids.txt lists nothing");
@@ -615,7 +616,7 @@ void write_engine_synths() {
             const fs::path synth = pack.root / fs::path{es.synth};
             if (!fs::is_regular_file(synth, ec)) {
                 plog("car packs: " + pack.name + ": " + es.car + "'s engine_synth " + es.synth + " isn't there");
-                note_car_pack_problem(pack.name, es.car + "'s engine sound file " + es.synth + " is missing.");
+                note_car_pack_problem(pack.name, later("{0}'s engine sound file {1} is missing.", {es.car, es.synth}));
                 continue;
             }
             text += "PG_" + es.sound + "\tPG_" + es.base + "\t" + narrow(synth.parent_path().wstring()) + "\t" +

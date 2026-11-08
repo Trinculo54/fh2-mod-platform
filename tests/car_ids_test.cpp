@@ -1,6 +1,7 @@
 // The Ids car packs' cars are given (src/car_ids.cpp), with no game: a small database with the tables a pack
 // car takes rows in, and packs and mods with SQL. Exits 0 when every check passes.
 #include "car_ids.hpp"
+#include "text.hpp"
 
 #include "sqlite3.h"
 
@@ -11,6 +12,7 @@
 #include <vector>
 
 using namespace fh2platform::car_ids;
+using fh2platform::english;
 
 namespace {
 
@@ -111,7 +113,7 @@ std::vector<Outcome> run(sqlite3* db, const std::vector<Src>& s, const std::map<
 
 std::string warnings(const Outcome& o) {
     std::string w;
-    for (const auto& x : o.warnings) w += x + " | ";
+    for (const auto& x : o.warnings) w += english(x) + " | ";   // messages for the MODS tab, in English
     return w;
 }
 
@@ -247,21 +249,21 @@ void recorded() {
         sqlite3* db = game();
         const std::vector<Src> s = {pack("a", "PACK_A"), mod("HandMadeCar", "INSERT INTO Data_Car VALUES (3000, 'HAND_Car01');")};
         const auto o = run(db, s, rec);
-        check(o[0].problem == "PACK_A's Id, 3000, is taken now: HandMadeCar's SQL adds Data_Car 3000", "left out: " + o[0].problem);
+        check(english(o[0].problem) == "PACK_A's Id, 3000, is taken now: HandMadeCar's SQL adds Data_Car 3000.", "left out: " + english(o[0].problem));
         check(o[0].ids.empty() && o[0].given.empty(), "no Ids for it");
         sqlite3_close(db);
     }
     {
         sqlite3* db = game("INSERT INTO Data_Engine VALUES (3000, 'Another');");
         const auto o = run(db, {pack("a", "PACK_A")}, rec);
-        check(o[0].problem == "PACK_A's Id, 3000, is taken now: " + kShown + " has Data_Engine 3000",
-              "the database built on has its engine: " + o[0].problem);
+        check(english(o[0].problem) == "PACK_A's Id, 3000, is taken now: " + kShown + " has Data_Engine 3000.",
+              "the database built on has its engine: " + english(o[0].problem));
         sqlite3_close(db);
     }
     {
         sqlite3* db = game();
         const auto o = run(db, {pack("a", "PACK_A"), mod("Torque", "INSERT INTO List_TorqueCurve VALUES (3000005);")}, rec);
-        check(has(o[0].problem, "Torque's SQL adds List_TorqueCurve 3000005"), "a row 3000xxx: " + o[0].problem);
+        check(has(english(o[0].problem), "Torque's SQL adds List_TorqueCurve 3000005"), "a row 3000xxx: " + english(o[0].problem));
         sqlite3_close(db);
     }
     {
@@ -279,17 +281,17 @@ void recorded() {
         sqlite3* db = game();
         const std::vector<Src> s = {pack("a", "PACK_A"), {"car pack literal", {"INSERT INTO Data_Car VALUES (3000, 'LIT_Car');"}, {}}};
         const auto o = run(db, s, rec);
-        check(o[0].problem == "PACK_A's Id, 3000, is taken now: car pack literal's SQL adds Data_Car 3000",
-              "a pack without cars that writes 3000: " + o[0].problem);
+        check(english(o[0].problem) == "PACK_A's Id, 3000, is taken now: car pack literal's SQL adds Data_Car 3000.",
+              "a pack without cars that writes 3000: " + english(o[0].problem));
         check(has(warnings(o[1]), "Data_Car 3000"), "and that pack is warned");
         sqlite3_close(db);
     }
     {
         sqlite3* db = game();
         const auto o = run(db, {pack("a", "PACK_A"), pack("b", "PACK_B")}, {{"pack_a", 3000}, {"pack_b", 3000}});
-        check(o[0].ids == Ids{{"PACK_A", 3000}} && o[1].problem == "PACK_B's Id, 3000, is PACK_A's too (fh2-mods\\platform-car-ids.txt "
-                                                                    "gives both the same one)",
-              "two cars recorded with the same Id: " + o[1].problem);
+        check(o[0].ids == Ids{{"PACK_A", 3000}} && english(o[1].problem) == "PACK_B's Id, 3000, is PACK_A's too (fh2-mods\\platform-car-ids.txt "
+                                                                    "gives both the same one).",
+              "two cars recorded with the same Id: " + english(o[1].problem));
         sqlite3_close(db);
     }
 }
@@ -328,7 +330,7 @@ void other_keys() {
         std::map<std::string, int64_t> rec;
         for (int64_t id = 3000; id < 9000; ++id) rec["gone_" + std::to_string(id)] = id;
         const auto o = run(db, {pack("a", "PACK_A")}, rec);
-        check(o[0].problem == "no car Id from 3000 to 8999 is free for PACK_A", "none free below 9000: " + o[0].problem);
+        check(english(o[0].problem) == "No car Id from 3000 to 8999 is free for PACK_A.", "none free below 9000: " + english(o[0].problem));
         sqlite3_close(db);
     }
 }
@@ -340,7 +342,7 @@ void literal_packs() {
     {
         sqlite3* db = game();
         const auto o = run(db, {pack("b", "PACK_B", literal), pack("c", "PACK_C")});
-        check(has(warnings(o[0]), "its SQL never says {car:PACK_B} where PACK_B's Id goes"), "warned: no {car:PACK_B}");
+        check(has(warnings(o[0]), "Its SQL never says {car:PACK_B} where PACK_B's Id goes"), "warned: no {car:PACK_B}");
         check(has(warnings(o[0]), "Data_Car 3000"), "warned: its own Ids from 3000 up");
         check(o[0].ids == Ids{{"PACK_B", 3001}} && o[1].ids == Ids{{"PACK_C", 3002}}, "its 3000 is taken: it gets 3001, the next pack 3002");
         sqlite3_close(db);
@@ -457,14 +459,15 @@ void as_before() {
     {
         sqlite3* db = game();
         const auto o = run(db, {pack("one", "PACK_A"), pack("two", "PACK_A")});
-        check(o[0].ids == Ids{{"PACK_A", 3000}} && o[1].problem == "PACK_A is car pack one's too", "two packs add one car: " + o[1].problem);
+        check(o[0].ids == Ids{{"PACK_A", 3000}} && english(o[1].problem) == "PACK_A is car pack one's too.", "two packs add one car: " + english(o[1].problem));
         sqlite3_close(db);
     }
     {
         sqlite3* db = game();
         const auto o = run(db, {{"car pack x", {pack_sql("NEW_Car") + pack_sql("NIS_SilviaSpecR_00")}, {"NEW_Car", "NIS_SilviaSpecR_00"}},
                                 pack("a", "PACK_A")});
-        check(o[0].problem == "the game already has NIS_SilviaSpecR_00" && o[0].given.empty(), "the game has one of its cars: " + o[0].problem);
+        check(english(o[0].problem) == "The game already has NIS_SilviaSpecR_00." && o[0].given.empty(),
+              "the game has one of its cars: " + english(o[0].problem));
         check(o[1].ids == Ids{{"PACK_A", 3000}}, "a pack left out keeps no new Id: the next one gets 3000");
         sqlite3_close(db);
     }
@@ -472,7 +475,7 @@ void as_before() {
         const std::vector<Src> s = {pack("a", "PACK_A")};
         std::vector<Source> v = {{s[0].name, &s[0].sql, &s[0].cars}};
         const auto o = plan(nullptr, kShown, v, {});
-        check(o[0].problem == "the cars of " + kShown + " couldn't be read", "no database: " + o[0].problem);
+        check(english(o[0].problem) == "The cars of " + kShown + " couldn't be read.", "no database: " + english(o[0].problem));
     }
     {
         sqlite3* db = game();

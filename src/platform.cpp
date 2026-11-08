@@ -24,6 +24,7 @@
 #include "platform.hpp"
 #include "platform_version.h"
 #include "strings.hpp"
+#include "text.hpp"
 #include "updates.hpp"
 
 #ifdef _MSC_VER
@@ -834,7 +835,7 @@ DWORD WINAPI load_mods(LPVOID) {
                 const DWORD err = GetLastError();
                 plog("FAILED to load fh2wheel.dll (error " + std::to_string(err) + ")");
                 std::scoped_lock lk{g_mu};
-                g_found.back().problem = "Windows couldn't load it (error " + std::to_string(err) + ").";
+                g_found.back().problem = later("Windows couldn't load it (error {0}).", {std::to_string(err)});
             }
         }
     }
@@ -881,7 +882,7 @@ DWORD WINAPI load_mods(LPVOID) {
             const DWORD err = GetLastError();
             plog("FAILED to load " + narrow(f) + " (error " + std::to_string(err) + ")");
             std::scoped_lock lk{g_mu};
-            g_found.back().problem = "Windows couldn't load it (error " + std::to_string(err) + ").";
+            g_found.back().problem = later("Windows couldn't load it (error {0}).", {std::to_string(err)});
         }
     }
     if (files.empty()) plog("no mods in fh2-mods");
@@ -914,7 +915,7 @@ DWORD WINAPI load_mods(LPVOID) {
                     plog("FAILED to load " + narrow(f) + " (error " + std::to_string(err) + ")");
                     std::scoped_lock lk{g_mu};
                     for (auto& e : g_found)
-                        if (e.file == f) e.problem = "Windows couldn't load it (error " + std::to_string(err) + ").";
+                        if (e.file == f) e.problem = later("Windows couldn't load it (error {0}).", {std::to_string(err)});
                 }
             }
         },
@@ -959,10 +960,10 @@ DWORD WINAPI load_mods(LPVOID) {
             char b[16];
             std::snprintf(b, sizeof b, "%08lX", code);
             plog(narrow(l.file) + ": fh2mod_init crashed (exception 0x" + b + ")");
-            problem = std::string("It crashed while starting (exception 0x") + b + ").";
+            problem = later("It crashed while starting (exception 0x{0}).", {b});
         } else if (rc) {
             plog(narrow(l.file) + ": fh2mod_init returned " + std::to_string(rc));
-            problem = "It reported a problem while starting (it returned " + std::to_string(rc) + ").";
+            problem = later("It reported a problem while starting (it returned {0}).", {std::to_string(rc)});
         }
         std::scoped_lock lk{g_mu};
         g_current_dll.clear();
@@ -1161,8 +1162,8 @@ std::vector<ModEntry> mod_entries() {
                 }
         if (!e.mod && lower_w(f.file) == L"fh2wheel.dll") {
             e.name        = "fh2wheel";
-            e.description = "Racing wheels with force feedback, by iamAzoDx. Loaded by the platform from next to azimuth.exe, "
-                            "in place of fh2wheel's own d3dcompiler_47.dll.";
+            e.description = later("Racing wheels with force feedback, by iamAzoDx. Loaded by the platform from next to azimuth.exe, "
+                                  "in place of fh2wheel's own d3dcompiler_47.dll.");   // shown in the game's language
             e.repo        = "iamAzoDx/fh2wheel";
         } else if (!told) {
             if (auto it = known.find(lower_w(f.file)); it != known.end()) {

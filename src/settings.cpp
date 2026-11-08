@@ -1839,7 +1839,7 @@ std::vector<RowAct> row_acts(const std::vector<PageItem>& items, const std::stri
 
 // what a mod is, for its description: what it does, and whether it's loaded
 std::string about_mod(const ModEntry& e) {
-    return e.description.empty() ? tr("No description.") : e.description;
+    return e.description.empty() ? tr("No description.") : shown(e.description);   // the platform's own for fh2wheel
 }
 
 std::string mod_note(const ModEntry& e) {
@@ -1889,7 +1889,7 @@ bool any_update_out() { return updates_out() > 0; }
 // why a mod (turned on) isn't working: it didn't load or start, or it needs a newer platform
 std::string mod_problem(const ModEntry& e) {
     if (!e.enabled) return "";
-    if (!e.problem.empty()) return e.problem;
+    if (!e.problem.empty()) return shown(e.problem);
     if (e.mod && !e.mod->platform_version.empty() && compare_versions(e.mod->platform_version, FH2MOD_PLATFORM_VERSION) > 0)
         return trf("It needs FH2 Mod Platform {0} or newer; this is {1}. Reinstall it to get the platform it came with.",
                    {e.mod->platform_version, FH2MOD_PLATFORM_VERSION});
@@ -1907,30 +1907,30 @@ std::vector<PageItem> car_pack_items() {
     std::vector<PageItem> items;
     const std::string unread = car_packs_unread();
     if (car_packs().empty() && unread.empty()) return items;
-    PageItem heading = info("Car packs", "Packs in the fh2-cars folder: new cars for the Autoshow.");
+    PageItem heading = info(tr("Car packs"), tr("Packs in the fh2-cars folder: new cars for the Autoshow."));
     heading.style    = FH2_ROW_HEADING;
     heading.skip     = true;
     items.push_back(heading);
-    if (!unread.empty()) items.push_back(info("Car packs aren't read", unread));
+    if (!unread.empty()) items.push_back(info(tr("Car packs aren't read"), shown(unread)));
     for (const CarPack& p : car_packs()) {
-        std::string cars;
+        std::string cars;   // the cars' names, as the Autoshow shows them
         for (std::size_t i = 0; i < p.cars.size(); ++i)
             cars += (i ? ", " : "") + (i < p.car_names.size() && !p.car_names[i].empty() ? p.car_names[i] : p.cars[i]);
         PageItem it = info(p.title.empty() ? p.name : p.title,
-                           p.cars.empty() ? std::string("A car pack that changes the game's own cars, and adds none.")
-                                          : "A car pack. It adds " +
-                                                (p.cars.size() == 1 ? std::string("a car") : std::to_string(p.cars.size()) + " cars") +
-                                                " to the Autoshow: " + cars + ".");
+                           p.cars.empty()        ? tr("A car pack that changes the game's own cars, and adds none.")
+                           : p.cars.size() == 1 ? trf("A car pack. It adds a car to the Autoshow: {0}.", {cars})
+                                                : trf("A car pack. It adds {0} cars to the Autoshow: {1}.",
+                                                      {std::to_string(p.cars.size()), cars}));
         it.value   = p.version;
-        it.version = p.version.empty() ? "Version unknown" : "Version " + p.version;
+        it.version = p.version.empty() ? tr("Version unknown") : trf("Version {0}", {p.version});
         it.link    = "fh2-cars\\" + p.name;
         if (const std::string why = car_pack_problem(p.name); !why.empty()) {   // it isn't working: says so, in red
-            it.value_alert = "! Error !";
+            it.value_alert = "! " + tr("Error") + " !";
             it.value.clear();
-            it.note       = "It isn't working: " + why + " fh2-mods\\platform.log has more.";
+            it.note       = trf("It isn't working: {0} fh2-mods\\platform.log has more.", {shown(why)});
             it.note_alert = true;
         } else if (const std::string warn = car_pack_sql_warning(p.name); !warn.empty()) {   // it works, but could clash
-            it.note       = "Warning: " + warn + " fh2-mods\\platform.log has more.";
+            it.note       = trf("Warning: {0} fh2-mods\\platform.log has more.", {warn});
             it.note_alert = true;
         }
         items.push_back(it);
@@ -1954,10 +1954,10 @@ std::vector<PageItem> installed_items() {
         if (const std::string why = mod_problem(e); !why.empty()) {   // it isn't working: says so, in red
             it.value_alert = "! " + tr("Error") + " !";
             it.value.clear();
-            it.note       = trf("It isn't working: {0}", {why}) + " " + tr("fh2-mods\\platform.log has more.");
+            it.note       = trf("It isn't working: {0} fh2-mods\\platform.log has more.", {why});
             it.note_alert = true;
         } else if (const std::string warn = e.enabled ? mod_sql_warning(e.name) : ""; !warn.empty()) {   // its SQL could clash
-            it.note       = "Warning: " + warn + " fh2-mods\\platform.log has more.";
+            it.note       = trf("Warning: {0} fh2-mods\\platform.log has more.", {warn});
             it.note_alert = true;
         }
         items.push_back(it);
@@ -2093,8 +2093,8 @@ std::vector<PageItem> about_items() {
     // fh2-cars, where car packs are read (Azimuth 1.0 or later without Extra Options) and it's there
     if (std::error_code ec; instance_layer() && std::filesystem::is_directory(azimuth_dir() / L"fh2-cars", ec)) {
         const std::string cars = narrow((azimuth_dir() / L"fh2-cars").wstring());
-        PageItem packs = info("Open car packs folder", "Opens fh2-cars in File Explorer, to add or remove car packs. Packs you add "
-                                                       "there are read the next time you start the game.");
+        PageItem packs = info(tr("Open car packs folder"), tr("Opens fh2-cars in File Explorer, to add or remove car packs. Packs you add "
+                                                              "there are read the next time you start the game."));
         packs.link = cars;
         items.push_back(packs);
         urls.push_back(cars);

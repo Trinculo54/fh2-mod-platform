@@ -146,7 +146,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         set_target_properties(db_mod PROPERTIES OUTPUT_NAME DbMod PREFIX "")
         target_link_options(db_mod PRIVATE -static)
         # The Ids car packs' cars are given (src/car_ids.cpp), on their own: run car_ids_test.exe.
-        add_executable(car_ids_test tests/car_ids_test.cpp src/car_ids.cpp ${_sqlite_src})
+        add_executable(car_ids_test tests/car_ids_test.cpp src/car_ids.cpp src/text.cpp ${_sqlite_src})
         target_include_directories(car_ids_test PRIVATE src third_party/sqlite)
         target_link_options(car_ids_test PRIVATE -static)
         # The HUD layer preview: its template and state on their own (tests/run_hud_layer_test.sh), and the

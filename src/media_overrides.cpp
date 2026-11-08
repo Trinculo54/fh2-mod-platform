@@ -35,6 +35,7 @@
 // Folder volume methods: +0x10 add a reference, +0x18 release, +0xE8 does a
 // file exist.
 #include "platform.hpp"
+#include "text.hpp"
 #include "updates.hpp"
 
 #include <windows.h>
@@ -329,7 +330,7 @@ void watch() {
 void start_media_overrides() {
     if (!extra_options_dir().empty()) {
         plog("media overrides: Extra Options is here, so mediaoverride is left to it");
-        car_packs_unavailable("Extra Options is loaded");
+        car_packs_unavailable(later("Extra Options is loaded."));
         return;
     }
     plog("media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride and mediapc itself");
@@ -338,7 +339,7 @@ void start_media_overrides() {
              " (the game's " + temp_drive_spelling(instance_media()) + "), read ahead of mediaoverride");
         prepare_car_packs();
     } else {
-        car_packs_unavailable("this Azimuth is older than 1.0 (it has no data\\titles folder)");
+        car_packs_unavailable(later("This Azimuth is older than 1.0 (it has no data\\titles folder)."));
     }
     std::thread(watch).detach();
 }

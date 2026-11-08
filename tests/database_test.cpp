@@ -787,10 +787,10 @@ static void car_ids() {
     CHECK(has(c.log, "[car pack wish-pack] database: WISH_Pack01 is car 3500 from now on"));
     CHECK(q(layer, "SELECT count(*) FROM Data_Engine WHERE EngineID = 3003") == "1");
     CHECK(has(c.log, "[car pack test-pack] database: TEST_Pack01 is car 3003 from now on"));
-    CHECK(has(c.log, "[CarIdTest] database: warning: its SQL adds rows by Ids that car packs' cars are given (Data_Car 3000); "
-                     "a car added by hand should have an Id from 9000 up"));
-    CHECK(has(c.log, "[car pack literal-pack] database: warning: its SQL never says {car:LIT_Pack01} where LIT_Pack01's Id goes"));
-    CHECK(has(c.log, "[car pack literal-pack] database: warning: its SQL adds rows by Ids that car packs' cars are given (Data_Car 3001)"));
+    CHECK(has(c.log, "[CarIdTest] database: warning: Its SQL adds rows by Ids that car packs' cars are given (Data_Car 3000); "
+                     "a car added by hand should have an Id from 9000 up."));
+    CHECK(has(c.log, "[car pack literal-pack] database: warning: Its SQL never says {car:LIT_Pack01} where LIT_Pack01's Id goes"));
+    CHECK(has(c.log, "[car pack literal-pack] database: warning: Its SQL adds rows by Ids that car packs' cars are given (Data_Car 3001)"));
     CHECK(!has(c.log, "FAILED"));
 
     // The same again: the database on the temp drive is reused, and nothing more is recorded.
@@ -803,7 +803,7 @@ static void car_ids() {
     c.mods({"CarIdLate"});
     c.launch();
     CHECK(has(c.log, "[car pack test-pack] database: left out, so none of its changes were made: TEST_Pack01's Id, 3003, is "
-                     "taken now: CarIdLate's SQL adds Data_Engine 3003"));
+                     "taken now: CarIdLate's SQL adds Data_Engine 3003."));
     CHECK(car(3003) == "" && car(3001) == "LIT_Pack01" && q(layer, "SELECT count(*) FROM Data_Engine WHERE EngineID = 3003") == "1");
     CHECK(listed(record) == ids);
 
