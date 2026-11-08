@@ -165,7 +165,9 @@ bool step_slot(unsigned char* slot, StepOut* out) {
     const uintptr_t base = g_base.load(std::memory_order_relaxed);
     LayerView views[kMaxLayers];
     const int n = g_count.load(std::memory_order_acquire);
-    for (int i = 0; i < n; ++i) views[i] = {g_layers[i].modifier.load(std::memory_order_relaxed), g_layers[i].buttons};
+    // a layer of a mod stopped for online play (platform.cpp's go_online) is off: modifier 0
+    for (int i = 0; i < n; ++i)
+        views[i] = {stopped_online(g_layers[i].mod) ? 0u : g_layers[i].modifier.load(std::memory_order_relaxed), g_layers[i].buttons};
     __try {
         const auto* mgr = *reinterpret_cast<unsigned char* const*>(base + RVA_MANAGER);
         if (!mgr || *reinterpret_cast<const uintptr_t*>(mgr) != base + RVA_MANAGER_VT) return false;
@@ -229,6 +231,7 @@ DWORD WINAPI deliver(LPVOID) {
             ReleaseSRWLockExclusive(&g_qlock);
             if (!any) break;
             Layer& l = g_layers[p.layer];
+            if (stopped_online(l.mod)) continue;   // stopped for online play (platform.cpp's go_online)
             if (!call_press(l.on_press, l.user, l.key.c_str(), p.button))
                 log_line(l.mod_name, "crashed in its on_press for pad layer " + l.key);
         }

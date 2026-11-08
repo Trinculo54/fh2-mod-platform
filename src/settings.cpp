@@ -3746,6 +3746,7 @@ bool d_splash_button(void* page, int button, bool pressed) {
         return ours || o_splash_button(page, button, pressed);
     }
     if (splash_state(page) != 0) return o_splash_button(page, button, pressed);   // already signing in
+    if (stopped_online(mod)) return o_splash_button(page, button, pressed);   // stopped for online play (go_online)
     g_title_handled[code] = true;
     if (!loc.empty()) {   // the list (the message box plays its own sound)
         if (!show_title_list(page, j, 0)) log_line(mod->name, "couldn't show the list for title entry " + key);
@@ -3841,6 +3842,7 @@ void handle_title_choice(PopupFn* self) {
         key   = e.key;
         label = e.choices[choice];
     }
+    if (stopped_online(mod)) return;   // stopped for online play (go_online) while its list was open
     int r = FH2_TITLE_HANDLED;
     if (!call_on_choose(fn, user, key.c_str(), static_cast<uint32_t>(choice), &r)) {
         log_line(mod->name, "crashed in its on_choose for title entry " + key);
