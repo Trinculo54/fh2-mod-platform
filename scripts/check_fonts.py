@@ -1,5 +1,6 @@
 # Checks that every translation of the platform's own text (src/lang.cpp) only uses characters the game's fonts for
-# that language have, so none of them shows as a box on the Mods page or the MODS tab.
+# that language have, so none of them shows as a box on the Mods page or the MODS tab; and that it keeps the English
+# text's placeholders ({0}, {1}...), each as many times, so no number or name goes missing.
 #   python scripts/check_fonts.py "<Mount>/media/ui/Fonts.zip"
 #
 # The game picks fonts by language (fontsettings.xml in Fonts.zip): the Anthem fonts for Latin text, with Verdana
@@ -24,7 +25,12 @@ def c_string(literal):   # the table only escapes quotes and backslashes
     return re.sub(r'\\(["\\])', r"\1", literal)
 
 
+def placeholders(text):
+    return sorted(re.findall(r"\{[0-9]+\}", text))
+
+
 def main():
+    sys.stdout.reconfigure(encoding="utf-8")   # the Windows console's code page can't show every language
     if len(sys.argv) != 2:
         sys.exit(__doc__ if __doc__ else "usage: check_fonts.py <Fonts.zip>")
     fonts = zipfile.ZipFile(sys.argv[1])
@@ -46,6 +52,9 @@ def main():
             problems += 1
             continue
         for code, text in [("EN", english)] + list(zip(codes, texts)):
+            if placeholders(text) != placeholders(english):
+                print(f"{code}: {' '.join(placeholders(text))} for {' '.join(placeholders(english))}, in {text[:60]!r}")
+                problems += 1
             have = latin | glyphs.get(FALLBACK.get(code, ""), set())
             missing = sorted({c for c in text if ord(c) not in have})
             if missing:
