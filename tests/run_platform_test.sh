@@ -72,9 +72,10 @@ run_layout() {   # run_layout mediaoverride|own
     cd - >/dev/null
 }
 
-# Mods' text in the pages (src/xml_text.cpp) and car packs' car Ids (src/car_ids.cpp) on their own, then the
-# platform.
+# Mods' text in the pages (src/xml_text.cpp), car packs' car Ids (src/car_ids.cpp) and what's different
+# under Wine and Proton (src/wine.cpp) on their own, then the platform.
 wine "$b/xml_text_test.exe"
 wine "$b/car_ids_test.exe"
+wine "$b/wine_test.exe"
 run_layout mediaoverride
 run_layout own

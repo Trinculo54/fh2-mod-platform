@@ -8,6 +8,10 @@
 // it patches and refuses all of its patches if any one was changed first,
 // this one included.
 //
+// Under Proton the game isn't mapped at 0x140000000, so the pointers the
+// checks below compare with the exe on disk are moved by the same amount
+// (wine.cpp's same_pointer).
+//
 // The game finds a file through its file system's resolver, a function the
 // pointer at game+0x2E6EF28 points to (game+0x11F49B0). That pointer is
 // swapped for resolve() below as soon as the image is mapped, before the
@@ -36,6 +40,7 @@
 // file exist.
 #include "platform.hpp"
 #include "updates.hpp"
+#include "wine.hpp"
 
 #include <windows.h>
 
@@ -232,6 +237,19 @@ bool same_as_disk(const Disk& d, uint32_t rva, DWORD n) {
     return safe_copy(mem, g_base + rva, n) && std::memcmp(disk, mem, n) == 0;
 }
 
+// The same for `count` absolute pointers (the folder volume's vtable): where the image isn't mapped at
+// its preferred base, as under Proton, each one differs from the file's by how far the image moved.
+// (The code checked with same_as_disk has nothing the loader changes.)
+bool same_pointers_as_disk(const Disk& d, uint32_t rva, int count) {
+    uint64_t disk[4], mem[4];
+    if (count < 1 || count > 4 || !disk_bytes(d, rva, disk, count * 8) || !safe_copy(mem, g_base + rva, count * 8))
+        return false;
+    for (int i = 0; i < count; ++i)
+        if (!same_pointer(disk[i], mem[i], kPreferredBase, reinterpret_cast<uint64_t>(g_base), kGameSizeOfImage))
+            return false;
+    return true;
+}
+
 bool header_is_game(const char* base) {
     // A copy of the headers' page, as Azimuth may still be writing (or unmapping) it.
     static char head[0x1000];
@@ -273,6 +291,12 @@ void watch() {
     }
     const ULONGLONG mapped = GetTickCount64();
     g_base = base;
+    if (reinterpret_cast<uintptr_t>(base) != kPreferredBase) { // under Proton, for one
+        char at[24];
+        std::snprintf(at, sizeof at, "0x%llX", static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(base)));
+        plog(std::string("media overrides: the game is mapped at ") + at +
+             ", not at 0x140000000; the pointers in it are checked with that taken into account");
+    }
     void** slot              = reinterpret_cast<void**>(base + RVA_RESOLVE_SLOT);
     const uint64_t original  = reinterpret_cast<uint64_t>(base + RVA_RESOLVE);
 
@@ -296,11 +320,15 @@ void watch() {
         if (disk.file != INVALID_HANDLE_VALUE) CloseHandle(disk.file);
         return;
     }
-    const bool ok = same_as_disk(disk, RVA_RESOLVE, 16) && same_as_disk(disk, RVA_ALLOCATE, 16) &&
-                    same_as_disk(disk, RVA_CONSTRUCT, 16) && same_as_disk(disk, RVA_FOLDER_VT + 8, 16);
+    const char* differs = nullptr;
+    if (!same_as_disk(disk, RVA_RESOLVE, 16)) differs = "game+0x11F49B0 (the resolver)";
+    else if (!same_as_disk(disk, RVA_ALLOCATE, 16)) differs = "game+0x3229C0 (operator new)";
+    else if (!same_as_disk(disk, RVA_CONSTRUCT, 16)) differs = "game+0x11E05A0 (the folder volume constructor)";
+    else if (!same_pointers_as_disk(disk, RVA_FOLDER_VT + 8, 2)) differs = "game+0x2EAB918 (the folder volume's vtable)";
     CloseHandle(disk.file);
-    if (!ok) {
+    if (differs) {
         plog("media overrides: the game's code isn't what this build expects; left alone");
+        plog(std::string("media overrides: ") + differs + " isn't the same as in the exe on disk");
         return;
     }
 
