@@ -29,16 +29,20 @@ struct Catalogue {
     std::map<std::string, Entry> by_english;
 };
 
-// Reads a PO file (msgctxt, msgid, msgid_plural, msgstr, msgstr[n], strings over several lines and
-// C escapes) into `out`, adding to what's there. Entries marked fuzzy, untranslated ones and the
-// header are skipped. An entry whose {placeholders} don't match the English is left out, with a
-// sentence in `refused`, as is a line that isn't PO. Returns how many entries it took.
-int parse_po(std::string_view po, Catalogue& out, std::vector<std::string>& refused);
+// Reads a PO file for `tag`'s language (msgctxt, msgid, msgid_plural, msgstr, msgstr[n], strings over
+// several lines and C escapes) into `out`, adding to what's there. Entries marked fuzzy, untranslated
+// ones and the header are skipped. An entry whose {placeholders} don't match the English is left out,
+// with a sentence in `refused`, as is a line that isn't PO. Returns how many entries it took.
+int parse_po(std::string_view po, const std::string& tag, Catalogue& out, std::vector<std::string>& refused);
 // The {placeholders} in `s` ("{count}", "{0}"), sorted, each once: a {...} with no space or brace inside.
 std::vector<std::string> placeholders(std::string_view s);
 // Whether a translation's placeholders fit the English's. A plain entry: the same ones. A plural
-// form: none the English doesn't have in one form or the other, and every one both forms have.
-bool placeholders_fit(const Entry& e, const std::string& text);
+// form: none the English doesn't have in one form or the other, and every one both forms have,
+// unless the form is `only_for_one` (only ever used for 1, so it may say "one" instead of {n}).
+bool placeholders_fit(const Entry& e, const std::string& text, bool only_for_one = false);
+// Whether msgstr[`form`] of a PO file for `tag` is only ever used for 1: Polish, Czech, English and
+// most others' form 0, but not Russian's (21, 31...) or Portuguese and French's (0 too).
+bool form_only_for_one(const std::string& tag, int form);
 
 // The BCP-47 tag for one of the game's language codes, the names of its string-table zips ("PL" or
 // "pl" -> "pl", "BR" -> "pt-BR", "CHT" -> "zh-Hant"), or nullptr for none of them (DEV, LOC).
@@ -94,13 +98,16 @@ void l10n_note(FH2Mod* mod, const std::string& slot, const char* given);
 void l10n_note_key(FH2Mod* mod, const std::string& slot, const std::string& key, const std::string& english);
 // The slot's text in the language now into `text`, if the slot holds tr()'s text; else `text` stays.
 void l10n_follow(FH2Mod* mod, const std::string& slot, std::string& text);
+// The same in `tag`'s language (l10n_language()'s), for a page that follows many slots at once.
+void l10n_follow(FH2Mod* mod, const std::string& slot, std::string& text, const std::string& tag);
 // The slot's text in the string table of `table_code`'s language; false (and `text` as it was) if
 // the slot doesn't hold tr()'s text.
 bool l10n_text_in(FH2Mod* mod, const std::string& slot, std::string_view table_code, std::string& text);
 // The same for text the platform keeps as UTF-16 and the game asks for as it shows it (a
 // title-screen list): `shown` is the platform's copy, which stays put, `suffix` what the platform
-// added after the mod's text.
-void l10n_note_w(FH2Mod* mod, const wchar_t* shown, const char* given, const std::wstring& suffix = {});
+// added after the mod's text, and `max_bytes` (0: no limit) how long the mod's text can be in UTF-8,
+// cut short as the platform cut what it was given.
+void l10n_note_w(FH2Mod* mod, const wchar_t* shown, const char* given, const std::wstring& suffix = {}, std::size_t max_bytes = 0);
 // `shown`'s text in the language now, or nullptr if it doesn't hold tr()'s text. Stays valid.
 const wchar_t* l10n_follow_w(const wchar_t* shown);
 

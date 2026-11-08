@@ -554,9 +554,11 @@ typedef struct FH2ModApi {
        language by itself: the platform knows which key each text it handed
        out came from, and looks it up again in the game's language each time
        it writes a page. The game picks its language a few seconds after
-       fh2mod_init, so add your rows there with tr() as usual. Text you build
-       from tr()'s (with a number filled in, say) is yours, and stays as it
-       was: set it again when the page opens (FH2Page.on_open).
+       fh2mod_init, so add your rows there with tr() as usual. The title
+       screen's entry lines are the exception: they're written once, as the
+       game starts, so they follow its language from the next launch. Text
+       you build from tr()'s (with a number filled in, say) is yours, and
+       stays as it was: set it again when the page opens (FH2Page.on_open).
 
        language: the language text is looked up in, as a BCP-47 tag: "en",
        "en-GB", "pl", "pt-BR", "de", "fr", "es-ES", "es-MX", "it", "ja", "ko",
@@ -572,8 +574,9 @@ typedef struct FH2ModApi {
        fh2-mods\lang\<your mod's name>\<lang>.po exists, that file is used
        instead (the log says so), so translators can try theirs without a
        build. Entries marked fuzzy are skipped, and one whose {placeholders}
-       don't match the English is left out with a line in the log. Returns
-       how many entries it took (0: none; the log says why).
+       don't match the English is left out with a line in the log (a plural
+       form `lang` uses for 1 alone may leave the number out). Returns how
+       many entries it took (0: none; the log says why).
 
        tr: `english` in the language now, or `english` when there's no
        translation. `key` is the msgctxt (NULL: entries without one). A

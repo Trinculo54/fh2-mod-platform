@@ -3,7 +3,7 @@
 // that follows the game's language. Built with stand-ins for the three things l10n.cpp asks the rest
 // of the platform: platform.log, the Azimuth folder (a folder of its own under %TEMP%) and the game's
 // language (set by the test). Run l10n_test.exe; it runs itself again with "qps" for the test
-// language, which is read once per session.
+// language and with "first" for a first launch, since the language state is read once per session.
 #include "l10n.hpp"
 #include "platform.hpp"
 
@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,7 @@ void log_line(const std::string& who, const std::string& text) {
     std::printf("log: %s\n", g_log.back().c_str());
 }
 fs::path azimuth_dir() { return g_dir; }
+Launched launched_game() { return Launched::not_yet; }
 int game_language(char* code, size_t size) {
     if (!code || size < 4) return 0;
     code[0] = '\0';
@@ -169,6 +171,36 @@ static int qps_phase() {
     return fails;
 }
 
+// The first launch: no platform-language.ini, so mods' text starts in English, and the game is in Polish.
+static int first_phase() {
+    l10n_start();
+    CHECK(logged("Language: mods' text starts in English (en), and follows the game's language once it has picked it"));
+    g_game = "PL";
+    for (int i = 0; i < 50 && !logged("Language: the game's text is in"); ++i) Sleep(100);
+    CHECK(logged("Language: the game's text is in Polish (pl); mods' text started in English this first time, and follows it on every page"));
+    CHECK(!logged("as last time"));
+    std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
+    return fails;
+}
+
+// Runs this exe again for a phase of its own (the language state is read once per session).
+static DWORD run_phase(const wchar_t* phase) {
+    std::fflush(stdout);
+    wchar_t self[MAX_PATH];
+    GetModuleFileNameW(nullptr, self, MAX_PATH);
+    std::wstring cmd = L"\"" + std::wstring(self) + L"\" " + phase;
+    STARTUPINFOW si{sizeof si};
+    PROCESS_INFORMATION pi{};
+    DWORD code = 1;
+    if (CreateProcessW(self, cmd.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, 60000);
+        GetExitCodeProcess(pi.hProcess, &code);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+    }
+    return code;
+}
+
 int wmain(int argc, wchar_t** argv) {
     wchar_t tmp[MAX_PATH];
     GetTempPathW(MAX_PATH, tmp);
@@ -181,12 +213,13 @@ int wmain(int argc, wchar_t** argv) {
         }
     } cleanup;
     if (argc > 1 && std::wstring(argv[1]) == L"qps") return qps_phase();
+    if (argc > 1 && std::wstring(argv[1]) == L"first") return first_phase();
 
     // ---- PO files
     {
         l10n::Catalogue c;
         std::vector<std::string> refused;
-        const int n = l10n::parse_po(kPolish, c, refused);
+        const int n = l10n::parse_po(kPolish, "pl", c, refused);
         CHECK(n == 6);   // Trees label and description, the plural, no context, Stale, greeting
         CHECK(c.by_key.count("row.Trees.label") && c.by_key["row.Trees.label"].msgstr[0] == "Łamliwe drzewa");
         CHECK(c.by_key["row.Trees.description"].msgid == "Trees break when you hit them.\nLogs fly.");
@@ -204,7 +237,7 @@ int wmain(int argc, wchar_t** argv) {
         // LF only, no BOM, an entry at the very end without a newline
         l10n::Catalogue d;
         refused.clear();
-        CHECK(l10n::parse_po("msgctxt \"a\"\nmsgid \"A\"\nmsgstr \"\\u0041x\"", d, refused) == 1 && d.by_key["a"].msgstr[0] == "u0041x");
+        CHECK(l10n::parse_po("msgctxt \"a\"\nmsgid \"A\"\nmsgstr \"\\u0041x\"", "pl", d, refused) == 1 && d.by_key["a"].msgstr[0] == "u0041x");
     }
     // placeholders
     {
@@ -216,8 +249,27 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(l10n::placeholders_fit(e, "{n} samochody w {place}"));
         CHECK(!l10n::placeholders_fit(e, "{n} samochodów"));             // {place} is in both English forms
         CHECK(!l10n::placeholders_fit(e, "{n} samochodów w {miejsce}"));
+        CHECK(l10n::placeholders_fit(e, "Jeden samochód", true));        // a form only for 1 may leave {place} out too
+        CHECK(!l10n::placeholders_fit(e, "Jeden samochód w {miejsce}", true));
         e.msgid_plural.clear();
         CHECK(!l10n::placeholders_fit(e, "Jeden samochód"));
+        CHECK(!l10n::placeholders_fit(e, "Jeden samochód", true));        // not a plural: the same ones
+        // which forms are only for 1
+        CHECK(l10n::form_only_for_one("pl", 0) && !l10n::form_only_for_one("pl", 1) && !l10n::form_only_for_one("pl", 2));
+        CHECK(l10n::form_only_for_one("en", 0) && l10n::form_only_for_one("de", 0) && l10n::form_only_for_one("cs", 0));
+        CHECK(!l10n::form_only_for_one("ru", 0) && !l10n::form_only_for_one("pt-BR", 0) && !l10n::form_only_for_one("fr", 0));
+        CHECK(!l10n::form_only_for_one("ja", 0) && !l10n::form_only_for_one("en", 1));
+        // docs/translating.md's example, "{n} tree broken", with Polish's singular without {n}; not so in Russian,
+        // whose first form is also for 21, 31...
+        const char* tree = "msgctxt \"count.trees\"\nmsgid \"{n} tree broken\"\nmsgid_plural \"{n} trees broken\"\n"
+                           "msgstr[0] \"Jedno drzewo\"\nmsgstr[1] \"{n} drzewa\"\nmsgstr[2] \"{n} drzew\"\n";
+        l10n::Catalogue pl, ru;
+        std::vector<std::string> refused;
+        CHECK(l10n::parse_po(tree, "pl", pl, refused) == 1 && refused.empty() && pl.by_key["count.trees"].msgstr[0] == "Jedno drzewo");
+        CHECK(l10n::parse_po(tree, "ru", ru, refused) == 0 && refused.size() == 1);
+        // the other forms keep every placeholder both English forms have
+        CHECK(l10n::parse_po("msgctxt \"k\"\nmsgid \"{n} tree\"\nmsgid_plural \"{n} trees\"\nmsgstr[0] \"{n} drzewo\"\n"
+                             "msgstr[1] \"drzewa\"\nmsgstr[2] \"{n} drzew\"\n", "pl", pl, refused) == 0);
     }
     // tags and fallbacks
     {
@@ -316,7 +368,7 @@ int wmain(int argc, wchar_t** argv) {
     CHECK(add(&mod, "pt", "msgctxt \"row.Trees.label\"\nmsgid \"Breakable trees\"\nmsgstr \"Árvores quebráveis\"\n\n"
                                            "msgctxt \"greeting\"\nmsgid \"Hello, {name}!\"\nmsgstr \"Olá, {name}!\"\n") == 2);
     CHECK(add(&mod, "pt_BR", "msgctxt \"greeting\"\nmsgid \"Hello, {name}!\"\nmsgstr \"Oi, {name}!\"\n") == 1);
-    CHECK(logged("[TestMod] translation: Brazilian Portuguese (pt-BR), 1 strings"));
+    CHECK(logged("[TestMod] translation: Brazilian Portuguese (pt-BR), 1 string") && !logged("1 strings"));
     CHECK(add(&mod, "es-ES", "msgctxt \"greeting\"\nmsgid \"Hello, {name}!\"\nmsgstr \"¡Hola, {name}!\"\n") == 1);
     CHECK(add(&mod, "en", "msgctxt \"greeting\"\nmsgid \"Hello, {name}!\"\nmsgstr \"Hi, {name}!\"\n") == 1);
 
@@ -367,6 +419,22 @@ int wmain(int argc, wchar_t** argv) {
     l10n_follow(&mod, "row.Trees.label", s);
     CHECK(s == "Árvores quebráveis" && std::wstring(l10n_follow_w(title.c_str())) == L"Árvores quebráveis  1/2");
     CHECK(std::string(l10n_tr_plural(&mod, "count.trees", "One tree broken", "{n} trees broken", 0)) == "{n} trees broken");
+    // a count shown live: counts that take the same forms in every language share a copy, so there are a handful, not one per n
+    CHECK(l10n_tr_plural(&mod, "count.live", "One car", "{n} cars", 2) == l10n_tr_plural(&mod, "count.live", "One car", "{n} cars", 3));
+    {
+        std::set<const char*> copies;
+        for (int64_t n = 0; n < 5000; ++n) copies.insert(l10n_tr_plural(&mod, "count.live", "One car", "{n} cars", n));
+        std::printf("tr_plural: %zu copies for 5000 counts\n", copies.size());
+        CHECK(copies.size() <= 16);   // one per set of forms across the languages' rules
+    }
+    CHECK(std::string(l10n_tr_plural(&mod, "count.live", "One car", "{n} cars", -1)) == "One car");   // English, as for 1
+    // a title-screen list's title cut as its label was, not inside a character
+    std::wstring cut_title = L"Árvo  1/2";
+    l10n_note_w(&mod, cut_title.c_str(), trees, L"  1/2", 5);
+    CHECK(std::wstring(l10n_follow_w(cut_title.c_str())) == L"Árvo  1/2");   // "Árvores quebráveis" cut to 5 bytes
+    std::wstring cut_inside = L"x";
+    l10n_note_w(&mod, cut_inside.c_str(), trees, L"", 1);
+    CHECK(std::wstring(l10n_follow_w(cut_inside.c_str())).empty());
     // other text noted in the same slot replaces it
     l10n_note(&mod, "row.Trees.label", "something of the mod's own");
     s = "own";
@@ -380,7 +448,7 @@ int wmain(int argc, wchar_t** argv) {
     FH2Mod file_mod;
     file_mod.name = "FileMod";
     CHECK(add(&file_mod, "pt-BR", "msgctxt \"greeting\"\nmsgid \"Hello, {name}!\"\nmsgstr \"Oi, {name}!\"\n") == 1);
-    CHECK(logged("[FileMod] translation: Brazilian Portuguese (pt-BR) from fh2-mods\\lang\\FileMod\\pt_BR.po, 1 strings; it's used instead of "
+    CHECK(logged("[FileMod] translation: Brazilian Portuguese (pt-BR) from fh2-mods\\lang\\FileMod\\pt_BR.po, 1 string; it's used instead of "
                  "any the mod has built in"));
     CHECK(logged("[FileMod] add_translation: pt-BR comes from fh2-mods\\lang\\FileMod\\pt_BR.po this time, not from the mod"));
     CHECK(logged("[FileMod] fh2-mods\\lang\\FileMod\\notes.po isn't named after a language (pl.po, pt-BR.po...), so it isn't read"));
@@ -388,23 +456,9 @@ int wmain(int argc, wchar_t** argv) {
     g_game = "DE";
     CHECK(std::string(l10n_tr(&file_mod, "greeting", "Hello, {name}!")) == "Hallo, {name}!");
 
-    // ---- the test language, in a session of its own
-    {
-        std::fflush(stdout);
-        wchar_t self[MAX_PATH];
-        GetModuleFileNameW(nullptr, self, MAX_PATH);
-        std::wstring cmd = L"\"" + std::wstring(self) + L"\" qps";
-        STARTUPINFOW si{sizeof si};
-        PROCESS_INFORMATION pi{};
-        DWORD code = 1;
-        if (CreateProcessW(self, cmd.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi)) {
-            WaitForSingleObject(pi.hProcess, 60000);
-            GetExitCodeProcess(pi.hProcess, &code);
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-        }
-        CHECK(code == 0);
-    }
+    // ---- the test language, and a first launch, each in a session of its own
+    CHECK(run_phase(L"qps") == 0);
+    CHECK(run_phase(L"first") == 0);
     std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
     return fails;
 }

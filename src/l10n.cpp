@@ -178,7 +178,7 @@ std::vector<std::string> placeholders(std::string_view s) {
     return {found.begin(), found.end()};
 }
 
-bool placeholders_fit(const Entry& e, const std::string& text) {
+bool placeholders_fit(const Entry& e, const std::string& text, bool only_for_one) {
     const auto t   = placeholders(text);
     const auto one = placeholders(e.msgid);
     if (e.msgid_plural.empty()) return t == one;
@@ -186,10 +186,20 @@ bool placeholders_fit(const Entry& e, const std::string& text) {
     std::vector<std::string> any, both;
     std::set_union(one.begin(), one.end(), other.begin(), other.end(), std::back_inserter(any));
     std::set_intersection(one.begin(), one.end(), other.begin(), other.end(), std::back_inserter(both));
-    return std::includes(any.begin(), any.end(), t.begin(), t.end()) && std::includes(t.begin(), t.end(), both.begin(), both.end());
+    // a form only for 1 may leave placeholders out ("Jedno drzewo" for "{n} tree broken"), as gettext's own check allows
+    return std::includes(any.begin(), any.end(), t.begin(), t.end()) &&
+           (only_for_one || std::includes(t.begin(), t.end(), both.begin(), both.end()));
 }
 
-int parse_po(std::string_view po, Catalogue& out, std::vector<std::string>& refused) {
+bool form_only_for_one(const std::string& tag, int form) {
+    if (plural_form(tag, 1) != form) return false;
+    // the rules go by n % 100 and n % 10 at most, so 0 to 199 has every case
+    for (int64_t n = 0; n < 200; ++n)
+        if (n != 1 && plural_form(tag, n) == form) return false;
+    return true;
+}
+
+int parse_po(std::string_view po, const std::string& tag, Catalogue& out, std::vector<std::string>& refused) {
     if (po.size() >= 3 && po.substr(0, 3) == "\xEF\xBB\xBF") po.remove_prefix(3);
     struct Pending {
         bool ctxt_seen = false, id_seen = false, str_seen = false, fuzzy = false;
@@ -208,8 +218,9 @@ int parse_po(std::string_view po, Catalogue& out, std::vector<std::string>& refu
         const int forms = p.plural.empty() ? 1 : (p.strs.empty() ? 0 : p.strs.rbegin()->first + 1);
         for (int i = 0; i < forms; ++i) e.msgstr.push_back(p.strs.count(i) ? p.strs[i] : std::string());
         if (std::all_of(e.msgstr.begin(), e.msgstr.end(), [](const std::string& s) { return s.empty(); })) return;   // untranslated
-        for (const std::string& s : e.msgstr) {
-            if (s.empty() || placeholders_fit(e, s)) continue;
+        for (std::size_t f = 0; f < e.msgstr.size(); ++f) {
+            const std::string& s = e.msgstr[f];
+            if (s.empty() || placeholders_fit(e, s, !p.plural.empty() && form_only_for_one(tag, static_cast<int>(f)))) continue;
             std::vector<std::string> english = placeholders(e.msgid);
             for (const std::string& x : placeholders(e.msgid_plural))
                 if (std::find(english.begin(), english.end(), x) == english.end()) english.push_back(x);
@@ -503,6 +514,7 @@ std::map<std::pair<FH2Mod*, std::string>, std::size_t> g_slots; // the places th
 struct WideSlot {
     std::size_t ref;
     std::wstring suffix;
+    std::size_t max_bytes = 0;   // the mod's text cut to this many UTF-8 bytes (0: as it is)
 };
 std::unordered_map<const wchar_t*, WideSlot> g_wslots;
 std::deque<std::wstring> g_wtexts;
@@ -559,6 +571,9 @@ const char* game_tag() {
     return t ? t : "en";
 }
 
+// "1 string", "6 strings", for log lines.
+std::string strings(int n) { return std::to_string(n) + (n == 1 ? " string" : " strings"); }
+
 // The mod's translations, with its folder under fh2-mods\lang read the first time.
 ModText& mod_text(FH2Mod* m, std::vector<std::string>& notes) {
     ModText& mt = g_mods[m];
@@ -580,29 +595,38 @@ ModText& mod_text(FH2Mod* m, std::vector<std::string>& notes) {
         const std::string text{std::istreambuf_iterator<char>(in), {}};
         Catalogue c;
         std::vector<std::string> refused;
-        const int n = parse_po(text, c, refused);
+        const int n = parse_po(text, tag, c, refused);
         for (const std::string& r : refused) notes.push_back("translation " + tag + " (" + file + "): " + r);
         mt.langs[tag] = std::move(c);
         mt.files[tag] = file;
         notes.push_back("translation: " + language_name(tag) + " (" + tag + ") from fh2-mods\\lang\\" + name + "\\" + file + ", " +
-                        std::to_string(n) + " strings; it's used instead of any the mod has built in");
+                        strings(n) + "; it's used instead of any the mod has built in");
     }
     return mt;
 }
 
+// Which plural form `n` takes in each set of rules plural_form() knows ("en", "pl", "ru", "cs", "pt" and
+// "ja" stand for the rest): two counts with the same forms everywhere show the same text in every
+// language. A count shown live (trees broken, metres driven) then needs a handful of Refs, not one per n.
+std::string plural_class(int64_t n) {
+    std::string s;
+    for (const char* t : {"en", "pl", "ru", "cs", "pt", "ja"}) s += static_cast<char>('0' + plural_form(t, n));
+    return s;
+}
+
 std::size_t ref_of(FH2Mod* m, const std::string& key, const std::string& one, const std::string& other, int64_t n, bool plural) {
     char id[64];
-    std::snprintf(id, sizeof id, "%p\x1f%d\x1f%lld\x1f", static_cast<void*>(m), plural ? 1 : 0, static_cast<long long>(plural ? n : 0));
-    const std::string k = id + key + '\x1f' + one + '\x1f' + other;
+    std::snprintf(id, sizeof id, "%p\x1f%d\x1f", static_cast<void*>(m), plural ? 1 : 0);
+    const std::string k = id + (plural ? plural_class(n) : std::string()) + '\x1f' + key + '\x1f' + one + '\x1f' + other;
     if (auto it = g_ref_ids.find(k); it != g_ref_ids.end()) return it->second;
-    g_refs.push_back({m, key, one, other, plural ? n : 0, plural});
+    g_refs.push_back({m, key, one, other, plural ? n : 0, plural});   // n: the first count of its class, which stands for them all
     g_ref_ids.emplace(k, g_refs.size() - 1);
     return g_refs.size() - 1;
 }
 
 // What `r` shows in `tag`'s language.
 std::string text_for(const Ref& r, const std::string& tag, std::vector<std::string>& notes) {
-    const std::string english = r.plural && r.n != 1 ? r.other : r.one;   // English: singular only for 1
+    const std::string english = r.plural && plural_form("en", r.n) != 0 ? r.other : r.one;   // English: singular only for 1 (and -1)
     if (tag == "qps") return pseudo(english);
     if (!r.mod) return english;
     ModText& mt = mod_text(r.mod, notes);
@@ -677,9 +701,9 @@ int l10n_add_translation(FH2Mod* m, const char* lang, const char* po, std::size_
             notes.push_back("add_translation: " + tag + " has no text; nothing was added");
         } else {
             std::vector<std::string> refused;
-            taken = parse_po(std::string_view(po, size), mt.langs[tag], refused);
+            taken = parse_po(std::string_view(po, size), tag, mt.langs[tag], refused);
             for (const std::string& r : refused) notes.push_back("translation " + tag + ": " + r);
-            notes.push_back("translation: " + language_name(tag) + " (" + tag + "), " + std::to_string(taken) + " strings");
+            notes.push_back("translation: " + language_name(tag) + " (" + tag + "), " + strings(taken));
         }
     }
     say(m, notes);
@@ -734,15 +758,21 @@ void l10n_start() {
             if (const char* t = game_tag()) {
                 const std::string tag = t;
                 const std::string now = language_name(tag) + " (" + tag + ")";
+                const char* test      = g_test ? " (the test language stays on)" : "";
+                const char* follows   = "follows it on every page written from now on, and the title screen's lines from the next launch";
                 if (tag == g_start_tag)
-                    plog("Language: the game's text is in " + now + ", as expected; mods' text is in it too" +
-                         (g_test ? " (the test language stays on)" : ""));
+                    plog("Language: the game's text is in " + now + ", as expected; mods' text is in it too" + test);
+                else if (g_last.empty())   // no platform-language.ini yet: there was no last time
+                    plog("Language: the game's text is in " + now + "; mods' text started in English this first time, and " + follows +
+                         test);
                 else
-                    plog("Language: the game's text is in " + now + ", not " + language_name(g_start_tag) +
-                         " as last time; mods' text follows it on every page written from now on, and the title screen's lines from "
-                         "the next launch" +
-                         (g_test ? " (the test language stays on)" : ""));
+                    plog("Language: the game's text is in " + now + ", not " + language_name(g_start_tag) + " as last time; mods' text " +
+                         follows + test);
                 if (tag != g_last) write_state(tag);
+                return;
+            }
+            if (launched_game() == Launched::other) {   // Azimuth 1.0.1 started another Forza game: it never gets one
+                plog("Language: the game that started isn't Forza Horizon 2, so the platform stops watching for its language");
                 return;
             }
             Sleep(1000);
@@ -781,7 +811,10 @@ void l10n_follow(FH2Mod* m, const std::string& slot, std::string& text) {
         std::scoped_lock lk{g_mu};
         if (!g_slots.count({m, slot})) return;
     }
-    const std::string tag = l10n_language();
+    l10n_follow(m, slot, text, l10n_language());
+}
+
+void l10n_follow(FH2Mod* m, const std::string& slot, std::string& text, const std::string& tag) {
     std::vector<std::string> notes;
     {
         std::scoped_lock lk{g_mu};
@@ -807,12 +840,12 @@ bool l10n_text_in(FH2Mod* m, const std::string& slot, std::string_view table_cod
     return true;
 }
 
-void l10n_note_w(FH2Mod* m, const wchar_t* shown, const char* given, const std::wstring& suffix) {
+void l10n_note_w(FH2Mod* m, const wchar_t* shown, const char* given, const std::wstring& suffix, std::size_t max_bytes) {
     (void)m;
     if (!shown) return;
     std::scoped_lock lk{g_mu};
     const auto it = given ? g_handed.find(given) : g_handed.end();
-    if (it != g_handed.end()) g_wslots[shown] = {it->second, suffix};
+    if (it != g_handed.end()) g_wslots[shown] = {it->second, suffix, max_bytes};
     else g_wslots.erase(shown);
 }
 
@@ -832,7 +865,13 @@ const wchar_t* l10n_follow_w(const wchar_t* shown) {
         if (it == g_wslots.end()) return nullptr;
         const Ref& r       = g_refs[it->second.ref];
         m                  = r.mod;
-        const std::wstring w = utf16(text_for(r, tag, notes)) + it->second.suffix;
+        std::string text   = text_for(r, tag, notes);
+        if (const std::size_t max = it->second.max_bytes; max && text.size() > max) {   // cut as the mod's text was, not inside a character
+            std::size_t cut = max;
+            while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) --cut;
+            text.resize(cut);
+        }
+        const std::wstring w = utf16(text) + it->second.suffix;
         auto in            = g_winterned.find(w);
         if (in == g_winterned.end()) {
             g_wtexts.push_back(w);
