@@ -153,10 +153,17 @@ std::string later(const char* english_template, std::initializer_list<std::strin
     for (const std::string& a : args) {
         m += kArg;
         const bool inner = !a.empty() && a[0] == kMessage;
+        // A message that has a message among its arguments would be two levels deep, which the marks can't
+        // hold: it's kept as its English text, filled in, so it still reads as a sentence.
+        if (inner && a.find_first_of(std::string{kInnerMessage, kInnerArg}) != std::string::npos) {
+            for (char c : english(a))
+                if (!is_mark(c)) m += c;
+            continue;
+        }
         for (char c : a) {
             if (inner && c == kMessage) m += kInnerMessage;
             else if (inner && c == kArg) m += kInnerArg;
-            else if (!is_mark(c)) m += c;   // a message two levels deep loses its marks: it's shown as its text
+            else if (!is_mark(c)) m += c;
         }
     }
     return m;

@@ -6,6 +6,16 @@
 #include <string>
 #include <vector>
 
+// A stand-in for lang.cpp's tr(), so shown() can be checked with no game: three templates come back marked, the way
+// a translation would, and any other text as it is, as lang.cpp's tr() does for text its table hasn't got.
+std::string fh2platform::tr(const char* english) {
+    const std::string e = english ? english : "";
+    if (e == "{0}, {1} and {2} more") return "<{0}|{1}|+{2}>";
+    if (e == "Its SQL adds rows by Ids ({0}); from {1} up.") return "[SQL from {1}: {0}]";
+    if (e == "{0} asks for {1}; it's {1} elsewhere") return "{1}, {1} ({0})";
+    return e;
+}
+
 using namespace fh2platform;
 
 namespace {
@@ -96,6 +106,35 @@ int main() {
              "and is filled in too");
         const std::string odd = later("{0}", {std::string("a\x1F" "b\x1E" "c")});
         same(english(odd), "abc", "stray marks in an argument are dropped, so they can't split it");
+
+        // a message with a message among its arguments, as an argument: two levels deep, kept as English text
+        const std::string two   = later("Problem: {0}", {outer});
+        check(split_later(two, t, args) && args.size() == 1 && args[0].find_first_of("\x1C\x1D\x1E\x1F") == std::string::npos,
+              "two levels deep: the argument is plain text, with no marks left");
+        same(english(two), "Problem: Its SQL adds rows by Ids (Data_Car 3000, Data_Engine 3000 and 2 more); from 9000 up.",
+             "and reads as its English sentence, filled in");
+        const std::string three = later("{0}", {later("{0}", {later("{0}, {1} and {2} more", {"x", "y", "2"})})});
+        same(english(three), "x, y and 2 more", "three levels: no template or placeholder left over");
+    }
+
+    // messages shown in the game's language (with the stand-in tr() above)
+    {
+        const std::string inner = later("{0}, {1} and {2} more", {"Data_Car 3000", "Data_Engine 3000", "2"});
+        const std::string outer = later("Its SQL adds rows by Ids ({0}); from {1} up.", {inner, "9000"});
+        same(shown(outer), "[SQL from 9000: <Data_Car 3000|Data_Engine 3000|+2>]",
+             "the message and the message in it are both translated, every placeholder filled");
+        same(shown(inner), "<Data_Car 3000|Data_Engine 3000|+2>", "a message on its own");
+        same(shown(later("Not in the table: {0}.", {"x"})), "Not in the table: x.", "a template with no translation: English, filled in");
+        same(shown(later("Its SQL adds rows by Ids ({0}); from {1} up.", {later("Not in the table: {0}", {"x"}), "1"})),
+             "[SQL from 1: Not in the table: x]", "an inner message with no translation, in a translated one");
+        same(shown(later("{0} asks for {1}; it's {1} elsewhere", {"car", "4000"})), "4000, 4000 (car)",
+             "a translation that uses a placeholder twice gets it both times");
+        same(shown(later("{0} asks for {1}; it's {1} elsewhere", {"{1}", "x"})), "x, x ({1})",
+             "an argument holding {1} isn't filled again");
+        same(shown("Made for offline play."), "Made for offline play.", "a mod's own text is shown as it is");
+        same(shown(later("Problem: {0}", {outer})),
+             "Problem: Its SQL adds rows by Ids (Data_Car 3000, Data_Engine 3000 and 2 more); from 9000 up.",
+             "two levels deep: the argument is shown as its English sentence");
     }
 
     std::printf(g_failed ? "\n%d FAILED\n" : "\nALL PASSED\n", g_failed);

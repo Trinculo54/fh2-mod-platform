@@ -76,6 +76,13 @@ run_layout() {   # run_layout mediaoverride|own
 # packs' car Ids (src/car_ids.cpp) on their own, then the platform.
 wine "$b/xml_text_test.exe"
 wine "$b/text_test.exe"
+# Every English text the code translates is in src/lang.cpp's table, with its placeholders kept (and with
+# FH2_MEDIA set, every translation is in its language's font), when python3 is on PATH.
+if command -v python3 > /dev/null; then
+    fonts=()
+    [ -n "${FH2_MEDIA:-}" ] && [ -f "$FH2_MEDIA/ui/Fonts.zip" ] && fonts=("$FH2_MEDIA/ui/Fonts.zip")
+    python3 -I "$root/scripts/check_fonts.py" "${fonts[@]}"
+fi
 wine "$b/car_ids_test.exe"
 run_layout mediaoverride
 run_layout own

@@ -37,7 +37,8 @@ std::string fill(const std::string& tmpl, const std::vector<std::string>& args);
 
 // A message for the player that's put together before the game has its language (a mod that didn't
 // start, a car pack's problem), kept as the English template and its arguments and translated when
-// it's shown. An argument can be such a message itself (one level deep). Logs use english().
+// it's shown. An argument can be such a message itself (one level deep); one that has a message among its own
+// arguments is kept as its English text, filled in. Logs use english().
 std::string later(const char* english_template, std::initializer_list<std::string> args = {});
 // A message from later(): its template and arguments. False for any other text.
 bool split_later(const std::string& message, std::string& english_template, std::vector<std::string>& args);
