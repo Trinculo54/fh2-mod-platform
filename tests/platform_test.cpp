@@ -8,8 +8,11 @@
 // "crash": AaaMod crashes on purpose; "crash-chained": a crash handler installed after the
 // platform's passes crashes on to it; then, with an FH2MP.dll, OfflineMod.dll and FH2MP's
 // session file: "online-first", "online", "online-chosen" (the player's choices) and
-// "fh2mp-off" (FH2MP turned off on the MODS tab); last, "hud": HudTestMod.dll adds a HUD
-// layer (the HUD layer preview, include/fh2mod_hud.h).
+// "fh2mp-off" (FH2MP turned off on the MODS tab); then (platform 2.9.0, issue #22) "online-root"
+// (the session next to azimuth.exe, no data\bin), "online-late" (FakeFH2MP.dll as ZzFH2MP.dll
+// writes the session while the mods start, so OfflineMod is stopped) and "online-renamed" (the
+// same DLL, known as FH2MP now); last, "hud": HudTestMod.dll adds a HUD layer (the HUD layer
+// preview, include/fh2mod_hud.h).
 // The runner goes through the phases twice, once per layout (platform 2.9.0): first with no
 // data\titles folder (Azimuth before 1.0, or Extra Options loaded), where the platform's files go
 // to mediaoverride; then with one (Azimuth 1.0 or later without Extra Options), where they go to
@@ -316,7 +319,9 @@ int wmain(int argc, wchar_t** argv) {
         log = slurp(L"fh2-mods\\platform.log");
         if (hud_phase ? has(log, "mod(s) loaded") && has(log, "[HudTestMod] after init:") && has(log, "[HUD layer] page:") &&
                             (argc <= 2 || hud_started(log))
-            : online_phase ? has(log, "mod(s) loaded")
+            : online_phase ? has(log, "mod(s) loaded") &&
+                                 (phase != L"online-late" || has(log, "[OfflineMod] after start:")) &&
+                                 ((phase != L"online-late" && phase != L"online-renamed") || has(log, "[FH2MP] going_online:"))
                            : has(log, "mod(s) loaded") && has(log, "TestMod version") &&
                                  (phase == L"full" ? has(log, "late edit applied") && has(log, "save snapshot:")
                                                    : has(log, "removed AIPlayers.str") && has(log, "keep.xml override")))
@@ -593,6 +598,8 @@ int wmain(int argc, wchar_t** argv) {
         if (phase == L"online-first") {
             // OfflineMod is new: it loads, register_mod turns it away, and it's remembered as offline-only
             CHECK(has(log, "started from the FH2MP launcher (online play)"));
+            CHECK(has(log, "FH2MP.dll (FH2MP) is turned on and FH2MP's session file is there (data\\bin\\fh2mp-session.txt), "
+                           "so this game counts as online play"));
             CHECK(has(log, "loaded OfflineMod.dll") &&
                   has(log, "[OfflineMod] 1.0.0 doesn't run in online play (its author says so), so it isn't started"));
             CHECK(!has(log, "OfflineMod.dll: fh2mod_init returned") && !has(log, "[OfflineMod] running"));
@@ -613,6 +620,38 @@ int wmain(int argc, wchar_t** argv) {
             // the player's choices (platform-online.txt) win over the author's
             CHECK(has(log, "[OfflineMod] running online"));
             CHECK(has(log, "HelloMod.dll is set to stay off when playing online; not loaded"));
+        } else if (phase == L"online-root") {
+            // issue #22: in an Azimuth folder without data\bin, FH2MP's session is next to azimuth.exe
+            CHECK(has(log, "FH2MP.dll (FH2MP) is turned on and FH2MP's session file is there (fh2mp-session.txt next to "
+                           "azimuth.exe), so this game counts as online play"));
+            CHECK(has(log, "started from the FH2MP launcher (online play)"));
+            CHECK(has(log, "OfflineMod.dll is set to stay off when playing online; not loaded") && !has(log, "loaded OfflineMod.dll"));
+        } else if (phase == L"online-late") {
+            // issue #22: FH2MP under another name (ZzFH2MP.dll, new here), and no session when the loader looks: offline,
+            // so OfflineMod starts and hooks. FH2MP's session shows up while it starts (it writes it itself here, as a
+            // Play pressed meanwhile would): online once its fh2mod_init returns, and OfflineMod is stopped.
+            CHECK(!has(log, "started from the FH2MP launcher") && !has(log, "counts as online play"));
+            CHECK(has(log, "[OfflineMod] running offline") && has(log, "[OfflineMod] enabled 1 hook"));
+            CHECK(has(log, "[FH2MP] wrote the session file in fh2mod_init") && has(log, "[FH2MP] in fh2mod_init: offline"));
+            CHECK(has(log, "online play after all: FH2MP's session showed up while the mods were starting (FH2MP's session file "
+                           "is there (data\\bin\\fh2mp-session.txt))"));
+            CHECK(has(log, "[OfflineMod] disabled 1 hook") && has(log, "[OfflineMod] stopped for online play"));
+            // it stays stopped: the original runs, enable_hooks is refused
+            CHECK(has(log, "[OfflineMod] can't enable hooks: it was stopped for online play"));
+            CHECK(has(log, "[OfflineMod] after start: online=1, the original ran, enable_hooks gave 0"));
+            CHECK(!has(log, "[HelloMod] stopped for online play") && !has(log, "[FH2MP] stopped for online play"));
+            // what FH2MP is told before it connects
+            CHECK(has(log, "[FH2MP] going_online: 1 started (OfflineMod; cut short \"Off\"), playing_online 1"));
+            CHECK(has(known, "ZzFH2MP.dll\tFH2MP\t0.0.1"));
+            if (pages) CHECK(has(installed, "local:BindingProxy.C=\"Off online  1.0.0\"") && has(installed, "Stopped for online play"));
+        } else if (phase == L"online-renamed") {
+            // ... and from then on it's known as FH2MP: online from the start, OfflineMod isn't loaded
+            CHECK(has(log, "ZzFH2MP.dll (FH2MP) is turned on and FH2MP's session file is there (data\\bin\\fh2mp-session.txt), "
+                           "so this game counts as online play"));
+            CHECK(has(log, "OfflineMod.dll is set to stay off when playing online; not loaded") && !has(log, "loaded OfflineMod.dll"));
+            CHECK(has(log, "[FH2MP] in fh2mod_init: online") && !has(log, "online play after all"));
+            CHECK(has(log, "[FH2MP] going_online: 0 started (; cut short \"\"), playing_online 1"));
+            if (pages) CHECK(!has(installed, "the game doesn't load FH2MP"));   // no "Load when playing online" for FH2MP
         } else {
             // fh2mp-off: FH2MP turned off on the MODS tab, so a session file doesn't make it online
             CHECK(!has(log, "started from the FH2MP launcher") && has(log, "FH2MP.dll is turned off on the MODS tab"));

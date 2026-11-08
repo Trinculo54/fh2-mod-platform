@@ -63,6 +63,22 @@ run_layout() {   # run_layout mediaoverride|own
     wine azimuth.exe online-chosen
     printf 'fh2mp.dll\n' > fh2-mods/platform-disabled.txt
     wine azimuth.exe fh2mp-off
+    # Online play found where 2.8.0 missed it (platform 2.9.0, issue #22): the session next to azimuth.exe in a
+    # folder without data\bin; then a stand-in FH2MP under another name (FakeFH2MP.dll as ZzFH2MP.dll, after
+    # OfflineMod) that writes the session while the mods start, and the same again once it's known as FH2MP.
+    rm -rf data/bin fh2-mods/platform-disabled.txt fh2-mods/platform-online.txt
+    printf 'xuid=1\ntoken=test\n' > fh2mp-session.txt
+    wine azimuth.exe online-root
+    rm fh2mp-session.txt fh2-mods/FH2MP.dll
+    mkdir -p data/bin
+    cp "$b/FakeFH2MP.dll" fh2-mods/ZzFH2MP.dll
+    wine azimuth.exe online-late
+    wine azimuth.exe online-renamed
+    # back as the HUD phase has always had it
+    rm fh2-mods/ZzFH2MP.dll
+    cp "$b/Legacy.dll" fh2-mods/FH2MP.dll
+    printf 'OfflineMod.dll\t1\nHelloMod.dll\t0\n' > fh2-mods/platform-online.txt
+    printf 'fh2mp.dll\n' > fh2-mods/platform-disabled.txt
     # The HUD layer preview: a mod that adds a layer (tests/hud_mod.cpp). The phases above have none, so
     # they also check that the build behaves as 2.8.0 without one. With the exe given, this phase maps all
     # of it and has it in the game folder, as the hook test does, so the layer's code checks and hooks run.
