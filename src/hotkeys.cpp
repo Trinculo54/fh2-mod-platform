@@ -388,7 +388,7 @@ int hotkey_add(FH2Mod* m, const FH2Hotkey* k) {
             plog("hotkeys: XInput isn't available, so controller chords are off");
         }
     }
-    // the Mods page's rows, in the mod's own part
+    // the rows on the mod's page under MODS > YOUR MODS
     auto row = [&](const std::string& key, const std::string& label, const std::vector<std::string>& names, uint32_t value) {
         std::vector<const char*> c;
         for (const std::string& n : names) c.push_back(n.c_str());
@@ -403,7 +403,7 @@ int hotkey_add(FH2Mod* m, const FH2Hotkey* k) {
         s.value        = static_cast<int>(value);
         s.on_change    = on_row;
         s.user         = h;
-        settings_add(m, &s);
+        if (settings_add(m, &s)) settings_mark_hotkey(m, key.c_str());   // under "Keys and buttons" on the mod's page
     };
     uint32_t kv = 0, cv = 0;
     for (std::size_t i = 0; i < h->keys.size(); ++i)

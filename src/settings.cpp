@@ -64,8 +64,9 @@
 namespace fh2platform {
 namespace {
 
-const char* const kWho = "Mods page";
+const char* const kWho = "MODS";   // the log's tag (up to 2.8.0, "Mods page")
 FH2Mod g_owner_mod;                 // owns the platform's files and hooks for this
+FH2Mod g_hub_owner;                 // the MODS tab's own rows (each mod's Load switches)
 const FH2ModApi* g_api = nullptr;
 uintptr_t g_base       = 0;
 
@@ -103,6 +104,7 @@ struct Row {
     FH2SliderChangedFn on_slide = nullptr;
     // choices (API 9): a slider over 0 .. n-1, shown by name; `value` is the index
     std::vector<std::string> choices;
+    bool hotkey = false;             // one of a hotkey's two rows (hotkeys.cpp): under "Keys and buttons" on its mod's page
 };
 std::mutex g_mu;                     // guards the list (rows are never removed)
 std::deque<Row> g_rows;
@@ -152,7 +154,7 @@ struct GameTile {
     const char* buttons[2];          // the tiles in A_PauseMenu.xaml
 };
 constexpr GameTile kTiles[] = {
-    // PART_Button_Achievements (0x140DBD610) and the Storm Island tab's
+    // PART_Button_Achievements (0x140DBD610, on the PROGRESS tab) and the PORSCHE tab's
     // PART_Button_Panama_Achievements (0x140DBF150, which first checks the tile has the focus)
     {"Achievements", {0x0DBD635, 0x0DBF185}, {"PART_Button_Achievements", "PART_Button_Panama_Achievements"}},
 };
@@ -208,9 +210,12 @@ bool restart_pending() {
     return false;
 }
 
+// The restart rows' values, to tell whether the restart popup has asked about them already: a live
+// row (a slider moved after Restart later) doesn't bring it back.
 std::string current_values() {
     std::string v;
-    for (Row& r : g_rows) v += (r.slider ? std::to_string(r.fvalue.load()) : std::to_string(r.value.load())) + ",";
+    for (Row& r : g_rows)
+        if (r.restart) v += (r.slider ? std::to_string(r.fvalue.load()) : std::to_string(r.value.load())) + ",";
     return v;
 }
 
@@ -312,6 +317,11 @@ std::string show(const Row& r, float v) {
     return b;
 }
 
+// A row the player changed, in its mod's log lines. The Load switches say it themselves (set_mod_enabled, set_mod_online).
+void log_set(const Row* r, const std::string& value) {
+    if (r->mod != &g_hub_owner) log_line(r->mod->name, r->key + " set to " + value + " on its MODS page");
+}
+
 void slider_set(Row* r, void* obj, uint8_t* value) {
     float f = 0;
     std::memcpy(&f, value + 0x28, sizeof f);
@@ -323,11 +333,11 @@ void slider_set(Row* r, void* obj, uint8_t* value) {
     if (!r->choices.empty()) {   // a choice row (API 9): its index, to on_change
         const int v = static_cast<int>(std::lround(f));
         r->value    = v;
-        log_line(r->mod->name, r->key + " set to " + r->choices[static_cast<std::size_t>(v)] + " on the Mods page");
+        log_set(r, r->choices[static_cast<std::size_t>(v)]);
         if (r->on_change && !call_on_change(r->on_change, r->user, r->key.c_str(), v))
             log_line(r->mod->name, "crashed in its on_change for " + r->key);
     } else {
-        log_line(r->mod->name, r->key + " set to " + show(*r, f) + " on the Mods page");
+        log_set(r, show(*r, f));
         if (r->on_slide && !call_on_slide(r->on_slide, r->user, r->key.c_str(), f))
             log_line(r->mod->name, "crashed in its on_slide for " + r->key);
     }
@@ -342,7 +352,7 @@ void __cdecl row_set(void* desc, void* obj, uint8_t* value) {
     const bool pending_before = restart_pending();
     const int old            = r->value.exchange(v);
     if (old == v) return;
-    log_line(r->mod->name, r->key + " set to " + std::to_string(v) + " on the Mods page");
+    log_set(r, std::to_string(v));
     if (r->on_change && !call_on_change(r->on_change, r->user, r->key.c_str(), v))
         log_line(r->mod->name, "crashed in its on_change for " + r->key);
     if (restart_pending() != pending_before && obj && g_notice_desc) notify_changed(obj, g_notice_desc);
@@ -1058,8 +1068,6 @@ const char* info_template(int style) {
         default: return "FH2Mod_InfoRow";
     }
 }
-
-FH2Mod g_hub_owner;                  // the MODS tab's own rows (a switch per mod)
 
 // The rows of one list, as XAML; their data items (and slider styles) go into `res`. Keys
 // start with `prefix`; the first row is named `first`.
@@ -2561,12 +2569,18 @@ void wire_mods_tile(void* page) {
     }
 }
 
-void widen_nav(void* page) {
+// The Settings page's controller grid, 5 x 2, made 6 wide for the MODS tile. False when it isn't 5 x 2
+// (or is already 6): the caller says so in the log (outside the __try).
+bool widen_nav(void* page) {
     __try {
         uint8_t* nav = *reinterpret_cast<uint8_t**>(static_cast<uint8_t*>(page) + 0x410);
-        if (nav && *reinterpret_cast<int*>(nav + 0x9c) == 5 && *reinterpret_cast<int*>(nav + 0xa0) == 2)
+        if (nav && *reinterpret_cast<int*>(nav + 0x9c) == 5 && *reinterpret_cast<int*>(nav + 0xa0) == 2) {
             *reinterpret_cast<int*>(nav + 0x9c) = 6;
+            return true;
+        }
+        return false;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
     }
 }
 
@@ -2869,7 +2883,11 @@ void d_wire_tiles(void* page) {
     g_mods_asked = 0;
     g_hub_return = false;
     if (!g_settings_tile) return o_wire_tiles(page);
-    widen_nav(page);
+    static bool said_grid = false;
+    if (!widen_nav(page) && !said_grid) {
+        said_grid = true;
+        slog("the Settings page's tile grid isn't 5 x 2 as expected, so the controller may not reach the MODS tile");
+    }
     o_wire_tiles(page);
     wire_mods_tile(page);
     // back from the Mods page with a change that needs a restart, not asked about yet?
@@ -3379,7 +3397,7 @@ void hook_tiles(FH2Mod* m) {
         }
         std::vector<FH2Hook*> made;
         for (int c = 0; c < 2 && ok; ++c) {
-            const std::string name = std::string(kTiles[t].name) + " tile" + (c ? " (Storm Island tab)" : "");
+            const std::string name = std::string(kTiles[t].name) + " tile" + (c ? " (PORSCHE tab)" : "");
             FH2Hook* h = g_api->hook_call(m, name.c_str(), reinterpret_cast<void*>(g_base + kTiles[t].calls[c]), kTileDetours[t][c],
                                           reinterpret_cast<void**>(&o_tile_command[t][c]));
             ok = h != nullptr;
@@ -4102,9 +4120,17 @@ int settings_add(FH2Mod* m, const FH2Setting* s) {
         r.fvalue       = static_cast<float>(v);
         r.fboot        = r.fvalue;
     }
-    log_line(m->name, "Mods page row: " + r.label + (r.restart ? " (after a restart)" : "") +
+    log_line(m->name, "MODS row: " + r.label + (r.restart ? " (after a restart)" : "") +
                           (g_written ? "; the page is already written, so it shows from the next launch" : ""));
     return 1;
+}
+
+// A hotkey's row (hotkeys.cpp): shown under "Keys and buttons" on its mod's page, by how it was added rather than
+// by its key, which a mod's own row could share the look of.
+void settings_mark_hotkey(FH2Mod* m, const char* key) {
+    if (!m || !key) return;
+    std::scoped_lock lk{g_mu};
+    if (Row* r = find_row(m, key)) r->hotkey = true;
 }
 
 // New text for a row (API 10): the pages are written as they're opened, so it shows the next time.
@@ -4698,7 +4724,7 @@ void settings_start(const FH2ModApi* api) {
     g_api = api;
     g_owner_mod.name  = kWho;
     g_owner_mod.wname = widen(kWho);
-    g_hub_owner.name  = "MODS tab";
+    g_hub_owner.name  = "MODS";
     g_hub_owner.wname = widen(g_hub_owner.name);
     std::size_t n = 0;
     {

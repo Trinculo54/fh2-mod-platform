@@ -445,7 +445,7 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] add_translation: pt-BR comes from fh2-mods\\lang\\TestMod\\pt_BR.po this time, not from the mod"));
         CHECK(has(log, "[TestMod] translation pt-BR (pt_BR.po): line 10, \"row.Bad.label\": its placeholders ({n\u00famero}) don't match the "
                        "English's ({count}), so it's left out and English shows there"));
-        CHECK(has(log, "[TestMod] Mods page row: Testowe powitanie \u2013 cze\u015b\u0107"));
+        CHECK(has(log, "[TestMod] MODS row: Testowe powitanie \u2013 cze\u015b\u0107"));
         CHECK(has(log, "[TestMod] plural: 5 samochod\u00f3w"));
         CHECK(has(log, "[TestMod] the pl text for \"row.Stale.label\" was translated from different English, so it isn't used until it's "
                        "translated again") &&
@@ -503,12 +503,12 @@ int wmain(int argc, wchar_t** argv) {
                   has(log, "[TestMod] add_command: there's already a command called Echo"));
             CHECK(has(slurp("fh2-mods\\platform-session.json"), "\"pipe\": \"\\\\\\\\.\\\\pipe\\\\fh2mod-"));
         }
-        // hotkeys (API 9): bindings named, rows on the Mods page, the refusals
+        // hotkeys (API 9): bindings named, rows on the mod's page, the refusals
         CHECK(has(log, "[TestMod] hotkey Mark (Mark this spot): F9, controller LB+RB+Y"));
         CHECK(has(log, "[TestMod] hotkey Toggle (Toggle the test): Ctrl+Shift+M, controller Off"));
         CHECK(has(log, "[TestMod] add_hotkey: there's already a hotkey called Mark") &&
               has(log, "[TestMod] add_hotkey: Broken needs a label and an on_press"));
-        CHECK(has(log, "[TestMod] Mods page row: Mark this spot: key") && has(log, "[TestMod] Mods page row: Toggle the test: controller"));
+        CHECK(has(log, "[TestMod] MODS row: Mark this spot: key") && has(log, "[TestMod] MODS row: Toggle the test: controller"));
         // sessions (API 9): the id in the log, the log's copy, our own log, the status file
         {
             const std::size_t at = log.find("[TestMod] session id ");
@@ -621,7 +621,7 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[HudTestMod] set_hud_state: 1"));
         CHECK(has(log, "[HUD layer] 1 mod(s) asked for a HUD layer: HudTestMod; the HUD page gets BAR, CHIPS, TIP, PANEL, COUNTDOWN"));
         CHECK(has(log, "[HUD layer] button prompts: Automatic (fh2-mods\\platform-hudlayer.ini)"));
-        CHECK(has(log, "[HudTestMod] Mods page row: Button prompts"));   // settings_add's own line, as the hotkeys' rows
+        CHECK(has(log, "[HudTestMod] MODS row: Button prompts"));   // settings_add's own line, as the hotkeys' rows
         CHECK(has(log, "[HUD layer] crash marker: none from last session"));
         const std::string props  = slurp("fh2-mods\\platform-hudlayer-props.txt");
         const std::string marker = slurp("fh2-mods\\platform-hudlayer-marker.txt");

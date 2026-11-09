@@ -179,8 +179,9 @@ bool disk_image_readable();   // the exe on disk could be opened for disk_bytes_
 int hook_count();
 const char* hook_line(int i, bool* enabled);
 
-// settings.cpp: rows on the game's Mods page (API 4).
+// settings.cpp: rows on each mod's page under Pause > MODS > YOUR MODS (API 4).
 int settings_add(FH2Mod* mod, const FH2Setting* setting);
+void settings_mark_hotkey(FH2Mod* mod, const char* key);   // hotkeys.cpp: that row is a hotkey's
 int settings_get(FH2Mod* mod, const char* key);
 void settings_set(FH2Mod* mod, const char* key, int value);
 float settings_get_slider(FH2Mod* mod, const char* key);
