@@ -502,10 +502,22 @@ std::string guard_text(const std::vector<GuardEntry>& entries) {
 }
 
 std::vector<GuardEntry> guard_at_start(const std::vector<GuardEntry>& last, const std::function<std::string(const std::string&)>& stamp_of,
-                                       const CrashReport& newest, std::uint64_t file_time, std::vector<GuardEntry>& carried,
+                                       const std::vector<CrashReport>& reports, std::uint64_t file_time, std::vector<GuardEntry>& carried,
                                        std::vector<std::string>& lines) {
     std::vector<GuardEntry> out;
     carried.clear();
+    // The marks are the PC's clock, the crash reports the clock of the disk fh2-mods is on, which can differ (a network
+    // share's). The file's last write is its newest mark, on that disk's clock, so each mark is measured from there by
+    // how long before the newest it was made; a line without a time of its own has the file's.
+    std::uint64_t newest_mark = 0;
+    for (const GuardEntry& e : last)
+        if (e.state == "opening") newest_mark = std::max(newest_mark, e.marked);
+    const auto on_disk = [&](const GuardEntry& e) -> std::uint64_t {
+        if (!e.marked) return file_time;
+        if (!file_time) return e.marked;   // the file's time unknown: the PC's clock, as it is
+        const std::uint64_t before = newest_mark - e.marked;
+        return file_time > before ? file_time - before : 0;
+    };
     for (GuardEntry e : last) {
         const std::string now = stamp_of ? stamp_of(e.dll) : std::string();
         const std::string page = e.dll + "'s page " + e.page;
@@ -519,17 +531,21 @@ std::vector<GuardEntry> guard_at_start(const std::vector<GuardEntry>& last, cons
             continue;
         }
         if (e.state == "opening") {
-            // as the HUD layer's crash marker: a crash report soon after the mark, or two sessions running
-            const std::uint64_t marked = e.marked ? e.marked : file_time;
-            if (!newest.name.empty() && newest.time > marked && newest.time - marked <= kGuardCrashWindow) {
+            // as the HUD layer's crash marker: a crash report soon after the mark, or two sessions running. The first
+            // report from the mark on, of any: a crash early in a later session can't hide the one the page caused.
+            const std::uint64_t marked = on_disk(e);
+            const CrashReport* first   = nullptr;
+            for (const CrashReport& r : reports)
+                if (!r.name.empty() && r.time >= marked && (!first || r.time < first->time)) first = &r;
+            if (first && first->time - marked <= kGuardCrashWindow) {
                 e.state = "skip";
-                lines.push_back("the game crashed while " + page + " was opening last session (crash report " + newest.name +
+                lines.push_back("the game crashed while " + page + " was opening last session (crash report " + first->name +
                                 "); the page is left out until " + e.dll + " changes (an update or a reinstall) or the player "
                                 "gives it another try");
-            } else if (!newest.name.empty() && newest.time > marked) {
+            } else if (first) {
                 // the game went on for a while after the page started opening: that crash was something else's
-                lines.push_back("the game crashed " + std::to_string((newest.time - marked) / 10000000) + " s after " + page +
-                                " started opening last session (crash report " + newest.name + "), too long after for the page to be "
+                lines.push_back("the game crashed " + std::to_string((first->time - marked) / 10000000) + " s after " + page +
+                                " started opening last session (crash report " + first->name + "), too long after for the page to be "
                                 "the cause, so the page stays in");
                 continue;
             } else if (e.sessions >= 2) {

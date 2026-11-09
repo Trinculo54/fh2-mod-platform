@@ -368,30 +368,41 @@ int wmain(int argc, wchar_t** argv) {
     char crashy_mark[17] = "";   // the "full" phase's mark for Crashy, as the guard's file has it
     if (phase == L"full") {
         // The page crash guard (platform 2.9.0): as if the game had crashed while TestMod's page Crashy was opening
-        // (TestMod.dll as it is now: the crash report, written just below, is 5 s after the mark), crashed two minutes
+        // (TestMod.dll as it is now: the crash report, written just below, is 4 s after the mark), crashed two minutes
         // after Late started opening (too late to be Late's), had stopped while Other was opening with no crash report
-        // since (marked in 2286), and while Stats was opening in an older TestMod.dll; and a note about a mod that's
-        // gone. The stamp is page_guard.cpp's: the DLL's size, then its last-write time in hex. The "removed" phase
-        // takes the crash report away again.
+        // since, and while Stats was opening in an older TestMod.dll; and a note about a mod that's gone. The stamp is
+        // page_guard.cpp's: the DLL's size, then its last-write time in hex. The "removed" phase takes the crash report
+        // away again.
         WIN32_FILE_ATTRIBUTE_DATA a{};
         GetFileAttributesExW(L"fh2-mods\\TestMod.dll", GetFileExInfoStandard, &a);
         char stamp[64];
         std::snprintf(stamp, sizeof stamp, "%llu-%08lX%08lX", (static_cast<unsigned long long>(a.nFileSizeHigh) << 32) | a.nFileSizeLow,
                       a.ftLastWriteTime.dwHighDateTime, a.ftLastWriteTime.dwLowDateTime);
-        // the marks go by the crash report's own time, as the platform reads it (a network share's clock may differ)
+        // The marks are the PC's clock, here an hour ahead of the clock of the disk the crash report is on (a network
+        // share's may differ). The platform measures them from the file's own last write, its newest mark (Other's),
+        // set here to a second after the crash report: Crashy's mark was then 4 s before the crash, Late's 119 s, and
+        // Other's after it.
         fs::create_directories("fh2-mods\\crashes");
         std::ofstream{"fh2-mods\\crashes\\crash-page-guard-test.txt"} << "a crash report, as far as the page crash guard can tell\n";
         WIN32_FILE_ATTRIBUTE_DATA cr{};
         GetFileAttributesExW(L"fh2-mods\\crashes\\crash-page-guard-test.txt", GetFileExInfoStandard, &cr);
         const unsigned long long crashed = (static_cast<unsigned long long>(cr.ftLastWriteTime.dwHighDateTime) << 32) | cr.ftLastWriteTime.dwLowDateTime;
-        char late_mark[17];
-        std::snprintf(crashy_mark, sizeof crashy_mark, "%016llX", crashed - 5 * 10000000ull);
-        std::snprintf(late_mark, sizeof late_mark, "%016llX", crashed - 120 * 10000000ull);
+        const unsigned long long newest = crashed + 3601 * 10000000ull;   // Other's mark, on the PC's clock
+        char late_mark[17], other_mark[17];
+        std::snprintf(crashy_mark, sizeof crashy_mark, "%016llX", newest - 5 * 10000000ull);
+        std::snprintf(late_mark, sizeof late_mark, "%016llX", newest - 120 * 10000000ull);
+        std::snprintf(other_mark, sizeof other_mark, "%016llX", newest);
         std::ofstream{"fh2-mods\\platform-pages.txt", std::ios::binary}
             << "# written by the test\r\nopening\tTestMod.dll\tCrashy\t" << stamp << "\t2026-11-07\t1\t" << crashy_mark << "\r\n"
             << "opening\tTestMod.dll\tLate\t" << stamp << "\t2026-11-07\t1\t" << late_mark << "\r\n"
-            << "opening\tTestMod.dll\tOther\t" << stamp << "\t2026-11-07\t1\t0300000000000000\r\n"
+            << "opening\tTestMod.dll\tOther\t" << stamp << "\t2026-11-07\t1\t" << other_mark << "\r\n"
             << "opening\ttestmod.dll\tStats\t1-0000000000000000\t2026-11-06\r\nskip\tGone.dll\tList\t1-1\t2026-11-01\r\n";
+        const unsigned long long written = crashed + 10000000ull;
+        const FILETIME at{static_cast<DWORD>(written), static_cast<DWORD>(written >> 32)};
+        HANDLE pages = CreateFileW(L"fh2-mods\\platform-pages.txt", FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                   OPEN_EXISTING, 0, nullptr);
+        CHECK(pages != INVALID_HANDLE_VALUE && SetFileTime(pages, nullptr, nullptr, &at));
+        if (pages != INVALID_HANDLE_VALUE) CloseHandle(pages);
     }
     if (phase == L"removed") fs::remove("fh2-mods\\crashes\\crash-page-guard-test.txt");
     if (phase == L"full") {
@@ -585,9 +596,10 @@ int wmain(int argc, wchar_t** argv) {
         // changed since, so it gets another try
         CHECK(has(log, "pages: the game crashed while TestMod.dll's page Crashy was opening last session (crash report crash-page-guard-test.txt); "
                        "the page is left out until TestMod.dll changes (an update or a reinstall) or the player gives it another try"));
-        // a crash long after a page started opening isn't that page's (30 s at most): Late stays in, and its mark goes
-        CHECK(has(log, " s after TestMod.dll's page Late started opening last session (crash report crash-page-guard-test.txt), too long after "
-                       "for the page to be the cause, so the page stays in"));
+        // a crash long after a page started opening isn't that page's (30 s at most): Late stays in, and its mark goes. The
+        // 119 s are the disk's clock: Late's mark 2 minutes before Other's, the file's last write, a second after the crash.
+        CHECK(has(log, "pages: the game crashed 119 s after TestMod.dll's page Late started opening last session (crash report "
+                       "crash-page-guard-test.txt), too long after for the page to be the cause, so the page stays in"));
         CHECK(has(log, "pages: the game stopped while TestMod.dll's page Other was opening last session, but there's no crash report since, so "
                        "the page stays in"));
         CHECK(has(log, "pages: testmod.dll has changed since testmod.dll's page Stats was opening when the game stopped, so the page gets another try"));
