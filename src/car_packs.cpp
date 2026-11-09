@@ -426,10 +426,17 @@ std::string temp_drive_spelling(const fs::path& folder) {
 fs::path instance_media() { return temp_drive() / L"fh2-platform" / L"media"; }
 
 bool instance_layer() {
-    std::error_code ec;
-    // Extra Options counted as loaded under Wine (extra_options_expected) mounts mediaoverride, not this layer.
-    return !game_mount().empty() && extra_options_dir().empty() && !extra_options_expected() &&
-           fs::is_directory(azimuth_dir() / L"data" / L"titles", ec);
+    // Worked out once, so every part of the platform goes by the same answer all session: start_media_overrides
+    // asks first, before anything is written, and logs it. data\titles\1A96545B is where Azimuth keeps the game's
+    // T:\ drive (its tmp folder); a fresh Azimuth folder only has it once the game has been started, so asking
+    // again later in the session could move later writes away from what was mounted.
+    static const bool layer = [] {
+        std::error_code ec;
+        // Extra Options counted as loaded under Wine (extra_options_expected) mounts mediaoverride, not this layer.
+        return !game_mount().empty() && extra_options_dir().empty() && !extra_options_expected() &&
+               fs::is_directory(temp_drive().parent_path(), ec);
+    }();
+    return layer;
 }
 
 fs::path override_root() {

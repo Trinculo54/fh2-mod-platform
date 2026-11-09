@@ -394,6 +394,14 @@ int wmain(int argc, wchar_t** argv) {
     HMODULE p = LoadLibraryW(L"d3dcompiler_47.dll"); // what azimuth.exe does at startup
     CHECK(p != nullptr);
     if (phase == L"crash-chained") return crash_chained();
+    // Where the platform writes is decided once, at start (platform 2.9.0): data\titles\1A96545B made once it has decided
+    // (as Azimuth makes it when the game first starts) moves nothing this session. It goes again before the checks.
+    const bool made_titles = phase == L"full" && !own_layer();
+    if (made_titles) {
+        for (int i = 0; i < 250 && !has(slurp(L"fh2-mods\\platform.log"), "for this whole session the platform's files go to mediaoverride"); ++i)
+            Sleep(20);
+        fs::create_directories(L"data\\titles\\1A96545B");
+    }
     // the game's UI.zip is here (FH2_MEDIA), so the MODS menus are written: the title screen's line points at them
     const bool menus = fs::exists(L"FH2\\Mount\\media\\UI.zip");
     if (argc > 2) map_game(argv[2], menus); // "press Play"
@@ -426,12 +434,18 @@ int wmain(int argc, wchar_t** argv) {
         TerminateProcess(GetCurrentProcess(), 1);
     }
     Sleep(300);
+    if (made_titles) fs::remove_all(L"data\\titles");
     log = slurp(L"fh2-mods\\platform.log");
     std::printf("---- platform.log\n%s----\n", log.c_str());
 
     if (phase == L"full") {
         CHECK(has(log, "FH2 Mod Platform 2.9.0 (API 10)"));
         CHECK(has(log, "media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride"));
+        // decided once, at start, and said so; the files, text and database below are where it said
+        CHECK(has(log, own_layer() ? "media overrides: this Azimuth folder has data\\titles\\1A96545B (where Azimuth keeps the game's T:\\ "
+                                     "drive), so for this whole session its own files go to "
+                                   : "media overrides: this Azimuth folder has no data\\titles\\1A96545B yet (Azimuth makes it the first "
+                                     "time the game starts), so for this whole session the platform's files go to mediaoverride"));
         CHECK(log.find("loaded HelloMod.dll") != std::string::npos);
         CHECK(log.find("Legacy.dll has no fh2mod_init") != std::string::npos);
         // A mod from before the platform loads once the game is known to be FH2 (platform 2.8.0).
