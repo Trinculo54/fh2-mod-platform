@@ -90,6 +90,7 @@ enum class PopupOutcome {
 struct PopupRecent {
     std::string mod, when, title;   // title: "(private)" for a PRIVATE pop-up
     bool tip = false;
+    bool priv = false;              // a PRIVATE pop-up
 };
 
 class PopupQueue {
@@ -220,5 +221,14 @@ private:
 // ł to l, ß to ss), typographic quotes, dashes, the ellipsis and the no-break spaces to their plain forms, anything
 // else to '?'. *changed (may be null) says whether anything was folded.
 std::string popup_fold_ascii(const std::string& s, bool* changed = nullptr);
+
+// "Recent pop-ups" as the player sees it (the page on the platform's own page under YOUR MODS, and "fh2mod Platform
+// ui recent"): a row per pop-up or tip, newest first, labelled with its title as it was shown (a tip's line, and
+// "(private)" in the player's language for a private one), the time on the right, and which mod sent it in the
+// description; or a single row saying there are none yet. `tr` gives the platform's own words (lang.cpp's tr).
+struct RecentRow {
+    std::string label, value, description;
+};
+std::vector<RecentRow> recent_page(const std::vector<PopupRecent>& recent, const std::function<std::string(const char*)>& tr);
 
 } // namespace fh2platform

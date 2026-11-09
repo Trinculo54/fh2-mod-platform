@@ -498,6 +498,7 @@ int main() {
         run(q, g, 100);
         check(!logged("SecretGamertag") && logged("[ModA] pop-up shown (game's look, private): key SignIn"), "PRIVATE: the log has the key only");
         check(!q.recent().empty() && q.recent()[0].title == "(private)" && q.recent()[0].when == "12:00", "Recent pop-ups: \"(private)\"");
+        check(!q.recent().empty() && q.recent()[0].priv && !q.recent()[0].tip, "Recent pop-ups: marked private");
         q.show_seen(g.now);
         for (int i = 0; i < 20; ++i) {
             const std::string title = "Count " + std::to_string(i);
@@ -526,6 +527,30 @@ int main() {
         const auto r = q.recent();
         check(r.size() == 10 && r[0].title == "P11" && r[9].title == "P2" && r[0].mod == "ModA", "Recent pop-ups: the last 10, newest first");
         check(q.describe(g.now).find("nothing waiting") != std::string::npos, "describe(): nothing waiting");
+    }
+
+    // ---- the Recent pop-ups page: a row each, newest first, private ones and tips in the player's language ----
+    {
+        const auto polish = [](const char* english) {
+            const std::string e = english;
+            if (e == "(private)") return std::string("(prywatne)");
+            if (e == "A tip from {0}.") return std::string("WskazÃ³wka od {0}.");
+            if (e == "A pop-up from {0}.") return std::string("Okienko od {0}.");
+            return e;
+        };
+        std::vector<PopupRecent> r(3);
+        r[0].mod = "ModA", r[0].when = "12:05", r[0].title = "Press (A) to keep the tree", r[0].tip = true;
+        r[1].mod = "ModB", r[1].when = "12:04", r[1].title = "(private)", r[1].priv = true;
+        r[2].mod = "ModA", r[2].when = "12:01", r[2].title = "SNAPSHOT WRITTEN";
+        const auto rows = recent_page(r, polish);
+        check(rows.size() == 3, "Recent pop-ups page: a row each");
+        same(rows[0].label + " | " + rows[0].value + " | " + rows[0].description, "Press (A) to keep the tree | 12:05 | WskazÃ³wka od ModA.",
+             "Recent pop-ups page: a tip, by its line");
+        same(rows[1].label + " | " + rows[1].description, "(prywatne) | Okienko od ModB.", "Recent pop-ups page: a private pop-up");
+        same(rows[2].label + " | " + rows[2].value + " | " + rows[2].description, "SNAPSHOT WRITTEN | 12:01 | Okienko od ModA.",
+             "Recent pop-ups page: a pop-up, by its title as shown");
+        const auto none = recent_page({}, [](const char* english) { return std::string(english); });
+        check(none.size() == 1 && none[0].label == "No pop-ups yet" && none[0].value.empty(), "Recent pop-ups page: one row when there are none");
     }
 
     // ---- tips: seen state, delay, the announcement, the button ----
