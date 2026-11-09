@@ -49,7 +49,8 @@ std::vector<PopupRecent> popups_recent(); // the last 10 shown, newest first
 std::string popups_describe();            // what's on screen and waiting, and why ("fh2mod Platform ui")
 
 // The UI templates' developer tools (ui_player.cpp, Developer=1): buttons in tips written for the keyboard (1), the
-// pad (0) or the device used last (-1, as normal); and that device, as tips write it now (-1 not known yet).
+// pad (0) or as normal (-1: the HUD layer's Button prompts row when the player chose a device there, else the device
+// used last); and that device, as tips write it now (-1 not known yet).
 void popups_force_device(int keyboard);
 int popups_device();
 // Whether the hooks for pop-ups and tips are on their way this session (a mod declared them, or Developer=1).

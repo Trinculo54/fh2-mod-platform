@@ -176,7 +176,7 @@ What works this session, whenever it matters (`ui_status`):
 ```cpp
 const uint32_t ui = fh2ui_ui_status();
 if (ui & FH2_UI_TOASTS_OFF) { /* the player turned pop-ups off: don't nag in other ways either */ }
-if (ui & FH2_UI_KEYBOARD)   { /* the keyboard was used last: name keys, not buttons */ }
+if (ui & FH2_UI_KEYBOARD)   { /* buttons are written as keys (the keyboard was used last, or the player chose it): name keys */ }
 ```
 
 A pop-up, in one call or in full (`show_toast`), and taking a waiting one down (`clear_toast`):

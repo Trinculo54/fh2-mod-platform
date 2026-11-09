@@ -701,9 +701,9 @@ typedef struct FH2ModApi {
        from fh2mod_init waits for the first drive. The player decides whether
        mod pop-ups show: the game's Minor notifications option, the
        platform's "Mod pop-ups" row and your mod's "Pop-ups" row
-       (FH2_UI_TOASTS_OFF says they're off). Returns 1 if queued (it can still
-       expire or be dropped), 0 if not (off, no title, a bad key; the log
-       says which). */
+       (FH2_UI_TOASTS_OFF says they're off; turning one off also drops those
+       waiting). Returns 1 if queued (it can still expire or be dropped), 0 if
+       not (off, no title, a bad key; the log says which). */
     int (*show_toast)(FH2Mod* mod, const FH2Toast* toast);
     /* Takes down your waiting pop-up `key`, or all your waiting ones for
        NULL. One already on screen runs its 5 seconds. */
@@ -713,10 +713,12 @@ typedef struct FH2ModApi {
        A hint with a button in it, "Press {button} to keep it", shown once
        rather than every session: a pop-up with your mod's name as its title,
        after delay_s seconds of driving and at least 3 minutes after any other
-       mod's tip. The button is written as the player last pressed: "(A)" on
-       a pad, "[SPACE]" on the keyboard. The platform remembers which tips
-       were seen (fh2-mods\platform-seen.txt); a tip counts as seen only once
-       it was really drawn. The player can turn tips off. Returns 1 if
+       mod's tip. The button is written as the player last pressed (or as
+       they chose in a HUD layer's Button prompts row): "(A)" on a pad,
+       "[SPACE]" on the keyboard. The platform remembers which tips were seen
+       (fh2-mods\platform-seen.txt); a tip counts as seen only once it was
+       really drawn. The player can turn tips off, which also drops a waiting
+       one (not seen). Returns 1 if
        queued, 0 if it was seen, tips or the game's Minor notifications are
        off, or a button is set but the text has no "{button}" (the log says
        which). */
@@ -964,11 +966,15 @@ struct FH2PageRow {
                                           and the platform's hooks for them are in (without its watch on the
                                           game's own pop-ups, they're spaced 5.5 s apart) */
 #define FH2_UI_TOASTS_OFF      0x0002  /* the player turned mod pop-ups off: the platform's row, your mod's
-                                          row, or the game's Minor notifications option it follows */
+                                          row, or the game's Minor notifications option it follows (read
+                                          only while a pop-up or tip waits on the driving view, so known to
+                                          be off only once it has been read off) */
 #define FH2_UI_TIPS_OFF        0x0004  /* the player turned tips off */
 #define FH2_UI_ON_SCREEN       0x0008  /* the free-roam HUD page is on screen now */
-#define FH2_UI_GAME_HUD_HIDDEN 0x0010  /* the game has suspended its HUD (a car meet, a Rivals event) */
-#define FH2_UI_KEYBOARD        0x0020  /* the keyboard or mouse was used last: buttons are written as keys */
+#define FH2_UI_GAME_HUD_HIDDEN 0x0010  /* the game's HUD is suspended (a car meet, a Rivals event), or a mod's
+                                          HUD layer holds it hidden (hold_game_hud): pop-ups and tips wait */
+#define FH2_UI_KEYBOARD        0x0020  /* buttons are written as keys: the keyboard or mouse was used last, or
+                                          the player chose Keyboard and mouse in a HUD layer's Button prompts row */
 
 /* ui_uses bits (API 10). */
 #define FH2_UI_USES_TOASTS     0x0001  /* pop-ups: the platform adds a "Pop-ups" row to your page */

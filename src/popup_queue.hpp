@@ -62,7 +62,9 @@ struct PopupEnv {
 struct PopupTick {
     double now     = 0;      // ms, any origin, never going back
     bool on_screen = false;  // the free-roam HUD page is on screen
-    bool suspended = false;  // the game has suspended its HUD (and the platform doesn't hold it)
+    bool suspended = false;  // the game's HUD is suspended: by the game (a car meet), or held hidden by a mod's HUD
+                             // layer (hold_game_hud sets the same flag); the notification is part of that HUD, so
+                             // pop-ups and tips wait either way
     int option     = -1;     // the game's Notifications option: 1 on, 0 off, -1 not known (yet, or can't be read)
     bool keyboard  = false;  // the keyboard or mouse was used last
     bool ready     = false;  // Show can be called now (a notification component is there to show it on)
@@ -121,7 +123,8 @@ public:
     int available() const;
     // Whether the watch on the game's Show is in (pop-ups 5.0 s after any Show), or not (5.5 s after the platform's).
     void set_watch(bool on);
-    // The player's rows (the settings restructure's): "Mod pop-ups", a mod's "Pop-ups", "Tips". On by default.
+    // The player's rows (the settings restructure's): "Mod pop-ups", a mod's "Pop-ups", "Tips". On by default. Off
+    // also drops what the row covers that's waiting, with a line each.
     void set_platform_toasts(bool on);
     void set_mod_toasts(const void* mod, bool on);
     void set_tips(bool on);
@@ -216,6 +219,12 @@ private:
     std::vector<OnScreen> on_screen_items_;
     std::vector<PopupRecent> recent_;
 };
+
+// The device tips' buttons are written for, and ui_status's FH2_UI_KEYBOARD says: 1 the keyboard or mouse, 0 the
+// controller, -1 not known yet. `forced`: a developer's "ui keyboard" (1) or "ui pad" (0), or -1. `choice`: the HUD
+// layer's Button prompts row, 0 Automatic (and in a session without a layer), 1 Controller, 2 Keyboard and mouse.
+// `last`: the device used last (-1 not known yet). The first of them that says one wins.
+int popup_device(int forced, int choice, int last);
 
 // ---- text, for the queue and its tests ----
 

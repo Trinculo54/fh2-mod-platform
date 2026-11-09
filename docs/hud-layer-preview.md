@@ -202,6 +202,7 @@ Hides the game's own HUD while you hold it (1): its speedometer, map, prompts an
 - **It's put back.** The game's own flow resumes its HUD at times (after the rewind, and as driving starts again after an activity), so while a hold is on, the platform hides it again on any frame it has come back.
 - **It works from the next frame;** `FH2_HUD_GAME_HIDDEN` says when it's in force. After a world is loaded, the hold applies to the new world's HUD once it's found.
 - **Your hold stays while another mod's layer has the screen** (`FH2_HUD_TAKEN`): show yours again or let go, or the player has neither HUD.
+- **Pop-ups and tips wait while it's held.** Every mod's pop-ups and tips (API 10's `show_toast` and `show_tip`) go on the game's notification, which is part of the HUD you hide, so they wait until the last hold is let go, as the game's own notifications do. Their `ui_status` says `FH2_UI_GAME_HUD_HIDDEN` meanwhile, and the time held doesn't count towards a pop-up's expiry or a tip's driving time, so a pop-up sent while you hold (a reply to a key press included) shows once you let go. Hold only while your bar is up.
 - `hold_game_hud(mod, 1)` also clears `FH2_HUD_LAPSED`, so a mod that only holds (to clear the screen, with no layer shown) can hold again after a lapse.
 - It returns 1, or 0 if the layer is off this session, if the game's HUD code isn't as expected, or if hiding or showing the game's HUD crashed earlier this session (logged once; the game's HUD then stays, and a hold that was on is let go). Each change is logged: `[<mod>] hold_game_hud: held` and `let go`.
 
@@ -266,7 +267,7 @@ A frame that must be clean of the layer (a capture, say) is yours to clear: `sho
 
 The bar covers the bottom of the screen, where the game puts its speedometer, map and notifications, so show the bar with the game's HUD held hidden (`hold_game_hud`). Hold it while your bar is up, and no longer. In testing, while it was held:
 
-- the game's small notifications waited, and showed in full with their chime once it was let go; other mods' pop-ups that use the game's notifications (Achievements' unlocks) should wait the same way, though that hasn't been seen yet;
+- the game's small notifications waited, and showed in full with their chime once it was let go; other mods' pop-ups that use the game's notifications (Achievements' unlocks) should wait the same way, though that hasn't been seen yet, and the platform's own pop-ups and tips wait by design (see [hold_game_hud](#hold_game_hud));
 - its big banners waited too: one waited over two minutes;
 - the autosave spinner waited;
 - the prompts and markers the game puts in the world ("Press (A) to start an event" among them) that came up while it was held were gone when it was let go, rather than kept for later, and a Rivals message that was waiting was dropped;
@@ -280,7 +281,7 @@ Letting go brings the speedometer and map back in one frame.
 Prompts follow the device the player used last: the game's own controller pictures, or key names on key caps.
 
 - **Automatic** (the default): the newest input wins. A key going down, a mouse button or the mouse moving (in two readings running and by 3 px or more, so the window placing the pointer doesn't count) picks key caps; a button, a trigger or a stick on an Xbox-style (XInput) pad picks pad pictures. The modifiers, the Windows keys, any key while a Windows key is down (Win+Alt+R starts a recording, say) and the platform's hotkeys' own keys don't count. It switches at most every 150 ms, and only watches while the game is in front. At start-up it shows pad pictures if an XInput pad is connected, otherwise key caps; until it knows, key caps.
-- **The "Button prompts" row:** Automatic, Controller or Keyboard and mouse, on the first layer mod's page under Pause > MODS > YOUR MODS (Pause > Settings > MODS opens the same list). A change applies straight away and is kept in `fh2-mods\platform-hudlayer.ini`. The row's description also names the build.
+- **The "Button prompts" row:** Automatic, Controller or Keyboard and mouse, on the first layer mod's page under Pause > MODS > YOUR MODS (Pause > Settings > MODS opens the same list). A change applies straight away and is kept in `fh2-mods\platform-hudlayer.ini`. The row's description also names the build. Controller or Keyboard and mouse there also decides how every mod's tips (API 10's `show_tip`) write their buttons, and what `ui_status`'s `FH2_UI_KEYBOARD` says; Automatic leaves both following the device used last.
 - **Pads that aren't XInput** (a DualSense without Steam Input, or a keyboard that Azimuth reads as a controller) aren't seen: choose Controller.
 - `FH2_HUD_KEYBOARD` and `FH2_HUD_DEVICE_FORCED` say what the prompts show and whether the player chose.
 

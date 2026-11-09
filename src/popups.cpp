@@ -14,10 +14,15 @@
 //    the gate stores a new object there only when it lets the pop-up through. So the platform sees every Show the
 //    game shows, whoever made it, and knows whether its own was drawn. Without the watch, pop-ups are 5.5 s apart.
 //  - The Notifications option (Options/MinorNotifications in the player's profile, S2): read on the tick's thread
-//    by the gate's own four calls, once a second and again just before each Show, published in an atomic.
+//    by the gate's own four calls, published in an atomic: once a second only while the HUD page is on screen and
+//    something waits (or it read Off last), and again just before each Show. With the page tracked, never at the
+//    title screen, while loading or while a profile is loaded or swapped, when the game itself doesn't read it
+//    either. ui_status's FH2_UI_TOASTS_OFF therefore says the option is off only once it has been read off.
 //  - Page tracking: the free-roam HUD's vtable slots +0x488 (shown), +0x4F8 (hidden) and 0 (the deleting
 //    destructor), chained with the HUD layer's and the notice's. The game's HUD suspend is read, never set: the
-//    HUD modules' prioritiser byte +0xA8, found as the HUD layer finds it.
+//    HUD modules' prioritiser byte +0xA8, found as the HUD layer finds it. A HUD layer's hold_game_hud sets the same
+//    byte, so while a mod holds the game's HUD hidden, pop-ups and tips wait as well: the notification is part of
+//    the HUD it hides.
 //  - Text: titles in capitals in the game's language (text.cpp), cut at 28 and 45 characters, and folded to ASCII
 //    for the narrow MakeDisplayString (its MultiByteToWideChar uses the Windows code page). The wide path (design
 //    1.7: the same allocation, the wide constructor 0x141239840 and the AddRef) is behind WideText=1 in
@@ -236,13 +241,12 @@ std::atomic<bool> g_wide{false};         // WideText=1, and the wide constructor
 std::atomic<bool> g_tips_poll{false};    // the controller poll was started for tips
 std::atomic<DWORD> g_tick_thread{0};
 std::atomic<int> g_option{-1};           // 1 on, 0 off, -1 not known
-std::atomic<int> g_force_device{-1};     // "fh2mod Platform ui keyboard | pad": 1 keys, 0 the pad, -1 as last used
+std::atomic<int> g_force_device{-1};     // "fh2mod Platform ui keyboard | pad": 1 keys, 0 the pad, -1 as normal
 
-// The device used last (1 the keyboard or mouse), or the one a developer forced.
-bool keyboard_last() {
-    const int forced = g_force_device.load();
-    return forced >= 0 ? forced == 1 : device_auto_kbd() == 1;
-}
+// The device tips' buttons are written for (popup_device): the one a developer forced, else the one the player chose
+// in a HUD layer's Button prompts row (there's no such row in a session without a layer), else the one used last.
+int tips_device() { return popup_device(g_force_device.load(), hud_layer_choice(), device_auto_kbd()); }
+bool keyboard_last() { return tips_device() == 1; }
 double g_option_at = -1e18;              // the tick only
 bool g_option_unread_logged = false;     // the tick only
 int g_option_logged         = -2;        // the tick only: the value last logged
@@ -292,9 +296,49 @@ GateFn o_gate[3]               = {};
 std::atomic<void*> g_our_comp{nullptr};   // the component the platform's own Show is on, while it runs
 std::atomic<bool> g_our_drawn{false};
 
+// The platform's last pop-up or tip the game drew (show_now), for the line below. The platform paces around every
+// other Show, but Achievements 1.0.x, CommunityGarage and the game's road discoveries don't pace around the
+// platform's, and a later Show probably takes the place of the one on screen (the gate stores a new object at
+// +0x198). Whether it does is the in-game test's question (T11); until then the log says when it may have happened.
+constexpr double kCutShortMs = 1500;
+std::mutex g_last_own_mu;
+struct LastOwn {
+    void* comp = nullptr;
+    double at  = -1e18;
+    std::string mod;
+    bool tip  = false;
+    bool told = true;   // said once per Show of the platform's
+} g_last_own;
+
+void note_own_show(void* comp, double now, const PopupShow& s) {
+    std::scoped_lock lk{g_last_own_mu};
+    g_last_own = {comp, now, s.mod, s.tip, false};
+}
+
+// A Show from the game or another mod let through on the component the platform's last pop-up or tip is on, within
+// 1.5 s of it: said once for that pop-up or tip (so at most once every 5 s), naming the mod that sent it.
+void after_own_show(void* comp, double now) {
+    std::string mod;
+    bool tip   = false;
+    double ago = 0;
+    {
+        std::scoped_lock lk{g_last_own_mu};
+        if (g_last_own.told || comp != g_last_own.comp || now - g_last_own.at >= kCutShortMs) return;
+        g_last_own.told = true;
+        mod             = g_last_own.mod;
+        tip             = g_last_own.tip;
+        ago             = now - g_last_own.at;
+    }
+    plog_f("the game or another mod showed a notification %.1f s after %s's %s, on the same notification, so it may have taken its "
+           "place on screen%s",
+           ago / 1000.0, mod.c_str(), tip ? "tip" : "pop-up", tip ? " (the tip still counts as seen)" : "");
+}
+
 void gate_let_through(void* comp) {
+    const double now = now_ms();
     if (comp && comp == g_our_comp.load() && GetCurrentThreadId() == g_tick_thread.load()) g_our_drawn = true;
-    queue().show_seen(now_ms());
+    else if (comp) after_own_show(comp, now);
+    queue().show_seen(now);
 }
 
 // The gate stores a new object at the component's +0x198 only when it lets a pop-up through (S2 1.5).
@@ -376,8 +420,9 @@ bool walk_modules(Modules& out) {
     return out.found;
 }
 
-// Whether the game has its HUD suspended now: the modules cached, checked each tick, walked again once a second
-// while none are known.
+// Whether the game's HUD is suspended now, by the game or by a HUD layer's hold_game_hud (the hold suspends the same
+// modules, so it can't be told apart here, and the notification is hidden either way): the modules cached, checked
+// each tick, walked again once a second while none are known.
 bool suspended_now(double now) {
     if (!g_suspend_ok.load()) return false;
     if (g_mods.found) {
@@ -423,7 +468,8 @@ __attribute__((noinline)) void option_thunk(void* p) {
     reinterpret_cast<void (*)(void*)>(c->base + RVA_VARIANT_DTOR)(v);
 }
 
-// The tick only. The game reads it when a pop-up is sent, so once a second and just before each Show is enough.
+// The tick only. The game reads it when a pop-up is sent, so the platform reads it only around its own: once a second
+// while one waits on the driving view (on_tick), and just before each Show.
 void read_option(double now) {
     g_option_at = now;
     if (!g_option_ok.load()) return;
@@ -527,6 +573,7 @@ void show_now(const PopupShow& s, double now) {
         return;
     }
     const PopupOutcome o = !g_watch.load() ? PopupOutcome::unknown : g_our_drawn.load() ? PopupOutcome::shown : PopupOutcome::refused;
+    if (o == PopupOutcome::shown) note_own_show(comp, now, s);
     queue().outcome(s.id, o, now);
     if (o != PopupOutcome::refused) play_sound(s.sound);
 }
@@ -538,11 +585,14 @@ void on_tick(FH2Context*, void*) {
     const double now = now_ms();
     DWORD none       = 0;
     g_tick_thread.compare_exchange_strong(none, GetCurrentThreadId());
-    if (now - g_option_at >= 1000) read_option(now);
     PopupTick in;
     in.now       = now;
     in.on_screen = !g_tracking.load() || g_on_screen.load();   // untracked: as if always on screen
     in.suspended = suspended_now(now);
+    // The game's Notifications option, once a second only while a pop-up could show now and something waits, or
+    // while it read Off (so the player turning it back on is seen, and show_toast stops refusing); show_now reads it
+    // again just before each Show. Otherwise the last value read stands.
+    if (now - g_option_at >= 1000 && in.on_screen && !in.suspended && (g_option.load() == 0 || queue().waiting() > 0)) read_option(now);
     in.option    = g_option.load();
     in.keyboard  = keyboard_last();
     in.ready     = have_component();
@@ -843,7 +893,7 @@ int popups_tips_again() { return queue().tips_again(); }
 std::vector<PopupRecent> popups_recent() { return queue().recent(); }
 std::string popups_describe() { return queue().describe(now_ms()); }
 void popups_force_device(int keyboard) { g_force_device = keyboard < 0 ? -1 : keyboard ? 1 : 0; }
-int popups_device() { return g_force_device.load() >= 0 ? g_force_device.load() : device_auto_kbd(); }
+int popups_device() { return tips_device(); }
 bool popups_started() { return g_started.load(); }
 
 } // namespace fh2platform

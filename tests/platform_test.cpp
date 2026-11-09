@@ -1199,9 +1199,12 @@ int wmain(int argc, wchar_t** argv) {
                   has(after, "[Platform] pop-up queued: key Demo4") && !has(after, "4 of 5: the log has its key only"));
             // "ui set" (Developer=1) on a mod's Pop-ups row, as the player would turn it off on the mod's page: AaaMod
             // declared pop-ups here (aaa_popups.txt), OfflineMod didn't. platform-popups.ini gets [mods] beside the test's
-            // [popups], and [player] as it is.
+            // [popups], and [player] as it is. AaaMod's pop-up is waiting (no game here), so turning the row off takes it down.
+            for (int i = 0; i < 50 && !has(slurp(L"fh2-mods\\platform.log"), "[AaaMod] pop-up queued"); ++i) Sleep(100);
             out.clear();
             CHECK(run_cli(pid + L"Platform ui set aaamod off", out) == 0 && out == "AaaMod's Pop-ups: Off, and kept in fh2-mods\\platform-popups.ini\n");
+            CHECK(has(slurp(L"fh2-mods\\platform.log"),
+                      "[AaaMod] pop-up dropped: the player turned this mod's pop-ups off (Hello from AaaMod / A test pop-up (key Hello))"));
             out.clear();
             CHECK(run_cli(pid + L"Platform ui set OfflineMod off", out) == 1 && has(out, "error: OfflineMod has no Pop-ups row"));
             out.clear();
@@ -1246,7 +1249,8 @@ int wmain(int argc, wchar_t** argv) {
             out.clear();
             CHECK(run_cli(pid + L"Platform ui", out) == 0 && has(out, "buttons in tips are written for the keyboard\n"));
             out.clear();
-            CHECK(run_cli(pid + L"Platform ui auto", out) == 0 && out == "buttons in tips follow the device used last again\n");
+            CHECK(run_cli(pid + L"Platform ui auto", out) == 0 &&
+                  out == "buttons in tips are written as normal again (the HUD layer's Button prompts row, else the device used last)\n");
             out.clear();
             CHECK(run_cli(pid + L"Platform ui demo", out) == 0 && has(out, "demo: 0 of 4 pop-ups queued") && has(out, "the tip not queued"));
             out.clear();

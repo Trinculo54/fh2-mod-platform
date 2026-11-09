@@ -294,9 +294,10 @@ std::string run_ui(const std::string& args) {
     if (same_word(sub, "demo")) return demo();
     const int d = same_word(sub, "keyboard") ? 1 : same_word(sub, "pad") ? 0 : -1;
     popups_force_device(d);
-    log_line(g_self.name, d < 0 ? "buttons in tips follow the device used last again" : std::string("buttons in tips are written for ") +
-                                                                                            device_text(d) + " from now on, whatever was used last");
-    return d < 0 ? "buttons in tips follow the device used last again\n" : "buttons in tips are written for " + device_text(d) + " now\n";
+    // as normal again: a HUD layer's Button prompts row when the player chose a device there, else the device used last
+    const char* const normal = "buttons in tips are written as normal again (the HUD layer's Button prompts row, else the device used last)";
+    log_line(g_self.name, d < 0 ? std::string(normal) : "buttons in tips are written for " + device_text(d) + " from now on, whatever was used last");
+    return d < 0 ? std::string(normal) + "\n" : "buttons in tips are written for " + device_text(d) + " now\n";
 }
 
 void on_command(void*, const char*, const char* args, char* reply, size_t size) {
@@ -343,7 +344,7 @@ constexpr TestRow kTestRows[] = {
     {"Hint", "Hint line", "The next of this page's hint texts: info, attention, fault, then none."},
     {"Keyboard", "Buttons: keyboard", "Tips write their buttons as keys from now on, whatever was used last."},
     {"Pad", "Buttons: controller", "Tips write their buttons for the controller from now on, whatever was used last."},
-    {"Auto", "Buttons: as used last", "Tips write their buttons for the device used last, as they do for players."},
+    {"Auto", "Buttons: as normal", "Tips write their buttons as they do for players: as a HUD layer's Button prompts row says, else for the device used last."},
     {"Demo", "Everything in turn", "Four pop-ups and a tip, each saying what it is, and a sound."},
     {"Clear", "Take down the waiting ones", "Takes down the platform's test pop-ups that are still waiting."},
 };

@@ -1716,7 +1716,10 @@ bool note_first_start(const std::vector<ModEntry>& entries, bool list_existed) {
             changed = seen_set(narrow(e.dll), "mod.new") || changed;
             seen_clear(narrow(e.dll), "mod.announced");
         }
-    if (!changed || seen_flush(2000)) return true;
+    if (!changed) return true;
+    // Waited for, unless the store already knows the file can't be written now (it's locked, or a write failed this
+    // session): start-up isn't held up for nothing then, and mod_entries copes with it not being written yet.
+    if (!seen_unwritable() && seen_flush(2000)) return true;
     plog("platform-seen.txt couldn't be written yet, so platform-mods.txt is left as it was until it is: the mods new "
          "since the last start stay new");
     return false;

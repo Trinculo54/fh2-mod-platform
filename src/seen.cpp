@@ -14,8 +14,10 @@
 //          clash with a tip's.
 //   value  "seen", or a count; 1 to 64 printable bytes without a tab.
 //   date   the day it was set (yyyy-mm-dd, local time), for whoever reads the file; the store doesn't use it.
-// A line that doesn't read as that is left out, and the same (who, key) twice keeps the last. No names, gamertags or
-// paths go in it.
+// A line that doesn't read as that (a later platform's, or a hand edit) isn't used, but stays in the file as it is,
+// and so do comment lines other than the platform's own three at the top: each write puts them back, in their order,
+// after those three and before the entries. The same (who, key) twice keeps the last. No names, gamertags or paths
+// go in it.
 //
 // Crash safety: the file is read once, at seen_open, and every change is kept in memory and in a list of changes
 // to make. The store's worker thread writes them about 0.1 s after the first: it reads the file again (another copy
@@ -23,14 +25,18 @@
 // platform-seen.txt.tmp, flushes it, and renames it over the file (MoveFileEx, write-through). A crash or Azimuth's
 // TerminateProcess at any point leaves either the old file or the new one, never half of one. A file that exists but
 // can't be read is never written over: the changes wait for the next try, so another program's lock can't make the
-// store lose what's in the file, only cues show again meanwhile.
+// store lose what's in the file, only cues show again meanwhile. When it couldn't be read at seen_open, the next
+// change reads it again first; while it still can't be, a seen_clear or seen_clear_if is also kept as a change, so
+// what it forgets is forgotten in the file as it reads when it's written.
 #include "seen.hpp"
 
 #include <windows.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <utility>
@@ -44,17 +50,38 @@ constexpr int kTries        = 3;      // a write that fails is tried again after
 constexpr DWORD kRetryMs    = 1000;
 constexpr std::size_t kMaxWho = 260, kMaxKey = 64, kMaxValue = 64;
 
+// The platform's own comment lines at the top of the file. Any other line that isn't an entry is kept as it is.
+const char* const kHeader[] = {
+    "# FH2 Mod Platform: hints and tips the player has already seen, so each shows only once.",
+    "# Delete this file to see them all again. One line each, tab-separated: who (a mod's DLL, or * for",
+    "# the platform), key, value, and the day it was set.",
+};
+
 struct Entry {
     std::string who, value, date;     // who as last spelled
 };
 using Key     = std::pair<std::string, std::string>;   // who in lower case, key
 using Entries = std::map<Key, Entry>;
+using Test    = std::function<bool(const std::string& who, const std::string& key, const std::string& value)>;
 
 struct Change {
     Key key;
     bool set = false;                 // false: forget it
     Entry entry;
+    Test drop_if;                     // set: forget every entry it says to instead (seen_clear_if, the file unread)
 };
+
+// One change, made on `entries`.
+void apply(Entries& entries, const Change& c) {
+    if (c.drop_if) {
+        for (auto i = entries.begin(); i != entries.end();)
+            i = c.drop_if(i->second.who, i->first.second, i->second.value) ? entries.erase(i) : std::next(i);
+    } else if (c.set) {
+        entries[c.key] = c.entry;
+    } else {
+        entries.erase(c.key);
+    }
+}
 
 // Kept on the heap and never freed, so the worker thread can still be waiting on it while the process exits.
 struct Store {
@@ -68,8 +95,11 @@ struct Store {
     std::vector<Change> pending;      // changes not in the file yet, oldest first
     uint64_t changes = 0, written = 0;  // changes made since seen_open, and how many of them are in the file
     bool kick = false;                // seen_flush asks for a try now, after one that failed
-    bool said_unwritable = false;
+    bool said_unwritable = false;     // the last try at writing failed (and was logged)
     bool worker = false;
+    bool unread = false;              // the file couldn't be read at seen_open, nor at a change since: `entries` has
+                                      // only this session's changes
+    std::vector<Change> since_open;   // while unread: every change made, to make again on the file once it reads
 };
 Store& S() {
     static Store* s = new Store;
@@ -122,9 +152,11 @@ std::vector<std::string> split_tabs(const std::string& l) {
 
 enum class Read { ok, missing, unreadable };
 
-// The file's entries, and how many lines were left out. Takes no lock.
-Read read_file(const std::filesystem::path& file, Entries& out, int& bad) {
+// The file's entries; the lines to keep as they are (comments other than the platform's own, and lines that can't be
+// read), in order; and how many of them couldn't be read. Takes no lock.
+Read read_file(const std::filesystem::path& file, Entries& out, std::vector<std::string>& keep, int& bad) {
     out.clear();
+    keep.clear();
     bad = 0;
     const HANDLE h = CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -150,10 +182,15 @@ Read read_file(const std::filesystem::path& file, Entries& out, int& bad) {
         std::string line = text.substr(at, end - at);
         at = end + 1;
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.empty() || line[0] == '#') continue;
+        if (line.empty()) continue;
+        if (line[0] == '#') {
+            if (std::find(std::begin(kHeader), std::end(kHeader), line) == std::end(kHeader)) keep.push_back(line);
+            continue;
+        }
         const auto f = split_tabs(line);
         if (f.size() < 3 || !who_ok(f[0]) || !key_ok(f[1]) || !value_ok(f[2])) {
             ++bad;
+            keep.push_back(line);
             continue;
         }
         out[{lower(f[0]), f[1]}] = Entry{f[0], f[2], f.size() > 3 && printable(f[3]) ? f[3] : std::string()};
@@ -161,11 +198,12 @@ Read read_file(const std::filesystem::path& file, Entries& out, int& bad) {
     return Read::ok;
 }
 
-// Writes `entries` to the file through file.tmp and a rename. Takes no lock. On failure, `why` says why.
-bool write_file(const std::filesystem::path& file, const Entries& entries, std::string& why) {
-    std::string text = "# FH2 Mod Platform: hints and tips the player has already seen, so each shows only once.\r\n"
-                       "# Delete this file to see them all again. One line each, tab-separated: who (a mod's DLL, or * for\r\n"
-                       "# the platform), key, value, and the day it was set.\r\n";
+// Writes the platform's comment lines, `keep` as it is, then `entries`, to the file through file.tmp and a rename.
+// Takes no lock. On failure, `why` says why.
+bool write_file(const std::filesystem::path& file, const Entries& entries, const std::vector<std::string>& keep, std::string& why) {
+    std::string text;
+    for (const char* h : kHeader) text += std::string(h) + "\r\n";
+    for (const std::string& l : keep) text += l + "\r\n";
     for (const auto& [k, e] : entries) {
         text += e.who + "\t" + k.second + "\t" + e.value;
         if (!e.date.empty()) text += "\t" + e.date;
@@ -198,15 +236,14 @@ bool write_file(const std::filesystem::path& file, const Entries& entries, std::
 // One try at putting `changes` into the file: what's in it now, with the changes made on top. Takes no lock.
 bool write_changes(const std::filesystem::path& file, const std::vector<Change>& changes, std::string& why) {
     Entries now;
+    std::vector<std::string> keep;
     int bad = 0;
-    if (read_file(file, now, bad) == Read::unreadable) {
+    if (read_file(file, now, keep, bad) == Read::unreadable) {
         why = "it couldn't be read first, and it isn't written over unread";
         return false;
     }
-    for (const Change& c : changes)
-        if (c.set) now[c.key] = c.entry;
-        else now.erase(c.key);
-    return write_file(file, now, why);
+    for (const Change& c : changes) apply(now, c);
+    return write_file(file, now, keep, why);
 }
 
 DWORD WINAPI writer(LPVOID) {
@@ -258,17 +295,48 @@ DWORD WINAPI writer(LPVOID) {
 
 // Records a change under the lock, and wakes the worker.
 void change(Store& s, Change c) {
+    if (s.unread) s.since_open.push_back(c);
     s.pending.push_back(std::move(c));
     ++s.changes;
     s.wake.notify_all();
+}
+
+// The file couldn't be read at seen_open: read it again before a change, and if it reads now, the store has what's
+// in it, with every change since made on top. Outside the lock (a change's caller may be the game's UI thread, so
+// the read is tried only while the file is still unread, and a locked file fails at once).
+void catch_up(Store& s) {
+    std::filesystem::path file;
+    uint64_t epoch = 0;
+    {
+        std::scoped_lock lk{s.mu};
+        if (!s.open || !s.unread) return;
+        file  = s.file;
+        epoch = s.epoch;
+    }
+    Entries entries;
+    std::vector<std::string> keep;
+    int bad = 0;
+    if (read_file(file, entries, keep, bad) == Read::unreadable) return;
+    std::function<void(const std::string&)> log;
+    {
+        std::scoped_lock lk{s.mu};
+        if (s.epoch != epoch || !s.unread) return;
+        for (const Change& c : s.since_open) apply(entries, c);
+        s.entries = std::move(entries);
+        s.unread  = false;
+        s.since_open.clear();
+        log = s.log;
+    }
+    if (log) log("platform-seen.txt could be read now, so the hints and tips seen before count again");
 }
 
 } // namespace
 
 void seen_open(const std::filesystem::path& file, std::function<void(const std::string&)> log) {
     Entries entries;
+    std::vector<std::string> keep;
     int bad = 0;
-    const Read r = read_file(file, entries, bad);
+    const Read r = read_file(file, entries, keep, bad);
     Store& s = S();
     {
         std::scoped_lock lk{s.mu};
@@ -279,6 +347,8 @@ void seen_open(const std::filesystem::path& file, std::function<void(const std::
         s.pending.clear();
         s.changes = s.written = 0;
         s.kick = s.said_unwritable = false;
+        s.unread = r == Read::unreadable;
+        s.since_open.clear();
         ++s.epoch;
         s.wake.notify_all();
         s.written_cv.notify_all();
@@ -292,9 +362,9 @@ void seen_open(const std::filesystem::path& file, std::function<void(const std::
     if (!log) return;
     if (r == Read::unreadable)
         log("platform-seen.txt couldn't be read (another program may have it open), so hints and tips already seen may show "
-            "again this session");
+            "again this session; it's read again at the next change");
     else if (bad)
-        log("platform-seen.txt: " + std::to_string(bad) + " line(s) couldn't be read and were left out");
+        log("platform-seen.txt: " + std::to_string(bad) + " line(s) couldn't be read, so they aren't used; they stay in the file as they are");
 }
 
 std::string seen_get(const std::string& who, const std::string& key) {
@@ -307,6 +377,7 @@ std::string seen_get(const std::string& who, const std::string& key) {
 bool seen_set(const std::string& who, const std::string& key, const std::string& value) {
     if (!who_ok(who) || !key_ok(key) || !value_ok(value)) return false;
     Store& s = S();
+    catch_up(s);
     std::scoped_lock lk{s.mu};
     if (!s.open || !s.worker) return false;
     const Key k{lower(who), key};
@@ -320,20 +391,27 @@ bool seen_set(const std::string& who, const std::string& key, const std::string&
 
 bool seen_clear(const std::string& who, const std::string& key) {
     Store& s = S();
+    catch_up(s);
     std::scoped_lock lk{s.mu};
-    const auto it = s.entries.find({lower(who), key});
-    if (!s.open || it == s.entries.end()) return false;
-    Change c{it->first, false, {}};
+    if (!s.open) return false;
+    const Key k{lower(who), key};
+    const auto it = s.entries.find(k);
+    if (it == s.entries.end()) {
+        // the file couldn't be read, so it may be set there: forgotten there too when it's written
+        if (s.unread && who_ok(who) && key_ok(key)) change(s, Change{k, false, {}, {}});
+        return false;
+    }
     s.entries.erase(it);
-    change(s, std::move(c));
+    change(s, Change{k, false, {}, {}});
     return true;
 }
 
 int seen_clear_if(const std::function<bool(const std::string&, const std::string&, const std::string&)>& drop) {
     Store& s = S();
+    catch_up(s);
     std::vector<Key> gone;
     {
-        // the predicate runs on a copy, outside the lock, so it may call seen_get
+        // the predicate runs on a copy, outside the lock
         Entries copy;
         {
             std::scoped_lock lk{s.mu};
@@ -344,13 +422,29 @@ int seen_clear_if(const std::function<bool(const std::string&, const std::string
             if (drop(e.who, k.second, e.value)) gone.push_back(k);
     }
     int n = 0;
-    std::scoped_lock lk{s.mu};
-    for (const Key& k : gone)
-        if (s.entries.erase(k)) {
-            change(s, Change{k, false, {}});
-            ++n;
+    std::function<void(const std::string&)> log;
+    {
+        std::scoped_lock lk{s.mu};
+        for (const Key& k : gone)
+            if (s.entries.erase(k)) {
+                change(s, Change{k, false, {}, {}});
+                ++n;
+            }
+        // the file couldn't be read: what it holds is forgotten the same way when it's written (on the file as it
+        // reads then)
+        if (s.unread) {
+            change(s, Change{{}, false, {}, drop});
+            log = s.log;
         }
+    }
+    if (log) log("platform-seen.txt still couldn't be read, so what it holds is forgotten as asked when it's next written");
     return n;
+}
+
+bool seen_unwritable() {
+    Store& s = S();
+    std::scoped_lock lk{s.mu};
+    return s.open && (s.unread || s.said_unwritable);
 }
 
 bool seen_flush(uint32_t timeout_ms) {
