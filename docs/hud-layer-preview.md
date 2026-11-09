@@ -213,7 +213,7 @@ You need a layer to hold the game's HUD, even if you never show it.
 int play_ui_sound(FH2Mod* mod, uint32_t sound);
 ```
 
-Plays one of the game's own UI sounds once, at the next frame. Never make a sound the only cue. Platform 2.9.0's API has the same call for every mod, with no layer needed and the same numbers, rules and player (`play_ui_sound` in [api.md](api.md)); this one is for a layer's own sounds, played with its frame.
+Plays one of the game's own UI sounds once, at the next frame. Never make a sound the only cue. Platform 2.9.0's API has the same call for every mod, with no layer needed, all eleven sounds and the same player (`play_ui_sound` in [api.md](api.md)): use that one in new code. This one has its own gate and its own repeat rule. It needs the MODS tab's hooks, so in a session where they didn't go in it plays nothing (the log says the sound player isn't ready) while the API's still plays; and its 100 ms between repeats is counted apart from the API's, so a sound sent through both can play twice in one frame. Use one of the two for a sound, not both.
 
 | Sound | What it is | Where it plays |
 |---|---|---|

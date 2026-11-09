@@ -39,7 +39,7 @@ pad->add_layer(mod, &chat);
 
 - **The modifier always reaches the game.** Only the layer's buttons are kept from it. Pick a modifier that does nothing harmful while held. LB is the clutch for players who drive manual with clutch, so give them a choice.
 - **Letting go of the modifier first** doesn't hand the button to the game: it stays the layer's until it goes up, so the game never sees a press nobody made.
-- **Menus.** A layer works wherever the game reads the controller, menus too. If your mod only means it for driving, check that yourself before acting on a press.
+- **Menus.** A layer is on in every game state: the title screen, the pause menu and the MODS tab, the map and photo mode as well as driving. While its modifier is held there, the menu doesn't get the layer's buttons and your `on_press` still comes, so a player holding LB (the menus' tab-left) in the pause menu and pressing the d-pad would send your action from the menu. If your layer is for driving, ignore presses while a menu is open: `FH2_HUD_ON_SCREEN` in `hud_status` (with a [HUD layer](hud-layer-preview.md) of your own), or `FH2_UI_ON_SCREEN` in `ui_status` (API 10, in a session with pop-ups or tips: declare them with `ui_uses`), is set while the free-roam HUD page is on screen. A flag for layers that are only on in the world is planned for 2.9.1, in `FH2PadLayer.flags`, which is reserved until then.
 
 ## Changing the modifier
 

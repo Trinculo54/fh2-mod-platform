@@ -72,7 +72,7 @@ When you release a mod built on 2.9.0, bump your `platform` submodule to the v2.
 - **Message boxes' help bar** reads "(A) Select (B) Cancel" while the box's last item says Back. Both do the same.
 - **Car packs aren't read with Extra Options loaded.** They need Azimuth 1.0 or later without it.
 - **A saved upgrade whose part no longer exists** (a car pack or mod that changed the database, then removed) can still stop the game as the car loads. That one isn't guarded yet; game-notes.md says why.
-- **The HUD layer and pad layer are previews.** They aren't part of an API version, and their names, limits and behaviour may change before they are.
+- **The HUD layer and pad layer are previews.** They aren't part of an API version, and their names, limits and behaviour may change before they are. A pad layer is on in every game state, menus and the title screen too, so a layer meant for driving has to ignore presses while a menu is open; a flag for layers that are only on in the world is planned for 2.9.1. The HUD layer's own `play_ui_sound` has its own gate and repeat rule: use the API's `play_ui_sound` in new code.
 - **Under Wine and Proton**, hotkeys and commands (from 2.8.0) and the new pop-ups, tips and message boxes haven't been tried in game yet.
 
 ## Credits
