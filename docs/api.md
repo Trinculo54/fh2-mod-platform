@@ -151,7 +151,7 @@ Only one mod can replace a file. `set_file` returns 1 when the file is yours and
 | `UI\Scenes\Anthem\A_Splash.xaml` | the title screen's mod entries |
 | `UI\Scenes\Anthem\A_PauseMenu.xaml` | the pause menu's MODS tab |
 | `UI\Scenes\Anthem\A_PauseOptions.xaml` | the Mods tile in the pause menu's Settings |
-| `UI\Scenes\Anthem\A_ModOptions.xaml` | the Mods page |
+| `UI\Scenes\Anthem\A_ModOptions.xaml` | the list that stands in for the MODS tab when its hooks don't go in |
 | `UI\Scenes\Anthem\A_ModPage_NN.xaml` (any number) | the MODS tab's pages and the mods' pages |
 | `stateflow\pause.xml` | how the pause menu opens the MODS tab's pages |
 | `stateflow\ui_screens.xml` | the MODS tab's screens |
