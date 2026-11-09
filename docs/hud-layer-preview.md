@@ -397,10 +397,12 @@ What the platform writes while a mod has a layer:
 | `fh2-mods\platform-hudlayer-A_Hud.xaml` | a copy of that page, for checking it |
 | `fh2-mods\platform-hudlayer-props.txt` | the page's properties, one a line: name, type, default and values |
 | `fh2-mods\platform-hudlayer-marker.txt` | the crash marker, gone 10 s after the HUD page is first on screen |
-| `fh2-mods\platform-hudlayer.ini` | the Button prompts choice, made the first time the row is changed |
+| `fh2-mods\platform-hudlayer.ini` | the Button prompts choice, made the first time the row is changed; `Debug=1` under `[HudLayer]` (added by hand) puts the layer's diagnostics in the log |
 | `fh2-mods\notices\HUD layer.txt` | the title-screen line, after a session the crash marker left the layer out of |
 
 `fh2-mods\platform-session.json` gets `"hud_layer": "2.9.0 preview: <mods with a layer>"` (the build's own name in place of 2.9.0, for a build that isn't a release), and every crash report a line `platform: FH2 Mod Platform <build>` after the CRASH line, plus a `HUD layer:` line saying what the layer was doing.
+
+**Diagnostics.** The layer's stats every 10 s, each page its getters meet, and every time the HUD page is shown or hidden go to `platform.log` only with `Debug=1` under `[HudLayer]` in `fh2-mods\platform-hudlayer.ini`, or `Developer=1` under `[popups]` in `fh2-mods\platform-popups.ini`, read as the game starts. Without either, the log has the first time the HUD page is shown and hidden, and the rest of the lines below. Turn it on for a session you'll send back about the layer.
 
 **What to send back:** `fh2-mods\platform.log` from the session (the platform also keeps each session's copy in `fh2-mods\platform-logs\`, so an older one isn't lost when the game starts again), any `fh2-mods\crashes\crash-*.txt` from it, and the log of the mod that uses the layer.
 
@@ -416,7 +418,7 @@ The layer's own lines start with `[HUD layer]`; lines about one mod's layer carr
 | `[HUD layer] code: <group>: as expected` / `doesn't match the exe on disk; ...` | the game's code for the layer, group by group |
 | `[HUD layer] the HUD layer is off: the game exe couldn't be read from the game folder ...` | there was no exe to check the layer's code against, so none of it was used |
 | `[HUD layer] hooks: 4 of 4 made and on; the HUD layer is ready` | start-up is done |
-| `[HUD layer] HUD page 0x... (Hud) shown at frame ...` / `hidden` / `destroyed` | the HUD page coming and going |
+| `[HUD layer] HUD page 0x... (Hud) shown at frame ...` / `hidden` / `destroyed` | the HUD page coming and going (shown and hidden the first time in a session, and every time with `Debug=1`) |
 | `[HUD layer] the HUD page was shown without the layer's values ...` | the game didn't read the platform's page; the layer is off |
 | `[<mod>] HUD layer shown: ...` / `HUD layer hidden ...` / `... showed its layer, so this one is hidden` | showing and hiding, and the screen changing hands |
 | `[<mod>] HUD layer: no call for ... s while on screen ...` | a lease ran out |
@@ -424,4 +426,4 @@ The layer's own lines start with `[HUD layer]`; lines about one mod's layer carr
 | `[HUD layer] button prompts: ...` / `device: ...` | the Button prompts choice, and the device as it changes |
 | `[<mod>] sound: ... played` / `dropped: ...` | sounds |
 | `... crashed in the game's code ...` | a fault, and what it turned off |
-| `[HUD layer] stats: ...`, then `Strings: ...` | every 10 s: frames, cost, values told, and the texts in use. The `Strings` line's "left with the game" should stay near 0, and its references steady while the car is parked. "left with the page while off screen" may grow by one for each text that changed during a visit of more than 2 s to the pause menu or the map: the game frees those once the HUD page is back, so only "left with the game" growing points to a leak |
+| `[HUD layer] stats: ...`, then `Strings: ...` | with `Debug=1`, every 10 s: frames, cost, values told, and the texts in use. The `Strings` line's "left with the game" should stay near 0, and its references steady while the car is parked. "left with the page while off screen" may grow by one for each text that changed during a visit of more than 2 s to the pause menu or the map: the game frees those once the HUD page is back, so only "left with the game" growing points to a leak |

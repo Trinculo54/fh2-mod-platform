@@ -962,6 +962,8 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[HudTestMod] set_hud_state: 1"));
         CHECK(has(log, "[HUD layer] 1 mod(s) asked for a HUD layer: HudTestMod; the HUD page gets BAR, CHIPS, TIP, PANEL, COUNTDOWN"));
         CHECK(has(log, "[HUD layer] button prompts: Automatic (fh2-mods\\platform-hudlayer.ini)"));
+        CHECK(has(log, "[HUD layer] Debug=1 (fh2-mods\\platform-hudlayer.ini): the HUD layer's stats every 10 s and its page lines go to the log") ==
+              own_layer());
         CHECK(has(log, "[HudTestMod] MODS row: Button prompts"));   // settings_add's own line, as the hotkeys' rows
         CHECK(has(log, "[HUD layer] crash marker: none from last session"));
         const std::string props  = slurp("fh2-mods\\platform-hudlayer-props.txt");

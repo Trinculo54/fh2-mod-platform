@@ -26,6 +26,7 @@
 #include "lang.hpp"
 #include "platform.hpp"
 #include "platform_version.h"
+#include "ui_player.hpp"
 #include "ui_rules.hpp"
 #include "updates.hpp"
 
@@ -145,6 +146,15 @@ __attribute__((format(printf, 1, 2))) void hlog(const char* fmt, ...) {
     va_end(a);
     log_line(g_layer_mod.name, b);
 }
+
+// The layer's diagnostics (its stats every 10 s, each page the getters meet, every time the HUD page is shown or
+// hidden) go to platform.log only with Debug=1 under [HudLayer] in fh2-mods\platform-hudlayer.ini, or Developer=1
+// under [popups] in fh2-mods\platform-popups.ini: in a long session they'd add lines no player needs, each one
+// flushed on the game's UI thread.
+std::atomic<bool> g_debug{false};
+bool debug_log() { return g_debug.load(std::memory_order_relaxed) || ui_developer(); }
+// The first line of a kind in a session, then only with Debug.
+bool first_or_debug(std::atomic<bool>& said) { return !said.exchange(true) || debug_log(); }
 
 unsigned long long ull(uintptr_t v) { return static_cast<unsigned long long>(v); }
 unsigned long long ullp(const void* p) { return static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(p)); }
@@ -383,7 +393,7 @@ void getter_seen(void* obj, uintptr_t vt, bool hud) {
             ++it->refusals;
         }
     }
-    if (first) {
+    if (first && debug_log()) {
         char b[48];
         hlog("first seen by the getters: 0x%llX (%s)%s", ullp(obj), page_class(vt, b, sizeof b), hud ? "" : ": its bindings get defaults");
     }
@@ -528,7 +538,8 @@ void write_ini(int v) {
                          "[HudLayer]\r\n"
                          "; 0 Automatic: the controller or the keyboard and mouse, whichever was used last (Xbox-style controllers\r\n"
                          ";   only). 1 Controller: always the controller's buttons. 2 Keyboard and mouse: always key caps.\r\n"
-                         "ButtonPrompts=%d\r\n",
+                         "ButtonPrompts=%d\r\n"
+                         "; Debug=1 puts the HUD layer's diagnostics in platform.log: its stats every 10 s, and its page lines.\r\n",
                          v);
             std::fclose(f);
         }
@@ -1034,22 +1045,24 @@ struct PumpCost {
 double g_last_stats = 0, g_stats_from = 0;
 int g_reasserts_all = 0;
 
+// Every 10 s: the counters start again, and with Debug their lines go to the log.
 void stats(double now, bool live) {
     const HudEngine::Stats s = g_eng.take_stats();
     const PumpCost& c        = g_cost;
     const double f           = c.frames ? static_cast<double>(c.frames) : 1.0;
     const int own            = g_eng.owner();
     const uint64_t getters   = g_getter_calls.load();
-    hlog("stats: %llu frames in %.1f s; pump avg %.3f ms, max %.3f ms; notifies %.1f a frame (max %llu), %llu carried over by the budget; "
-         "getter calls %llu; staged copies skipped while busy %llu; on screen: %s; owner %s; parts %s",
-         u64(c.frames), (now - g_stats_from) / 1000.0, c.work / f, c.work_max, static_cast<double>(s.notifies) / f, u64(s.max_notifies),
-         u64(s.carried), u64(getters - c.getters0), u64(s.skipped), live ? "yes" : "no", own >= 0 ? g_eng.layer_name(own).c_str() : "none",
-         hud_parts_text(g_eng.shown_parts()).c_str());
-    hlog("%s", g_eng.strings_line().c_str());
-    hlog("threads: pump %s, shown %s, hidden %s, destroyed %s, getters on screen %s (%llu calls), getters while building %s (%llu calls)",
-         thread_text(g_th_pump).c_str(), thread_text(g_th_shown).c_str(), thread_text(g_th_hidden).c_str(), thread_text(g_th_dtor).c_str(),
-         thread_text(g_th_get_screen).c_str(), u64(g_get_screen.load()), thread_text(g_th_get_build).c_str(), u64(g_get_build.load()));
-    {
+    const bool say           = debug_log();
+    if (say) {
+        hlog("stats: %llu frames in %.1f s; pump avg %.3f ms, max %.3f ms; notifies %.1f a frame (max %llu), %llu carried over by the "
+             "budget; getter calls %llu; staged copies skipped while busy %llu; on screen: %s; owner %s; parts %s",
+             u64(c.frames), (now - g_stats_from) / 1000.0, c.work / f, c.work_max, static_cast<double>(s.notifies) / f, u64(s.max_notifies),
+             u64(s.carried), u64(getters - c.getters0), u64(s.skipped), live ? "yes" : "no", own >= 0 ? g_eng.layer_name(own).c_str() : "none",
+             hud_parts_text(g_eng.shown_parts()).c_str());
+        hlog("%s", g_eng.strings_line().c_str());
+        hlog("threads: pump %s, shown %s, hidden %s, destroyed %s, getters on screen %s (%llu calls), getters while building %s (%llu calls)",
+             thread_text(g_th_pump).c_str(), thread_text(g_th_shown).c_str(), thread_text(g_th_hidden).c_str(), thread_text(g_th_dtor).c_str(),
+             thread_text(g_th_get_screen).c_str(), u64(g_get_screen.load()), thread_text(g_th_get_build).c_str(), u64(g_get_build.load()));
         std::scoped_lock lk{g_seen_mu};
         for (const SeenPage& p : g_seen_pages)
             if (p.refusals) {
@@ -1059,7 +1072,9 @@ void stats(double now, bool live) {
     }
     if (g_hold.reasserts_since_stats) {
         g_reasserts_all += g_hold.reasserts_since_stats;
-        hlog("hold: the game showed its HUD again %d time(s) since the last stats (%d in all)", g_hold.reasserts_since_stats, g_reasserts_all);
+        if (say)
+            hlog("hold: the game showed its HUD again %d time(s) since the last stats (%d in all)", g_hold.reasserts_since_stats,
+                 g_reasserts_all);
         g_hold.reasserts_since_stats = 0;
     }
     g_cost          = PumpCost{};
@@ -1147,6 +1162,7 @@ void on_pump(FH2Context*, void*) {
 using HudFn = uint64_t (*)(void*, void*, void*, void*);
 HudFn o_layer_shown = nullptr, o_layer_hidden = nullptr, o_layer_dtor = nullptr;
 std::atomic<bool> g_other_shown_logged{false};
+std::atomic<bool> g_shown_said{false}, g_hidden_said{false};   // the first of each in a session is logged (then Debug only)
 
 uint64_t d_layer_shown(void* page, void* b, void* c, void* d) {
     const uint64_t r = o_layer_shown(page, b, c, d);
@@ -1166,7 +1182,8 @@ uint64_t d_layer_shown(void* page, void* b, void* c, void* d) {
     g_seen_shown        = true;
     if (g_first_on_screen.load() == 0) g_first_on_screen = now_ms();
     if (old && old != page) hlog("a new HUD page is tracked (the last one was 0x%llX)", ullp(old));
-    hlog("HUD page 0x%llX (Hud) shown at frame %llu (thread %lu)", ullp(page), u64(g_frame.load()), static_cast<unsigned long>(tid));
+    if (first_or_debug(g_shown_said))
+        hlog("HUD page 0x%llX (Hud) shown at frame %llu (thread %lu)", ullp(page), u64(g_frame.load()), static_cast<unsigned long>(tid));
     if (!g_page_read.load() && !g_eng.off()) {
         hlog("the HUD page was shown without the layer's values, so the page the game built doesn't have the layer (is mediaoverride off?); "
              "the HUD layer is off");
@@ -1180,7 +1197,7 @@ uint64_t d_layer_hidden(void* page, void* b, void* c, void* d) {
     if (page && page == g_page.load()) {
         g_th_hidden.see(GetCurrentThreadId());
         g_on_screen = false;
-        hlog("HUD page 0x%llX (Hud) hidden at frame %llu", ullp(page), u64(g_frame.load()));
+        if (first_or_debug(g_hidden_said)) hlog("HUD page 0x%llX (Hud) hidden at frame %llu", ullp(page), u64(g_frame.load()));
     }
     return r;
 }
@@ -1464,6 +1481,8 @@ void hud_layer_prepare(const FH2ModApi* api) {
         return;
     }
     g_active   = true;
+    g_debug    = GetPrivateProfileIntW(L"HudLayer", L"Debug", 0, ini_path().c_str()) == 1;
+    if (g_debug.load()) hlog("Debug=1 (fh2-mods\\platform-hudlayer.ini): the HUD layer's stats every 10 s and its page lines go to the log");
     g_left_out = check_marker();
     g_parts    = g_eng.parts();
     g_eng.build(hud_build_props(g_parts));
