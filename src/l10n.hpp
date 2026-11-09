@@ -111,9 +111,9 @@ void l10n_follow(FH2Mod* mod, const std::string& slot, std::string& text, const 
 bool l10n_text_in(FH2Mod* mod, const std::string& slot, std::string_view table_code, std::string& text);
 // The same for text the platform keeps as UTF-16 and the game asks for as it shows it (a
 // title-screen list): `shown` is the platform's copy, which stays put, `suffix` what the platform
-// added after the mod's text, and `max_bytes` (0: no limit) how long the mod's text can be in UTF-8,
-// cut short as the platform cut what it was given.
-void l10n_note_w(FH2Mod* mod, const wchar_t* shown, const char* given, const std::wstring& suffix = {}, std::size_t max_bytes = 0);
+// added after the mod's text, and `max_chars` (0: no limit) how long the mod's text can be in
+// characters (text_chars), cut short (cut_text) as the platform cut what it was given.
+void l10n_note_w(FH2Mod* mod, const wchar_t* shown, const char* given, const std::wstring& suffix = {}, std::size_t max_chars = 0);
 // `shown`'s text in the language now, or nullptr if it doesn't hold tr()'s text. Stays valid.
 const wchar_t* l10n_follow_w(const wchar_t* shown);
 

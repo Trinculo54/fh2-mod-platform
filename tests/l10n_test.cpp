@@ -454,13 +454,25 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(copies.size() <= 16);   // one per set of forms across the languages' rules
     }
     CHECK(std::string(l10n_tr_plural(&mod, "count.live", "One car", "{n} cars", -1)) == "One car");   // English, as for 1
-    // a title-screen list's title cut as its label was, not inside a character
-    std::wstring cut_title = L"Árvo  1/2";
+    // a title-screen list's title cut as its label was: in characters, as the title screen cuts the label
+    std::wstring cut_title = L"Árvor  1/2";
     l10n_note_w(&mod, cut_title.c_str(), trees, L"  1/2", 5);
-    CHECK(std::wstring(l10n_follow_w(cut_title.c_str())) == L"Árvo  1/2");   // "Árvores quebráveis" cut to 5 bytes
-    std::wstring cut_inside = L"x";
-    l10n_note_w(&mod, cut_inside.c_str(), trees, L"", 1);
-    CHECK(std::wstring(l10n_follow_w(cut_inside.c_str())).empty());
+    CHECK(std::wstring(l10n_follow_w(cut_title.c_str())) == L"Árvor  1/2");   // "Árvores quebráveis" cut to 5 characters, not 5 bytes
+    std::wstring cut_one = L"x";
+    l10n_note_w(&mod, cut_one.c_str(), trees, L"", 1);
+    CHECK(std::wstring(l10n_follow_w(cut_one.c_str())) == L"Á");             // a 2-byte letter is one character
+    // Russian, 21 characters in 41 bytes, cut at 32 characters as kMaxTitleLabel: all of it (16 characters when cut in bytes)
+    CHECK(add(&mod, "ru", "msgctxt \"title.adv\"\nmsgid \"Advanced settings\"\n"
+                          "msgstr \"\xD0\xA0\xD0\xB0\xD1\x81\xD1\x88\xD0\xB8\xD1\x80\xD0\xB5\xD0\xBD\xD0\xBD\xD1\x8B\xD0\xB5 "
+                          "\xD0\xBD\xD0\xB0\xD1\x81\xD1\x82\xD1\x80\xD0\xBE\xD0\xB9\xD0\xBA\xD0\xB8\"\n") == 1);
+    g_game = "RU";
+    const char* adv = l10n_tr(&mod, "title.adv", "Advanced settings");
+    CHECK(std::strlen(adv) == 41);
+    std::wstring adv_title = L"ADVANCED SETTINGS";
+    l10n_note_w(&mod, adv_title.c_str(), adv, L"", 32);
+    CHECK(std::wstring(l10n_follow_w(adv_title.c_str())) == L"Расширенные "
+                                                            L"настройки");
+    g_game = "br";
     // other text noted in the same slot replaces it
     l10n_note(&mod, "row.Trees.label", "something of the mod's own");
     s = "own";

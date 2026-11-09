@@ -21,6 +21,7 @@
 #include "l10n.hpp"
 #include "lang.hpp"
 #include "platform.hpp"
+#include "text.hpp"
 
 #include <windows.h>
 
@@ -536,7 +537,7 @@ std::map<std::pair<FH2Mod*, std::string>, std::size_t> g_slots; // the places th
 struct WideSlot {
     std::size_t ref;
     std::wstring suffix;
-    std::size_t max_bytes = 0;   // the mod's text cut to this many UTF-8 bytes (0: as it is)
+    std::size_t max_chars = 0;   // the mod's text cut to this many characters, as text_chars counts them (0: as it is)
 };
 std::unordered_map<const wchar_t*, WideSlot> g_wslots;
 std::deque<std::wstring> g_wtexts;
@@ -870,12 +871,12 @@ bool l10n_text_in(FH2Mod* m, const std::string& slot, std::string_view table_cod
     return true;
 }
 
-void l10n_note_w(FH2Mod* m, const wchar_t* shown, const char* given, const std::wstring& suffix, std::size_t max_bytes) {
+void l10n_note_w(FH2Mod* m, const wchar_t* shown, const char* given, const std::wstring& suffix, std::size_t max_chars) {
     (void)m;
     if (!shown) return;
     std::scoped_lock lk{g_mu};
     const auto it = given ? g_handed.find(given) : g_handed.end();
-    if (it != g_handed.end()) g_wslots[shown] = {it->second, suffix, max_bytes};
+    if (it != g_handed.end()) g_wslots[shown] = {it->second, suffix, max_chars};
     else g_wslots.erase(shown);
 }
 
@@ -896,11 +897,8 @@ const wchar_t* l10n_follow_w(const wchar_t* shown) {
         const Ref& r       = g_refs[it->second.ref];
         m                  = r.mod;
         std::string text   = text_for(r, tag, notes);
-        if (const std::size_t max = it->second.max_bytes; max && text.size() > max) {   // cut as the mod's text was, not inside a character
-            std::size_t cut = max;
-            while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) --cut;
-            text.resize(cut);
-        }
+        // cut as the mod's text was: in characters (a Polish or Russian letter is one, as an English one), never inside one
+        if (const std::size_t max = it->second.max_chars; max) text = cut_text(text, max);
         const std::wstring w = utf16(text) + it->second.suffix;
         auto in            = g_winterned.find(w);
         if (in == g_winterned.end()) {
