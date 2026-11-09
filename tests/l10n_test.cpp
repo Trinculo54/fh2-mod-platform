@@ -305,6 +305,21 @@ int wmain(int argc, wchar_t** argv) {
         refused.clear();
         CHECK(l10n::parse_po(kPolish, "pl", c, refused) == 6 && refused.size() == 2);   // nplurals=3, as the platform's
     }
+    // braces as the game's own text formatting reads them (set_string_tr)
+    {
+        CHECK(l10n::braces_fit("{0} joined", "{0} do\xC5\x82\xC4\x85" "czy\xC5\x82"));
+        CHECK(l10n::braces_fit("{0} joined", "{0} i {0}"));                         // the same placeholder twice is fine
+        CHECK(l10n::braces_fit("{0} joined", "do\xC5\x82\xC4\x85" "czono"));        // and none (parse_po checks they're all there)
+        CHECK(!l10n::braces_fit("{0} joined", "{0} do\xC5\x82\xC4\x85" "czy\xC5\x82 {"));
+        CHECK(!l10n::braces_fit("{0} joined", "{ 0} do\xC5\x82\xC4\x85" "czy\xC5\x82"));
+        CHECK(!l10n::braces_fit("{0} joined", "}{0}"));
+        CHECK(l10n::braces_fit("{{font_pop}}Ready {0}", "{{font_pop}}Gotowe {0}"));
+        CHECK(!l10n::braces_fit("{{font_pop}}Ready {0}", "{font_pop}Gotowe {0}"));   // the token as a placeholder
+        CHECK(!l10n::braces_fit("{{font_pop}}Ready {0}", "{{font_pop}Gotowe {0}"));
+        CHECK(l10n::braces_fit("Score { of {0}", "Wynik { z {0}"));                  // a brace on its own the English has too
+        CHECK(!l10n::braces_fit("Score { of {0}", "Wynik {{ z {0}"));
+        CHECK(l10n::braces_fit("Plain", "Zwyk\xC5\x82y"));
+    }
     // placeholders
     {
         CHECK((l10n::placeholders("{a} and {b}, {a} {not one} {} {x{y}") == std::vector<std::string>{"{a}", "{b}", "{y}"}));
@@ -497,6 +512,23 @@ int wmain(int argc, wchar_t** argv) {
     CHECK(l10n_text_in(&mod, "notice", "MX", s) && s == "¡Hola, {name}!");                           // es-MX -> es-ES
     CHECK(l10n_text_in(&mod, "notice", "GB", s) && s == "Hi, {name}!");                              // en-GB -> en
     CHECK(!l10n_text_in(&mod, "row.Other.label", "PL", s));
+    // set_string_tr's text: the game formats its string tables itself, so a translation whose braces don't fit the
+    // English's goes in as the English, said once per language and key; pages (tr) still get the translation
+    CHECK(add(&mod, "pl", "msgctxt \"chat.joined\"\nmsgid \"{0} joined\"\nmsgstr \"{0} dołączył {\"\n\n"
+                          "msgctxt \"chat.left\"\nmsgid \"{{font_pop}}{0} left\"\nmsgstr \"{{font_pop}}{0} wyszedł\"\n\n"
+                          "msgctxt \"chat.ready\"\nmsgid \"{{font_pop}}Ready\"\nmsgstr \"{font_pop}Gotowe\"\n") == 3);
+    CHECK(l10n_table_text(&mod, "chat.joined", L"{0} joined", "PL") == L"{0} joined");
+    CHECK(l10n_table_text(&mod, "chat.joined", L"{0} joined", "PL") == L"{0} joined");
+    {
+        int said = 0;
+        for (const std::string& l : g_log)
+            said += l == "[TestMod] the pl text for \"chat.joined\" has braces that don't match the English's ({0}, {{...}}), which the game's own "
+                         "text formatting could misread, so the PL string table gets the English there";
+        CHECK(said == 1);
+    }
+    CHECK(l10n_table_text(&mod, "chat.left", L"{{font_pop}}{0} left", "PL") == L"{{font_pop}}{0} wyszedł");
+    CHECK(l10n_table_text(&mod, "chat.ready", L"{{font_pop}}Ready", "PL") == L"{{font_pop}}Ready");
+    CHECK(std::string(l10n_tr(&mod, "chat.joined", "{0} joined")) == "{0} dołączył {");
     // the game picks English: the platform says so, records it, and the noted text follows
     g_game = "EN";
     std::string ini;

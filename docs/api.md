@@ -884,7 +884,7 @@ api->add_setting(g_mod, &s);
   const std::string unlocked = fh2_fill(t, {{"n", fh2_number(api, n)}});   // "12 345 ..." in Polish (and "1234": four digits stay together)
   row.value = unlocked.c_str();   // copied by set_page_rows
   ```
-- **`set_string_tr`** is `set_string` with a key: each language's string table gets the text for its own language, so the game shows the right one whatever language it picks, with nothing to follow. `msg_key` and `english` are looked up as `tr()` looks them up (`english` is UTF-16, as `set_string`'s text is). Make it from `fh2mod_init`, as `set_string`: a later one shows from the next launch. `set_string` and `set_string_tr` on the same key replace each other.
+- **`set_string_tr`** is `set_string` with a key: each language's string table gets the text for its own language, so the game shows the right one whatever language it picks, with nothing to follow. `msg_key` and `english` are looked up as `tr()` looks them up (`english` is UTF-16, as `set_string`'s text is). The game formats its string tables' text itself, so a translation whose braces don't fit the English's (a `{` or `}` the English hasn't got, or a `{{token}}` written as `{token}`) goes in as the English, with a line in the log. Make it from `fh2mod_init`, as `set_string`: a later one shows from the next launch. `set_string` and `set_string_tr` on the same key replace each other.
   ```cpp
   api->set_string_tr(g_mod, "LoadingMessages.str", 0x6875, "loading.tip", L"Trees break when you hit them.");
   ```

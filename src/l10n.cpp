@@ -171,6 +171,35 @@ std::string bad_text(const std::string& s) {
     return "";
 }
 
+// The {placeholders}, {{tokens}} and braces on their own in `s`, sorted: what the game's own text formatting
+// reads in a string table's text.
+std::vector<std::string> brace_parts(std::string_view s) {
+    std::vector<std::string> out;
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (s[i] != '{' && s[i] != '}') continue;
+        if (s[i] == '{' && i + 1 < s.size() && s[i + 1] == '{') {   // {{font_pop}}
+            const std::size_t j = s.find("}}", i + 2);
+            if (j != std::string_view::npos && j > i + 2 && s.substr(i + 2, j - i - 2).find_first_of("{}") == std::string_view::npos) {
+                out.emplace_back(s.substr(i, j - i + 2));
+                i = j + 1;
+                continue;
+            }
+        }
+        if (s[i] == '{') {   // {0}, {name}: as placeholders() finds them
+            std::size_t j = i + 1;
+            while (j < s.size() && s[j] != '}' && s[j] != '{' && s[j] != ' ' && s[j] != '\t' && s[j] != '\n') ++j;
+            if (j < s.size() && s[j] == '}' && j > i + 1) {
+                out.emplace_back(s.substr(i, j - i + 1));
+                i = j;
+                continue;
+            }
+        }
+        out.emplace_back(1, s[i]);   // a brace on its own
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 std::string joined(const std::vector<std::string>& v) {
     if (v.empty()) return "none";
     std::string s;
@@ -231,6 +260,17 @@ bool placeholders_fit(const Entry& e, const std::string& text, bool only_for_one
     // a form only for 1 may leave placeholders out ("Jedno drzewo" for "{n} tree broken"), as gettext's own check allows
     return std::includes(any.begin(), any.end(), t.begin(), t.end()) &&
            (only_for_one || std::includes(t.begin(), t.end(), both.begin(), both.end()));
+}
+
+bool braces_fit(std::string_view english, std::string_view text) {
+    const std::vector<std::string> e = brace_parts(english), t = brace_parts(text);
+    std::ptrdiff_t open = 0, close = 0;
+    for (const std::string& x : t) {
+        if (x == "{") ++open;
+        else if (x == "}") ++close;
+        else if (!std::binary_search(e.begin(), e.end(), x)) return false;
+    }
+    return open <= std::count(e.begin(), e.end(), "{") && close <= std::count(e.begin(), e.end(), "}");
 }
 
 int plural_forms(const std::string& tag) {
@@ -956,7 +996,17 @@ std::wstring l10n_table_text(FH2Mod* m, const std::string& key, const std::wstri
     std::string text;
     {
         std::scoped_lock lk{g_mu};
-        text = text_for(g_refs[ref_of(m, key, utf8(english), "", 0, false)], tag, notes);
+        const std::string en = utf8(english);
+        text                 = text_for(g_refs[ref_of(m, key, en, "", 0, false)], tag, notes);
+        // The game formats its string tables' text itself ({0} to {6}, {{font_pop}}), and nobody knows what it does with
+        // a brace it can't read: a translation whose braces don't fit the English's goes in as the English.
+        if (text != en && !braces_fit(en, text)) {
+            if (g_mods[m].stale_said.insert("{} " + tag + " " + key).second)
+                notes.push_back("the " + tag + " text for \"" + key + "\" has braces that don't match the English's ({0}, {{...}}), which the "
+                                "game's own text formatting could misread, so the " + std::string(table_code) +
+                                " string table gets the English there");
+            text = en;
+        }
     }
     say(m, notes);
     return utf16(text);

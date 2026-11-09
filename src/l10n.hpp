@@ -39,6 +39,10 @@ struct Catalogue {
 int parse_po(std::string_view po, const std::string& tag, Catalogue& out, std::vector<std::string>& refused);
 // How many plural forms plural_form() has for `tag` (Polish 3, English 2, Japanese 1).
 int plural_forms(const std::string& tag);
+// Whether a translation's braces fit the English's as the game's own text formatting reads them (for
+// set_string_tr): every {placeholder} and {{token}} one the English has, and no more braces on their
+// own than the English has ("{0} joined {" or "{ 0} joined" for "{0} joined" don't).
+bool braces_fit(std::string_view english, std::string_view text);
 // The {placeholders} in `s` ("{count}", "{0}"), sorted, each once: a {...} with no space or brace inside.
 std::vector<std::string> placeholders(std::string_view s);
 // Whether a translation's placeholders fit the English's. A plain entry: the same ones. A plural

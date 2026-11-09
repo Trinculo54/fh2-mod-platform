@@ -629,8 +629,10 @@ typedef struct FH2ModApi {
        set_string_tr: set_string with a key, for each language's string table
        in its own words: every table gets the text for its language, so the
        game shows the right one whatever language it picks. `msg_key` and
-       `english` are looked up as in tr(). Write it from fh2mod_init, as
-       set_string.
+       `english` are looked up as in tr(). A translation whose braces don't
+       fit the English's ({0}, {{token}}), which the game's own formatting
+       could misread, goes in as the English (the log says so). Write it
+       from fh2mod_init, as set_string.
 
        format_number: `v` with `decimals` digits after the point (0 to 6),
        the way the language writes numbers: 1,234.5 in English, 12 345,5 in
