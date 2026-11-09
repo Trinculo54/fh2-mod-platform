@@ -119,6 +119,18 @@ int wmain(int argc, wchar_t** argv) {
         Sleep(60);   // a slow frame, so a press reaches the mod (and its buttons() call) before the next one
         return a;
     };
+    // A press reaches the mod on the platform's thread, and the mod's line about it (with what its buttons() call
+    // saw) can take longer than a frame to write to a slow disk. Before the frame after a press changes what's
+    // held, wait (up to 3 s) until the mod has logged n presses in all.
+    auto presses_logged = [](std::size_t n) {
+        for (int i = 0; i < 60; ++i) {
+            const std::string l = slurp(L"fh2-mods\\platform.log");
+            std::size_t c       = 0;
+            for (std::size_t at = 0; (at = l.find("[PadMod] press ", at)) != std::string::npos; ++at) ++c;
+            if (c >= n) return;
+            Sleep(50);
+        }
+    };
     auto is = [](const After& a, uint64_t taken, uint64_t held) {
         return a.taken == taken && a.held == held && a.raw == static_cast<uint16_t>(held & 0xF3FF);
     };
@@ -135,6 +147,7 @@ int wmain(int argc, wchar_t** argv) {
     CHECK(is(frame(C(kLeft)), 0, C(kLeft)));                         // pressed again without LB: the game's
     CHECK(is(frame(C(kLB) | C(kA)), 0, C(kLB) | C(kA)));             // A isn't the layer's
     CHECK(is(frame(C(kLB) | C(34)), C(34), C(kLB)));                 // Up+Right, the diagonal control 34: hidden
+    presses_logged(3);                                               // Up's and Right's buttons() while held
     CHECK(is(frame(C(kLB)), 0, C(kLB)));                             // and cleared by the game when let go
     *reinterpret_cast<uint64_t*>(slot + 0x1E8) = C(kA);             // something the game itself took...
     CHECK(is(frame(C(kLB) | C(kA)), C(kA), C(kLB) | C(kA)));         // ...stays taken while held, untouched
@@ -145,6 +158,7 @@ int wmain(int argc, wchar_t** argv) {
     CHECK(is(frame(0), 0, 0));
     a = frame(C(kLB) | C(kRight) | C(30) | C(31));
     CHECK(is(a, C(kRight), C(kLB)) && a.dpad_dir == 8);              // LB + Right: all of it hidden, the d-pad idle
+    presses_logged(4);
     a = frame(C(kLB));
     CHECK(is(a, 0, C(kLB)) && a.dpad_dir == 8);
 
