@@ -367,7 +367,12 @@ void slider_set(Row* r, void* obj, uint8_t* value) {
     if (!r->choices.empty()) {   // a choice row (API 9): its index, to on_change
         const int v = static_cast<int>(std::lround(f));
         r->value    = v;
-        log_set(r, r->choices[static_cast<std::size_t>(v)]);
+        std::string name;   // copied under g_mu: set_setting_text (API 10) can rename the choices from a mod's thread
+        {
+            std::scoped_lock lk{g_mu};
+            name = static_cast<std::size_t>(v) < r->choices.size() ? r->choices[static_cast<std::size_t>(v)] : std::to_string(v);
+        }
+        log_set(r, name);
         if (r->on_change) {
             UiCallback cb{r->mod, UiCb::setting, g_last_hud_page.load()};
             ui_note_callback(r->mod);
