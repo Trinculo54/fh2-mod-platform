@@ -86,6 +86,8 @@ std::filesystem::path game_mount(); // empty if not found
 
 // files.cpp: file overrides in Extra Options' mediaoverride folder.
 int set_file(FH2Mod* mod, const char* media_path, const void* data, std::size_t size);
+// set_file as mods call it (the API): the platform's own UI files (xaml_safety.hpp) are refused, with a log line.
+int mod_set_file(FH2Mod* mod, const char* media_path, const void* data, std::size_t size);
 void clear_file(FH2Mod* mod, const char* media_path);
 // Removes overrides from earlier launches that no mod owns now.
 void clean_leftover_files(const std::vector<FH2Mod*>& mods);

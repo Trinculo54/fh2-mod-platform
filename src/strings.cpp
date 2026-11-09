@@ -12,6 +12,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
@@ -226,7 +227,49 @@ bool ieq(std::string_view a, std::string_view b) {
 
 std::vector<char> unzip_file(const fs::path& zip, std::string_view name) {
     std::ifstream in{zip, std::ios::binary};
-    std::vector<char> d((std::istreambuf_iterator<char>(in)), {});
+    const std::vector<char> d((std::istreambuf_iterator<char>(in)), {});
+    return unzip_from(d, name);
+}
+
+bool zip_names(const fs::path& zip, std::vector<std::string>& names) {
+    names.clear();
+    std::ifstream in{zip, std::ios::binary};
+    if (!in) return false;
+    in.seekg(0, std::ios::end);
+    const auto size = static_cast<std::size_t>(in.tellg());
+    if (size < 22) return false;
+    // the end record is in the last 22 bytes plus at most a 64 KB comment
+    const std::size_t tail = std::min<std::size_t>(size, 22 + 65535);
+    std::vector<char> t(tail);
+    in.seekg(static_cast<std::streamoff>(size - tail));
+    if (!in.read(t.data(), static_cast<std::streamsize>(tail))) return false;
+    std::size_t eocd = std::string::npos;
+    for (std::size_t i = tail - 22 + 1; i-- > 0;)
+        if (r32(t, i) == 0x06054b50) {
+            eocd = i;
+            break;
+        }
+    if (eocd == std::string::npos) return false;
+    const std::size_t entries = r16(t, eocd + 10);
+    const std::size_t cd_size = r32(t, eocd + 12), cd_at = r32(t, eocd + 16);
+    if (cd_at + cd_size > size) return false;
+    std::vector<char> cd(cd_size);
+    in.seekg(static_cast<std::streamoff>(cd_at));
+    if (cd_size && !in.read(cd.data(), static_cast<std::streamsize>(cd_size))) return false;
+    std::size_t at = 0;
+    for (std::size_t e = 0; e < entries; ++e) {
+        if (at + 46 > cd.size() || r32(cd, at) != 0x02014b50 || at + 46 + r16(cd, at + 28) > cd.size()) {
+            names.clear();
+            return false;
+        }
+        const uint16_t nlen = r16(cd, at + 28), xlen = r16(cd, at + 30), clen = r16(cd, at + 32);
+        names.emplace_back(cd.data() + at + 46, nlen);
+        at += 46 + nlen + xlen + clen;
+    }
+    return true;
+}
+
+std::vector<char> unzip_from(const std::vector<char>& d, std::string_view name) {
     if (d.size() < 22) return {};
     std::size_t eocd = std::string::npos;
     for (std::size_t i = d.size() - 22 + 1; i-- > 0 && d.size() - i < 22 + 65536;)

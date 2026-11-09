@@ -645,7 +645,7 @@ void* api_wait_for_game(uint32_t timeout_ms) {
 
 // ---- API 2: files, database, other mods ------------------------------------------
 
-int api_set_file(FH2Mod* m, const char* path, const void* data, size_t size) { return set_file(m, path, data, size); }
+int api_set_file(FH2Mod* m, const char* path, const void* data, size_t size) { return mod_set_file(m, path, data, size); }
 void api_clear_file(FH2Mod* m, const char* path) { clear_file(m, path); }
 
 void api_add_sql(FH2Mod* m, const char* sql) {

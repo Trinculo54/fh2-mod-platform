@@ -41,6 +41,10 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->set_file(g_mod, "media/UI/keep.xml", x, sizeof x - 1);
     api->set_file(g_mod, "UI/handmade.xml", x, sizeof x - 1);
     api->set_file(g_mod, "UI/temp.xml", x, sizeof x - 1);
+    // the platform's own UI files (platform 2.9.0): refused, however they're spelt
+    if (!api->set_file(g_mod, "UI/Scenes/Anthem/A_PauseMenu.xaml", x, sizeof x - 1) &&
+        !api->set_file(g_mod, "media\\UI.zip\\Scenes\\Anthem\\a_modpage_80.XAML.", x, sizeof x - 1) && !api->set_file(g_mod, "stateflow/pause.xml", x, sizeof x - 1))
+        api->log(g_mod, "the platform's own files were refused");
     api->add_sql(g_mod, "UPDATE AIPlayers SET XP = 12345 WHERE Id = 1; UPDATE AIPlayers SET XP = 777 WHERE Id = 2");
     api->publish_interface(g_mod, "TestMod.Math", 1, &g_math);
 
@@ -67,6 +71,11 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
                        "<Grid x:Name=\"TestContent\"><Button x:Name=\"FirstItem\" Visibility=\"{Binding FH2Mod_Slot_2_Is_1, "
                        "Converter={StaticResource FH2Mod_ShowIf}}\" /></Grid>",
                        "<ContentControl x:Name=\"DefaultHelpPanel\" Style=\"{StaticResource A_Style_ContentControl_DefaultButtonBar}\" />");
+    // refused by the check when the game's UI.zip is there (platform 2.9.0): a key no page has; Stats keeps the XAML above
+    api->set_page_xaml(g_mod, "Stats", "<Color x:Key=\"Test_Color\">#FF102030</Color>",
+                       "<Grid x:Name=\"TestContent\"><Button x:Name=\"FirstItem\" Style=\"{StaticResource Test_NoSuchKey}\" Visibility=\"{Binding "
+                       "FH2Mod_Slot_2_Is_1, Converter={StaticResource FH2Mod_ShowIf}}\" /></Grid>",
+                       "<ContentControl x:Name=\"DefaultHelpPanel\" Style=\"{StaticResource A_Style_ContentControl_DefaultButtonBar}\" />");
     if (api->get_page_slot(g_mod, "Stats", 2) == 0 && api->set_page_slot(g_mod, "Stats", 2, 1) && api->get_page_slot(g_mod, "Stats", 2) == 1 &&
         !api->set_page_slot(g_mod, "Stats", 16, 1) && !api->focus_page_element(g_mod, "Stats", "FirstItem"))
         api->log(g_mod, "page slots ok");
@@ -75,6 +84,18 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->add_page(g_mod, &other);
     api->add_page(g_mod, &other);                         // refused: already there
     api->set_page_rows(g_mod, "Missing", rows, 1);        // refused: no such page
+    // Pages of its own design that can't be shown (platform 2.9.0): Design's XAML uses a resource key no page has
+    // (refused when the game's UI.zip is there to check it against); Crashy was opening when the game last stopped
+    // (the test writes fh2-mods\platform-pages.txt so), so it's left out this session.
+    FH2Page design{sizeof design};
+    design.key = "Design"; design.title = "Design";
+    api->add_page(g_mod, &design);
+    const int design_set = api->set_page_xaml(g_mod, "Design", nullptr, "<Grid x:Name=\"FirstItem\" Style=\"{StaticResource Test_NoSuchStyle}\" />", nullptr);
+    api->log(g_mod, design_set ? "Design's XAML was taken" : "Design's XAML was refused");
+    FH2Page crashy{sizeof crashy};
+    crashy.key = "Crashy"; crashy.title = "Crashy";
+    api->add_page(g_mod, &crashy);
+    api->set_page_xaml(g_mod, "Crashy", nullptr, "<Grid x:Name=\"FirstItem\" />", nullptr);
     // text on the page's tile; not on a page without one
     if (api->set_page_tile_text(g_mod, "Stats", "12 / 34 G") && !api->set_page_tile_text(g_mod, "Other", "x") &&
         !api->set_page_tile_text(g_mod, "Missing", "x") && api->set_page_tile_colors(g_mod, "Stats", 0xFF3667DB, 0xFFFEFEFE) &&

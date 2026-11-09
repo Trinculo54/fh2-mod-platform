@@ -170,7 +170,11 @@ typedef struct FH2ModApi {
        file: returns 1 if written (or already identical), 0 if another mod
        already replaces it or the write failed (the log says which). String
        tables and the game database have their own functions above and
-       below, and can't be replaced whole. */
+       below, and can't be replaced whole. From platform 2.9.0 the
+       platform's own UI files are refused too (A_Hud, A_Splash,
+       A_PauseMenu, A_PauseOptions, A_ModOptions and A_ModPage_NN in
+       UI\Scenes\Anthem, stateflow\pause.xml and ui_screens.xml; api.md
+       lists them). */
     int (*set_file)(FH2Mod* mod, const char* media_path, const void* data, size_t size);
     /* Stop replacing a file (or all of yours, if NULL): the override is
        deleted and the game reads its own copy again. Files a mod no longer
@@ -367,6 +371,13 @@ typedef struct FH2ModApi {
        otherwise its row says which tile opens it. Returns 1, or 0 if you
        have no page called `page_key`, `content` has no FirstItem, or a
        fragment's tags don't balance (the page keeps the XAML it had).
+       From platform 2.9.0 it also returns 0 when a resource key the XAML
+       uses isn't one every page has or one of its own, or an image isn't
+       one of the game's textures, which would crash the game as the page
+       opens: the page keeps the XAML it had, or, if none has passed yet,
+       shows "This page couldn't be shown" until XAML that passes is set.
+       A page the game crashed opening is left out until the mod's DLL
+       changes. api.md has the rules.
 
        Bindings: slot n (0..15) is an int of the page's, "FH2Mod_Slot_<n>",
        which XAML can bind two-way (a list's SelectedIndex, say), and
