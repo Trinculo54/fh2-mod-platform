@@ -126,6 +126,13 @@ fi
 wine "$b/car_ids_test.exe"
 wine "$b/l10n_test.exe"
 wine "$b/seen_test.exe"
+# The platform's own UI files, the check on pages of a mod's own design and the page crash guard's state
+# (src/xaml_safety.cpp), against fake zips; with FH2_MEDIA set, against the install's UI.zip and textures as well.
+if [ -n "${FH2_MEDIA:-}" ]; then
+    FH2_MEDIA="$(winepath -w "$FH2_MEDIA" 2>/dev/null || echo "$FH2_MEDIA")" wine "$b/xaml_safety_test.exe"
+else
+    wine "$b/xaml_safety_test.exe"
+fi
 if command -v python3 > /dev/null; then
     python3 -I "$root/tools/l10n/extract.py" --check --domain TestMod -o "$root/tests/l10n/test_mod.pot" "$root/tests/test_mod.cpp"
     python3 -I "$root/tools/l10n/po2inc.py" --check "$root/tests/l10n/test_mod_l10n.inc" test_mod_translations \

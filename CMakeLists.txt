@@ -184,6 +184,13 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         target_include_directories(seen_test PRIVATE src)
         target_compile_options(seen_test PRIVATE ${_warn})
         target_link_options(seen_test PRIVATE -static)
+        # The platform's own UI files, the check pages of a mod's own design pass and the page crash guard's state
+        # (src/xaml_safety.cpp), with no game: a small fake UI.zip and texture zip of its own. Run xaml_safety_test.exe
+        # (with FH2_MEDIA set to an install's media folder, also against the real UI.zip and textures).
+        add_executable(xaml_safety_test tests/xaml_safety_test.cpp src/xaml_safety.cpp src/strings.cpp)
+        target_include_directories(xaml_safety_test PRIVATE src)
+        target_compile_options(xaml_safety_test PRIVATE ${_warn})
+        target_link_options(xaml_safety_test PRIVATE -static)
         # What's different under Wine and Proton (src/wine.cpp), on its own: run wine_test.exe.
         add_executable(wine_test tests/wine_test.cpp src/wine.cpp)
         target_include_directories(wine_test PRIVATE src)
