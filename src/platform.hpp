@@ -271,6 +271,9 @@ void add_dump_memory(FH2Mod* mod, const void* p, std::size_t n); // memory a mod
 int hotkey_add(FH2Mod* mod, const FH2Hotkey* hotkey);
 // Their rows' text, in the game's language now (before the pages are written).
 void hotkeys_refresh_text();
+// A mod's hotkey by its key: its binding now (the player may have changed it on the Mods page). False if the mod has
+// no such hotkey. For tips that name one (FH2Prompt.hotkey, API 10).
+bool hotkey_binding(const FH2Mod* mod, const std::string& key, uint32_t* vk, uint32_t* modifiers, uint32_t* chord);
 
 // commands.cpp: mods' commands, run through a named pipe (API 9).
 int command_add(FH2Mod* mod, const char* name, const char* help, FH2CommandFn fn, void* user);

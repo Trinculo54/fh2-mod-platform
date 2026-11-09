@@ -71,11 +71,13 @@ int wmain(int argc, wchar_t** argv) {
     char* game = map_game(argv[1]);
     CHECK(game != nullptr);   // "press Play"
     std::string log;
+    // the pad layer, and the pop-ups' hooks (API 10), which start in every session though PadMod never declared any
     for (int i = 0; i < 300; ++i) {
         Sleep(100);
         log = slurp(L"fh2-mods\\platform.log");
-        if (has(log, "pad layers are on") || has(log, "pad layers are off")) break;
+        if ((has(log, "pad layers are on") || has(log, "pad layers are off")) && has(log, "[Pop-ups] pop-ups and tips are ")) break;
     }
+    CHECK(has(log, "[Pop-ups] pop-ups and tips are ready"));
     CHECK(has(log, "[PadMod] pad layer Chat: while LB is held, the game doesn't see Up+Down+Left+Right"));
     CHECK(has(log, "[PadMod] layer Chat added"));
     CHECK(has(log, "[PadMod] add_layer: pad layer Both clashes with PadMod's Chat (LB with Up+Down+Left+Right)"));
@@ -158,6 +160,10 @@ int wmain(int argc, wchar_t** argv) {
     for (std::size_t at = 0; (at = log.find("[PadMod] press ", at)) != std::string::npos; ++at) ++presses;
     CHECK(presses == 4);
     CHECK(!has(log, "crashed in its on_press"));
+    // its pop-up, sent mid-session without declaring pop-ups: queued, and ui_status says they can show
+    CHECK(has(log, "[PadMod] shows pop-ups without saying so"));
+    CHECK(has(log, "[PadMod] pop-up queued: Pad layer / A press (key Press)"));
+    CHECK(has(log, "[PadMod] show_toast 1, then ui_status has pop-ups: yes"));
     std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
     return fails;
 }

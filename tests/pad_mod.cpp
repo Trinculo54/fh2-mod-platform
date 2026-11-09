@@ -1,5 +1,6 @@
 // PadMod.dll, for tests/pad_hook_test.cpp: one pad layer (LB with the d-pad) that logs each press with
-// what buttons() says, and a layer the platform has to refuse.
+// what buttons() says, and a layer the platform has to refuse. Its first press also sends a pop-up it never
+// declared (API 10), which must find the platform's pop-up hooks in.
 #include "fh2mod.h"
 #include "fh2mod_pad.h"
 
@@ -16,6 +17,19 @@ void on_press(void*, const char* key, uint32_t button) {
     const int ok  = g_pad->buttons(&held);
     char line[96];
     std::snprintf(line, sizeof line, "press %s 0x%04X (buttons %d 0x%04X)", key, button, ok, held);
+    g_api->log(g_mod, line);
+    // API 10: a pop-up from a mod that never declared pop-ups, sent mid-session; the platform's hooks for them are
+    // in all the same, so ui_status has FH2_UI_TOASTS
+    static bool toasted = false;
+    if (toasted || g_api->api_version < 10) return;
+    toasted    = true;
+    FH2Toast t{};
+    t.size     = sizeof t;
+    t.key      = "Press";
+    t.title    = "Pad layer";
+    t.subtitle = "A press";
+    const int queued = g_api->show_toast(g_mod, &t);
+    std::snprintf(line, sizeof line, "show_toast %d, then ui_status has pop-ups: %s", queued, g_api->ui_status(g_mod) & FH2_UI_TOASTS ? "yes" : "no");
     g_api->log(g_mod, line);
 }
 

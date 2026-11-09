@@ -117,6 +117,30 @@ The HUD you drive with is `Scenes/Anthem/A_Hud.xaml`, class `Hud` (vtable `0x2DE
 - **The suspend.** The speedometer, map, prompts and notifications are statuses of two of the world's modules, `HUDModule` (vtable `0x2CDC7E0`) and `HUDModuleAR` (`0x2CDC890`, the prompts and markers in the world), in the world's module list (WorldManager `*(game+0x34C0F40)`, world `[wm+8]`, list at `world+0xF8`). Each reaches a `HUDStatusPrioritiserModule` (vtable `0x2CDC5E8`) through a weak pointer (`module+0x68`, control block `+0x70`); in testing both shared one. `0x78B0F0(HUDModule*)` and `0x78B1A0(HUDModuleAR*)` suspend: each hides what its prioritiser shows (`0x77A430`) and sets the prioritiser's byte `+0xA8` to 1 (at `0x78B161` and `0x78B211`). `0x785CD0(module)` resumes, clearing it (at `0x785CE7`). The game does both itself (stateflow's `global.suspend_all_huds` and `resume_all_huds`: the rewind and `in_game_ui.xml`'s `prepare_for_driving` end with a resume), and the prioritiser's vtable `+0x10` (`0x7813D0`) clears the flag too (at `0x7813E5`), so a mod that keeps the HUD hidden has to suspend again whenever the flag reads 0. The Drivatars' name tags aren't statuses and stay.
 - **The prioritiser.** While `+0xA8` is set, its update lets a new status through only if the status's byte `+0x110` is set (the check is at `0x77B9E2`); the others wait. In testing that held back small notifications and big banners (one for over two minutes) and the autosave spinner, which showed after the resume, while a Rivals status was dropped, the in-world prompts were gone, and waiting skill statuses flashed for about a frame each. A resume brings the speedometer and map back in one frame.
 
+## HUD notifications
+
+The small notification at the bottom of the driving view (a road discovered, an achievement) is a `HUDMinorNotificationComponent`. The platform's pop-ups and tips (API 10) use it as Achievements does: Show (`0x755330`) on a live component, with display strings from MakeDisplayString (`0x323310`), called from the AchievementsModule's tick (`0x3FCD84`).
+
+- **The option.** The game's Notifications setting (Pause > Settings > HUD) is `Options/MinorNotifications` in the player's profile (`CForzaProfile`, at `CPlayer+0x328`), an `Int32` defaulting to 1. The minor-notification gate `0x754920` reads it when a notification is sent, not when it appears: above 0 it shows; otherwise only while the scene `LimitedHudMinorNotification` (`0x53`) is on top. It doesn't cover the big banners at the top.
+- **The gate's callers.** Show calls the gate at `0x75542C`; a sibling of Show (`0x7554B0`, road discoveries, photo collection and rewards) at `0x7555A5`; the component's reflected `Show` method (`0x750E60`) at `0x750FB1`. When the gate lets a notification through it stores a new object at the component's `+0x198`; when it doesn't, that stays as it was. The platform's pop-ups hook all three calls to see every notification shown.
+- **The chime.** The control plays `HZ2_SFX_HUD_Notification_GenericOn_01` itself each time it shows one, so a pop-up needs no sound of its own.
+- **Text.** MakeDisplayString converts with the Windows code page (`MultiByteToWideChar` with code page 0), so text beyond ASCII can come out garbled; its wide sibling `0x1239840` is a constructor run in place, not a drop-in.
+
+### Code released mods check in memory
+
+A mod that compares game code in memory switches its feature off when another mod has patched it. These are the ones known, so new hooks keep clear of them (the platform's do, by at least `0xEE` bytes):
+
+| Mod | Checks |
+|---|---|
+| Achievements 1.0.x | Show `0x755330` and MakeDisplayString `0x323310`, 15 bytes each, once, at its first pop-up, with no fallback to the exe on disk |
+| FH2MP 1.2.0 | MakeDisplayString `0x323310`, 16 bytes, and about 85 other places, none near the platform's |
+| WreckingBall 1.0.0 to 1.3.0 | the code it hooks (`0x12CC730`, `0x1377B50`, `0x384C00` among them) and six vtable slots; 1.3.3 falls back to the exe on disk |
+| CCBR 1.0.0 | car code and seven `lea rdx` sites in `0x6A2AF7`-`0x6B992A` |
+| Universal Radio 1.0.0 to 1.7.1 | operator new's prologue `0x3229C0`, the PE headers and the FMOD exports |
+| WheresMyBuddy 1.7.0 | the `ChampionshipDrivatarsState` vtable slot `0x2D44F30` |
+
+So Show's and MakeDisplayString's first 16 bytes must stay unpatched: call them, don't hook them.
+
 ## Finding more
 
 Most of this came from the exe's own strings and RTTI. The exe keeps MSVC type names like `.?AVChampionshipDrivatarsState@SaveStates@@`, which lead to vtables. SQL in the exe shows which tables of the game database it reads, and how. When you find something, a pull request adding it here helps the next person.

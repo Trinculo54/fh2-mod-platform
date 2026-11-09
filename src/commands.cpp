@@ -6,6 +6,7 @@
 // A request is one line of UTF-8: "list", or "<mod> <command> [args]" (a mod name with spaces
 // in double quotes); the reply is text, and the connection then closes.
 #include "platform.hpp"
+#include "ui_templates.hpp"
 #include "updates.hpp"
 
 #include <windows.h>
@@ -107,8 +108,10 @@ std::string handle(std::string line) {
     static char reply[kReplyMax];
     reply[0] = '\0';
     log_line(owner->name, "command: " + cname + (args.empty() ? "" : " " + args));
+    ui_note_callback(owner);   // a pop-up in reply to it counts as one (API 10)
     if (!call_command(fn, user, cname.c_str(), args.c_str(), reply, sizeof reply)) {
         log_line(owner->name, "crashed in its command " + cname);
+        ui_mod_faulted(owner);
         return "error: " + owner->name + "'s command " + cname + " crashed\n";
     }
     reply[sizeof reply - 1] = '\0';

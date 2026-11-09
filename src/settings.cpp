@@ -38,8 +38,10 @@
 #include "l10n.hpp"
 #include "lang.hpp"
 #include "platform.hpp"
+#include "popups.hpp"
 #include "strings.hpp"
 #include "text.hpp"
+#include "ui_templates.hpp"
 #include "updates.hpp"
 #include "xml_text.hpp"
 
@@ -266,6 +268,12 @@ void notify_changed(void* obj, void* desc) {
     }
 }
 
+// A crash caught in a mod's callback: the line, and its waiting pop-ups and tip dropped (API 10).
+void crashed_in(FH2Mod* m, const std::string& what) {
+    log_line(m->name, "crashed in its " + what);
+    ui_mod_faulted(m);
+}
+
 bool call_on_change(FH2SettingChangedFn fn, void* user, const char* key, int v) {
     __try {
         fn(user, key, v);
@@ -324,12 +332,12 @@ void slider_set(Row* r, void* obj, uint8_t* value) {
         const int v = static_cast<int>(std::lround(f));
         r->value    = v;
         log_line(r->mod->name, r->key + " set to " + r->choices[static_cast<std::size_t>(v)] + " on the Mods page");
-        if (r->on_change && !call_on_change(r->on_change, r->user, r->key.c_str(), v))
-            log_line(r->mod->name, "crashed in its on_change for " + r->key);
+        if (r->on_change) ui_note_callback(r->mod);
+        if (r->on_change && !call_on_change(r->on_change, r->user, r->key.c_str(), v)) crashed_in(r->mod, "on_change for " + r->key);
     } else {
         log_line(r->mod->name, r->key + " set to " + show(*r, f) + " on the Mods page");
-        if (r->on_slide && !call_on_slide(r->on_slide, r->user, r->key.c_str(), f))
-            log_line(r->mod->name, "crashed in its on_slide for " + r->key);
+        if (r->on_slide) ui_note_callback(r->mod);
+        if (r->on_slide && !call_on_slide(r->on_slide, r->user, r->key.c_str(), f)) crashed_in(r->mod, "on_slide for " + r->key);
     }
     if (restart_pending() != pending_before && obj && g_notice_desc) notify_changed(obj, g_notice_desc);
 }
@@ -343,8 +351,8 @@ void __cdecl row_set(void* desc, void* obj, uint8_t* value) {
     const int old            = r->value.exchange(v);
     if (old == v) return;
     log_line(r->mod->name, r->key + " set to " + std::to_string(v) + " on the Mods page");
-    if (r->on_change && !call_on_change(r->on_change, r->user, r->key.c_str(), v))
-        log_line(r->mod->name, "crashed in its on_change for " + r->key);
+    if (r->on_change) ui_note_callback(r->mod);
+    if (r->on_change && !call_on_change(r->on_change, r->user, r->key.c_str(), v)) crashed_in(r->mod, "on_change for " + r->key);
     if (restart_pending() != pending_before && obj && g_notice_desc) notify_changed(obj, g_notice_desc);
 }
 
@@ -796,7 +804,8 @@ void __cdecl slot_set(void* desc, void* obj, uint8_t* value) {
     if (!fn) return;
     // inside the binding's set: no focusing from here, and the slot being set isn't notified again
     InCallback in{nullptr, n};
-    if (!call_on_slot(fn, user, key.c_str(), n, v)) log_line(mod->name, "crashed in its on_slot for page " + key);
+    ui_note_callback(mod);
+    if (!call_on_slot(fn, user, key.c_str(), n, v)) crashed_in(mod, "on_slot for page " + key);
 }
 void** __cdecl slot_is_get(void** out, void* desc, void* obj) {
     if (obj) g_custom_obj = obj;
@@ -1858,8 +1867,10 @@ void pages_opening(int only = -1) {
             if (g_pages[j].on_open && (only < 0 || static_cast<std::size_t>(only) == j))
                 calls.push_back({g_pages[j].mod, g_pages[j].on_open, g_pages[j].user, g_pages[j].key});
     }
-    for (const Call& c : calls)
-        if (!call_on_open(c.fn, c.user, c.key.c_str())) log_line(c.mod->name, "crashed in its on_open for page " + c.key);
+    for (const Call& c : calls) {
+        ui_note_callback(c.mod);
+        if (!call_on_open(c.fn, c.user, c.key.c_str())) crashed_in(c.mod, "on_open for page " + c.key);
+    }
 }
 
 // What A does on a row of a list on the MODS tab: open a page in the browser, show a view, or
@@ -3075,7 +3086,8 @@ void select_on_page(int j, const std::string& row) {
     if (!fn) return;
     play_sound(kSoundSelect);
     log_line(mod->name, "A on " + row + " on page " + key);
-    if (!call_on_select(fn, user, key.c_str(), row.c_str())) log_line(mod->name, "crashed in its on_select for page " + key);
+    ui_note_callback(mod);
+    if (!call_on_select(fn, user, key.c_str(), row.c_str())) crashed_in(mod, "on_select for page " + key);
 }
 
 // Which HUD page objects are Installed mods and Updates (set when one loads; only compared).
@@ -3204,8 +3216,9 @@ bool custom_page_button(void* page, int j, int button, bool pressed) {
         g_focus_again.clear();   // a press of its own: nothing left over to focus on its release
         if (fn) {
             InCallback in{page, -1};
+            ui_note_callback(mod);
             if (!call_on_button(fn, user, key.c_str(), code, &r)) {
-                log_line(mod->name, "crashed in its on_button for page " + key);
+                crashed_in(mod, "on_button for page " + key);
                 r = FH2_PAGE_HANDLED;
             }
         }
@@ -3565,14 +3578,14 @@ uint64_t d_hud_shown(void* page, void* b, void* c, void* d) {
     notify_changed(page, g_mod_notice_desc);
     return r;
 }
-// The HUD layer hooks this slot too (its page tracking), and its hook can go in first: the slot then
-// holds a platform stub, and hook_pointer joins that hook's site. So, only when a mod has a layer, the
-// slot is checked in the exe on disk as well; a change made outside the platform is still refused by
-// hook_pointer's own check. Without a layer the check is 2.8.0's.
+// The HUD layer and the pop-ups (their page tracking, API 10) hook this slot too, and their hooks can go
+// in first: the slot then holds a platform stub, and hook_pointer joins that hook's site. So, when a mod
+// has a layer or the pop-ups track the page, the slot is checked in the exe on disk as well; a change made
+// outside the platform is still refused by hook_pointer's own check. Without either the check is 2.8.0's.
 bool hud_shown_slot_ok(void** slot) {
     const uint64_t original = 0x140000000ull + RVA_HUD_SHOWN;
     const bool as_built     = readable(slot, 8) && *slot == reinterpret_cast<void*>(g_base + RVA_HUD_SHOWN);
-    if (!hud_layer_active()) return as_built;
+    if (!hud_layer_active() && !popups_track_page()) return as_built;
     return as_built || (readable(slot, 8) && disk_bytes_equal(slot, &original, 8));
 }
 void hook_hud_shown(FH2Mod* m) {
@@ -3795,8 +3808,9 @@ bool d_splash_button(void* page, int button, bool pressed) {
     }
     play_sound(kSoundSelect);
     int r = FH2_TITLE_HANDLED;
+    ui_note_callback(mod);
     if (!call_on_press(fn, user, key.c_str(), &r)) {
-        log_line(mod->name, "crashed in its on_press for title entry " + key);
+        crashed_in(mod, "on_press for title entry " + key);
         r = FH2_TITLE_HANDLED;
     }
     if (r == FH2_TITLE_START) {
@@ -3885,8 +3899,9 @@ void handle_title_choice(PopupFn* self) {
     }
     if (stopped_online(mod)) return;   // stopped for online play (go_online) while its list was open
     int r = FH2_TITLE_HANDLED;
+    ui_note_callback(mod);
     if (!call_on_choose(fn, user, key.c_str(), static_cast<uint32_t>(choice), &r)) {
-        log_line(mod->name, "crashed in its on_choose for title entry " + key);
+        crashed_in(mod, "on_choose for title entry " + key);
         r = FH2_TITLE_HANDLED;
     }
     if (r == FH2_TITLE_START) {

@@ -173,8 +173,10 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->set_string_tr(g_mod, "LoadingMessages.str", 0x5507, "loading.tip", L"A loading tip from TestMod");
 
     // UI templates (API 10): all twelve members are there. ui_uses is real (an unknown bit is ignored, a second call
-    // adds to the first); the others are being built, so each returns 0 and says so in the log once. Then the same
-    // through fh2mod_ui.h, whose notify_or_log writes the pop-up to the log when it isn't shown.
+    // adds to the first). Pop-ups and tips queue with no game (their hooks wait for it): a pop-up taken down while
+    // waiting, a private one, a bad key refused; a tip queued, marked seen (which drops it), then refused as seen,
+    // and one whose text has no {button}. The others are being built, so each returns 0 and says so in the log
+    // once. Then the same through fh2mod_ui.h.
     {
         const bool all = api->size >= offsetof(FH2ModApi, show_page_hint) + sizeof api->show_page_hint && api->ui_status &&
                          api->ui_uses && api->play_ui_sound && api->show_toast && api->clear_toast && api->show_tip &&
@@ -193,19 +195,32 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
         static const char* const hints[] = {"Saved."};
         const int uses        = api->ui_uses(g_mod, FH2_UI_USES_TOASTS | FH2_UI_USES_TIPS | 0x100);
         const uint32_t status = api->ui_status(g_mod);
-        const int others = api->play_ui_sound(g_mod, FH2_SOUND_SELECT) + api->show_toast(g_mod, &toast) + api->show_tip(g_mod, &tip) +
-                           api->tip_seen(g_mod, "FirstTip") + api->show_message_box(g_mod, &box) +
+        const int toasted     = api->show_toast(g_mod, &toast);
+        api->clear_toast(g_mod, "Test");
+        FH2Toast secret{sizeof secret};
+        secret.key = "SignIn"; secret.title = "Signed in as"; secret.subtitle = "TestGamertag"; secret.flags = FH2_TOAST_FLAG_PRIVATE;
+        FH2Toast bad{sizeof bad};
+        bad.key = "no spaces"; bad.title = "Bad key";
+        const int toasts = api->show_toast(g_mod, &secret) + api->show_toast(g_mod, &bad);
+        const int tipped = api->show_tip(g_mod, &tip);
+        const int seen0  = api->tip_seen(g_mod, "FirstTip");
+        api->set_tip_seen(g_mod, "FirstTip", 1);
+        const int seen1 = api->tip_seen(g_mod, "FirstTip");
+        FH2Tip no_slot{sizeof no_slot};
+        no_slot.key = "NoSlot"; no_slot.text = "Press the button"; no_slot.button.glyph = FH2_GLYPH_X;
+        const int tips_again = api->show_tip(g_mod, &tip) + api->show_tip(g_mod, &no_slot);
+        const int others = api->play_ui_sound(g_mod, FH2_SOUND_SELECT) + api->show_message_box(g_mod, &box) +
                            api->set_page_help(g_mod, "Stats", &help, 1) + api->set_page_hints(g_mod, "Stats", hints, 1) +
                            api->show_page_hint(g_mod, "Stats", 0, FH2_HINT_INFO);
-        api->clear_toast(g_mod, "Test");
-        api->set_tip_seen(g_mod, "FirstTip", 1);
-        api->show_toast(g_mod, &toast);   // a second call: no second line in the log
-        api->log(g_mod, ("ui templates: ui_uses " + std::to_string(uses) + ", ui_status " + std::to_string(status) + ", the others " +
-                         std::to_string(others))
+        api->show_toast(g_mod, &toast);   // queued again
+        api->log(g_mod, ("ui templates: ui_uses " + std::to_string(uses) + ", ui_status " + std::to_string(status) + ", show_toast " +
+                         std::to_string(toasted) + " then " + std::to_string(toasts) + ", show_tip " + std::to_string(tipped) + ", tip_seen " +
+                         std::to_string(seen0) + " then " + std::to_string(seen1) + ", show_tip again " + std::to_string(tips_again) +
+                         ", the others " + std::to_string(others))
                             .c_str());
         api->ui_uses(g_mod, FH2_UI_USES_OWN_SWITCH);
         fh2_helpers_init(api, g_mod);
-        if (fh2ui_ui_status() == 0 && fh2ui_tip_seen("FirstTip") == 0 && !fh2ui_notify_or_log("Test pop-up", "from the helper"))
+        if (fh2ui_ui_status() == 0 && fh2ui_tip_seen("FirstTip") == 1 && fh2ui_notify_or_log("Test pop-up", "from the helper") == 1)
             api->log(g_mod, "ui helpers ok");
     }
 
@@ -231,8 +246,14 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     hk.key = "Broken"; hk.on_press = nullptr;
     api->add_hotkey(g_mod, &hk);                          // refused: no on_press
     // Commands: echo (answers with its arguments), fail (an error), a bad name, a repeat.
+    // echo also answers with a pop-up: a reply, since the platform has just called the command (API 10)
     api->add_command(g_mod, "echo", "echo <text>: answers with the text",
-                     [](void*, const char*, const char* args, char* reply, size_t size) { std::snprintf(reply, size, "%s", args); },
+                     [](void*, const char*, const char* args, char* reply, size_t size) {
+                         std::snprintf(reply, size, "%s", args);
+                         FH2Toast t{sizeof t};
+                         t.key = "Echo"; t.title = "Echo"; t.subtitle = args; t.flags = FH2_TOAST_FLAG_REPLY;
+                         g_api->show_toast(g_mod, &t);
+                     },
                      nullptr);
     api->add_command(g_mod, "fail", nullptr,
                      [](void*, const char*, const char*, char* reply, size_t size) { std::snprintf(reply, size, "error: as asked"); },
