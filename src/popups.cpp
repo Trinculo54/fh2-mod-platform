@@ -295,9 +295,49 @@ GateFn o_gate[3]               = {};
 std::atomic<void*> g_our_comp{nullptr};   // the component the platform's own Show is on, while it runs
 std::atomic<bool> g_our_drawn{false};
 
+// The platform's last pop-up or tip the game drew (show_now), for the line below. The platform paces around every
+// other Show, but Achievements 1.0.x, CommunityGarage and the game's road discoveries don't pace around the
+// platform's, and a later Show probably takes the place of the one on screen (the gate stores a new object at
+// +0x198). Whether it does is the in-game test's question (T11); until then the log says when it may have happened.
+constexpr double kCutShortMs = 1500;
+std::mutex g_last_own_mu;
+struct LastOwn {
+    void* comp = nullptr;
+    double at  = -1e18;
+    std::string mod;
+    bool tip  = false;
+    bool told = true;   // said once per Show of the platform's
+} g_last_own;
+
+void note_own_show(void* comp, double now, const PopupShow& s) {
+    std::scoped_lock lk{g_last_own_mu};
+    g_last_own = {comp, now, s.mod, s.tip, false};
+}
+
+// A Show from the game or another mod let through on the component the platform's last pop-up or tip is on, within
+// 1.5 s of it: said once for that pop-up or tip (so at most once every 5 s), naming the mod that sent it.
+void after_own_show(void* comp, double now) {
+    std::string mod;
+    bool tip   = false;
+    double ago = 0;
+    {
+        std::scoped_lock lk{g_last_own_mu};
+        if (g_last_own.told || comp != g_last_own.comp || now - g_last_own.at >= kCutShortMs) return;
+        g_last_own.told = true;
+        mod             = g_last_own.mod;
+        tip             = g_last_own.tip;
+        ago             = now - g_last_own.at;
+    }
+    plog_f("the game or another mod showed a notification %.1f s after %s's %s, on the same notification, so it may have taken its "
+           "place on screen%s",
+           ago / 1000.0, mod.c_str(), tip ? "tip" : "pop-up", tip ? " (the tip still counts as seen)" : "");
+}
+
 void gate_let_through(void* comp) {
+    const double now = now_ms();
     if (comp && comp == g_our_comp.load() && GetCurrentThreadId() == g_tick_thread.load()) g_our_drawn = true;
-    queue().show_seen(now_ms());
+    else if (comp) after_own_show(comp, now);
+    queue().show_seen(now);
 }
 
 // The gate stores a new object at the component's +0x198 only when it lets a pop-up through (S2 1.5).
@@ -532,6 +572,7 @@ void show_now(const PopupShow& s, double now) {
         return;
     }
     const PopupOutcome o = !g_watch.load() ? PopupOutcome::unknown : g_our_drawn.load() ? PopupOutcome::shown : PopupOutcome::refused;
+    if (o == PopupOutcome::shown) note_own_show(comp, now, s);
     queue().outcome(s.id, o, now);
     if (o != PopupOutcome::refused) play_sound(s.sound);
 }
