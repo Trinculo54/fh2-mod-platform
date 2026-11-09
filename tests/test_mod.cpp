@@ -71,6 +71,11 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
                        "<Grid x:Name=\"TestContent\"><Button x:Name=\"FirstItem\" Visibility=\"{Binding FH2Mod_Slot_2_Is_1, "
                        "Converter={StaticResource FH2Mod_ShowIf}}\" /></Grid>",
                        "<ContentControl x:Name=\"DefaultHelpPanel\" Style=\"{StaticResource A_Style_ContentControl_DefaultButtonBar}\" />");
+    // refused by the check when the game's UI.zip is there (platform 2.9.0): a key no page has; Stats keeps the XAML above
+    api->set_page_xaml(g_mod, "Stats", "<Color x:Key=\"Test_Color\">#FF102030</Color>",
+                       "<Grid x:Name=\"TestContent\"><Button x:Name=\"FirstItem\" Style=\"{StaticResource Test_NoSuchKey}\" Visibility=\"{Binding "
+                       "FH2Mod_Slot_2_Is_1, Converter={StaticResource FH2Mod_ShowIf}}\" /></Grid>",
+                       "<ContentControl x:Name=\"DefaultHelpPanel\" Style=\"{StaticResource A_Style_ContentControl_DefaultButtonBar}\" />");
     if (api->get_page_slot(g_mod, "Stats", 2) == 0 && api->set_page_slot(g_mod, "Stats", 2, 1) && api->get_page_slot(g_mod, "Stats", 2) == 1 &&
         !api->set_page_slot(g_mod, "Stats", 16, 1) && !api->focus_page_element(g_mod, "Stats", "FirstItem"))
         api->log(g_mod, "page slots ok");

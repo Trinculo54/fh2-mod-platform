@@ -134,7 +134,7 @@ struct ModPage {
     FH2PageButtonFn on_button = nullptr;
     FH2PageSlotFn on_slot     = nullptr;
     bool custom               = false;
-    bool xaml_refused         = false;   // its last XAML failed the check (page_guard.cpp): the page says so instead
+    bool xaml_refused         = false;   // XAML was refused by the check (page_guard.cpp) and none ever passed: the page says so instead
     std::string xaml_resources, xaml_content, xaml_help;
     std::string xaml_written;        // the content as last written (what's on screen)
     std::array<std::atomic<int>, FH2_PAGE_SLOTS> slots{};
@@ -4392,16 +4392,20 @@ int pages_set_xaml(FH2Mod* m, const char* key, const char* resources, const char
     }
     ModPage& pg = g_pages[j];
     if (!pg.custom && pg.tile < 0) log_line(m->name, std::string("set_page_xaml: ") + key + " has no tile, so nothing opens it");
-    pg.custom       = true;
-    pg.xaml_refused = !fits;
+    pg.custom = true;
     if (!fits) {
-        log_line(m->name, std::string("set_page_xaml: ") + key + " was refused: " + why +
-                              ". The page shows \"This page couldn't be shown\" until its XAML is set again");
-        pg.xaml_resources.clear();
-        pg.xaml_content.clear();
-        pg.xaml_help.clear();
+        // as with a missing FirstItem: the page keeps the last XAML that passed, and only a page that never had one
+        // says it couldn't be shown
+        if (!pg.xaml_content.empty()) {
+            log_line(m->name, std::string("set_page_xaml: ") + key + " was refused: " + why + ". The page keeps the XAML it had");
+        } else {
+            pg.xaml_refused = true;
+            log_line(m->name, std::string("set_page_xaml: ") + key + " was refused: " + why +
+                                  ". The page shows \"This page couldn't be shown\" until its XAML is set again");
+        }
         return 0;
     }
+    pg.xaml_refused   = false;
     pg.xaml_resources = resources ? resources : "";
     pg.xaml_content   = content;
     pg.xaml_help      = help ? help : "";

@@ -444,7 +444,11 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(log, "set_page_xaml: pages of a mod's own design are checked against 1096 resource keys from UI.zip's 43 application dictionaries"));
             CHECK(has(log, "[TestMod] set_page_xaml: Design was refused: the resource key Test_NoSuchStyle, in the content, isn't one of the game's "
                            "shared resources, the page's own or the fragment's"));
-            CHECK(has(log, "[TestMod] Design's XAML was refused") && !has(log, "[TestMod] set_page_xaml: Stats was refused"));
+            CHECK(has(log, "[TestMod] Design's XAML was refused") &&
+                  has(log, "copy them into the fragment's resources). The page shows \"This page couldn't be shown\" until its XAML is set again"));
+            // a page that already had XAML that passed keeps it when a later one is refused
+            CHECK(has(log, "[TestMod] set_page_xaml: Stats was refused: the resource key Test_NoSuchKey, in the content,") &&
+                  has(log, "The page keeps the XAML it had"));
         } else {
             CHECK(has(log, "set_page_xaml: pages of a mod's own design aren't checked this session, because AnthemApp.xaml couldn't be read from UI.zip"));
             CHECK(has(log, "[TestMod] Design's XAML was taken"));
@@ -606,7 +610,8 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(installed, "Icon=\"The game crashed opening this page last time, so it's left out until TestMod is updated. fh2-mods\\platform.log has more.\""));
             CHECK(has(installed, "Heading=\"Footer &lt;line&gt; &#183; dot\"") && has(installed, "local:BindingProxy.B=\"Alert\""));
             // the tile: the page of TestMod's own design, in the options page's frame
-            CHECK(has(tile, "<Grid x:Name=\"TestContent\">") && !has(tile, "BasicOptions") && has(tile, "x:Key=\"FH2Mod_ShowIf\""));
+            CHECK(has(tile, "<Grid x:Name=\"TestContent\">") && !has(tile, "BasicOptions") && has(tile, "x:Key=\"FH2Mod_ShowIf\"") &&
+                  !has(tile, "Test_NoSuchKey"));
             CHECK(has(tile, "<Color x:Key=\"Test_Color\">") && has(tile, "<Grid>\r\n<ContentControl x:Name=\"DefaultHelpPanel\" Style="));
             CHECK(has(tile, "x:Name=\"BottomBar\"") && has(tile, "x:Class =\"ForzaUI.A_HudOptions\""));
             // the Achievements tiles show the page's tile text
