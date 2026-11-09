@@ -91,6 +91,7 @@ struct Files {
     fs::path strings;       // fh2-mods\platform-db-strings.txt and platform-db-layer-strings.txt: the Data_Car.str
     fs::path layer_strings; // keys each copy's car names have (name_strings)
     fs::path car_ids;       // fh2-mods\platform-car-ids.txt: the Ids pack cars have (with_car_ids)
+    fs::path car_ids_copy;  // and its copy next to this folder's database: Stripped\platform-car-ids.txt in the layer
 };
 
 Files files() {
@@ -111,7 +112,8 @@ Files files() {
             mods / "platform-db-layer.txt",
             mods / "platform-db-strings.txt",
             mods / "platform-db-layer-strings.txt",
-            mods / "platform-car-ids.txt"};
+            mods / "platform-car-ids.txt",
+            instance_media() / L"Stripped" / L"platform-car-ids.txt"};
 }
 
 struct Stamp {
@@ -592,17 +594,112 @@ void note_sql_warning(const Sql& s, const std::string& why) {
 // on, in what the mods' SQL adds, and in the Ids packs write themselves (car_ids.cpp). A pack is left out, saying
 // why, when that database already has one of its cars, another pack adds it too, or its recorded Id's
 // rows are another source's now.
+//
+// The record is rewritten whole, in one step, each line with its line end (a hand edit that left the last line without
+// one no longer has the next car's line joined to it), with a copy next to this folder's database, which a clean
+// reinstall that empties fh2-mods keeps. A car the record doesn't have keeps the Id it had in the database the platform
+// built last time (ids_from_last_build), so losing both doesn't turn a save's car into another one.
+
+// "<media name><TAB><id>": false for any other line.
+bool record_line(const std::string& l, std::string& car, int64_t& id) {
+    const auto tab = l.find('\t');
+    uint64_t n     = 0;
+    if (tab == std::string::npos || !tab || !to_u64(std::string_view{l}.substr(tab + 1), n)) return false;
+    car = l.substr(0, tab);
+    id  = static_cast<int64_t>(n);
+    return true;
+}
+
+struct Record {
+    std::map<std::string, int64_t> ids;   // lower-case media name -> Id
+    std::set<int64_t> used;
+    std::vector<std::string> lines;      // platform-car-ids.txt's lines as they are, then the ones added this time
+};
+
+// Packs' cars the record doesn't have, with the Id they have in the last database the platform built: this folder's
+// on the temp drive, else a copy in mediaoverride with the platform's mark. Only Ids from kFirstPackCar to below
+// kFirstHandMade, and none the record gives another car.
+void ids_from_last_build(const Files& f, const std::vector<Sql>& given, Record& rec) {
+    struct Missing {
+        std::string key, car, source;
+    };
+    std::vector<Missing> missing;
+    for (const auto& s : given)
+        if (s.pack)
+            for (const auto& c : s.pack->cars)
+                if (!rec.ids.count(lower_ascii(c))) missing.push_back({lower_ascii(c), c, s.name});
+    for (const auto& [built, where] : {std::pair{&f.layer, "this folder's database on the temp drive"},
+                                       std::pair{&f.target, "mediaoverride\\Stripped\\gamedbRC.slt"}}) {
+        if (missing.empty() || !is_file(*built) || !has_marker(*built)) continue;
+        sqlite3* db       = nullptr;
+        sqlite3_stmt* q   = nullptr;
+        if (sqlite3_open_v2(narrow(built->wstring()).c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK &&
+            sqlite3_prepare_v2(db, "SELECT Id, MediaName FROM Data_Car WHERE Id >= ?1 AND Id < ?2", -1, &q, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(q, 1, car_ids::kFirstPackCar);
+            sqlite3_bind_int64(q, 2, car_ids::kFirstHandMade);
+            while (sqlite3_step(q) == SQLITE_ROW) {
+                const int64_t id = sqlite3_column_int64(q, 0);
+                const auto* t    = reinterpret_cast<const char*>(sqlite3_column_text(q, 1));
+                const auto m     = std::find_if(missing.begin(), missing.end(), [&](const Missing& x) { return t && x.key == lower_ascii(t); });
+                if (m == missing.end() || rec.used.count(id)) continue;
+                rec.ids[m->key] = id;
+                rec.used.insert(id);
+                rec.lines.push_back(m->car + "\t" + std::to_string(id));
+                log_line(m->source, "database: " + m->car + " is car " + std::to_string(id) + " again, as in " + where +
+                                        ", which the platform built last time (fh2-mods\\platform-car-ids.txt didn't have it)");
+                missing.erase(m);
+            }
+        }
+        sqlite3_finalize(q);
+        sqlite3_close(db);
+    }
+}
+
+// Writes `text` to `to` in one step, by way of a .platform-tmp file next to it.
+bool write_whole(const fs::path& to, const std::string& text) {
+    auto tmp = to;
+    tmp += L".platform-tmp";
+    std::error_code ec;
+    fs::create_directories(to.parent_path(), ec);
+    {
+        std::ofstream out{tmp, std::ios::binary | std::ios::trunc};
+        out << text;
+        out.close();
+        if (out.fail()) return false;
+    }
+    if (move_over(tmp, to)) {
+        DeleteFileW(tmp.c_str());
+        return false;
+    }
+    return true;
+}
+
 std::vector<Sql> with_car_ids(const Files& f, const fs::path& base, const std::string& shown, const std::vector<Sql>& given,
                               std::list<std::vector<std::string>>& held) {
     if (std::none_of(given.begin(), given.end(), [](const Sql& s) { return s.pack && !s.pack->cars.empty(); }))
         return given;
-    std::map<std::string, int64_t> record; // lower-case media name -> Id
+    Record rec;
     for (const auto& l : read_lines(f.car_ids)) {
-        const auto tab = l.find('\t');
-        uint64_t id    = 0;
-        if (tab == std::string::npos || !to_u64(std::string_view{l}.substr(tab + 1), id)) continue;
-        record[lower_ascii(l.substr(0, tab))] = static_cast<int64_t>(id);
+        std::string car;
+        int64_t id = 0;
+        if (record_line(l, car, id) && !rec.ids.count(lower_ascii(car))) rec.ids[lower_ascii(car)] = id, rec.used.insert(id);
+        if (!l.empty()) rec.lines.push_back(l);
     }
+    std::size_t from_copy = 0;
+    for (const auto& l : read_lines(f.car_ids_copy)) {
+        std::string car;
+        int64_t id = 0;
+        if (!record_line(l, car, id) || rec.ids.count(lower_ascii(car)) || rec.used.count(id)) continue;
+        rec.ids[lower_ascii(car)] = id;
+        rec.used.insert(id);
+        rec.lines.push_back(l);
+        ++from_copy;
+    }
+    if (from_copy)
+        plog("database: " + std::to_string(from_copy) + " car Id(s) fh2-mods\\platform-car-ids.txt didn't have were taken from "
+             "its copy next to this folder's database");
+    ids_from_last_build(f, given, rec);
+    const std::map<std::string, int64_t>& record = rec.ids;
     std::vector<car_ids::Source> sources;
     for (const auto& s : given)
         sources.push_back({s.name, s.statements, s.pack ? &s.pack->cars : nullptr, s.pack ? &s.pack->wanted_ids : nullptr});
@@ -616,7 +713,6 @@ std::vector<Sql> with_car_ids(const Files& f, const fs::path& base, const std::s
     sqlite3_close(db);
     plog("database: car packs' car Ids checked against " + shown + " and the other SQL in " +
          std::to_string(GetTickCount64() - started) + " ms");
-    std::vector<std::string> added;
     std::vector<Sql> out;
     for (std::size_t i = 0; i < given.size(); ++i) {
         const Sql& s = given[i];
@@ -636,7 +732,7 @@ std::vector<Sql> with_car_ids(const Files& f, const fs::path& base, const std::s
             continue;
         }
         for (const auto& [car, id] : o.given) {
-            added.push_back(car + "\t" + std::to_string(id));
+            rec.lines.push_back(car + "\t" + std::to_string(id));
             log_line(s.name, "database: " + car + " is car " + std::to_string(id) + " from now on");
         }
         const auto& cars = o.ids;
@@ -653,14 +749,15 @@ std::vector<Sql> with_car_ids(const Files& f, const fs::path& base, const std::s
         }
         out.push_back({s.name, &text, s.pack});
     }
-    if (!added.empty()) {
-        std::error_code ec;
-        fs::create_directories(f.car_ids.parent_path(), ec);
-        std::ofstream rec{f.car_ids, std::ios::app};
-        for (const auto& a : added) rec << a << "\n";
-        rec.close();
-        if (rec.fail()) plog("database: couldn't write fh2-mods\\platform-car-ids.txt");
-    }
+    std::string text;
+    for (const auto& l : rec.lines) text += l + "\r\n";
+    const auto now = [](const fs::path& p) {
+        std::ifstream in{p, std::ios::binary};
+        return std::string{std::istreambuf_iterator<char>(in), {}};
+    };
+    if (now(f.car_ids) != text && !write_whole(f.car_ids, text)) plog("database: couldn't write fh2-mods\\platform-car-ids.txt");
+    if (instance_layer() && now(f.car_ids_copy) != text && !write_whole(f.car_ids_copy, text))
+        plog("database: couldn't write the copy of fh2-mods\\platform-car-ids.txt next to this folder's database");
     return out;
 }
 
@@ -763,6 +860,27 @@ void reuse_strings(const fs::path& file) {
         if (tab != std::string::npos && to_u64(std::string_view{l}.substr(0, tab), k) && k < 0xFFFF)
             g_strings[static_cast<uint16_t>(k)] = widen(std::string_view{l}.substr(tab + 1));
     }
+}
+
+// Whether every Data_Car.str key a copy's car names point at (from kFirstNameKey, name_strings) is among this launch's
+// keys (reuse_strings). The copy's signature doesn't cover its strings file: without this, a copy whose file was lost
+// would be reused, and Data_Car.str written without its keys, so those cars' names would be blank. True when it can't
+// be told.
+bool names_kept(const fs::path& copy) {
+    sqlite3* db     = nullptr;
+    sqlite3_stmt* q = nullptr;
+    bool kept       = true;
+    if (sqlite3_open_v2(narrow(copy.wstring()).c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK &&
+        sqlite3_prepare_v2(db, "SELECT DisplayName, ModelShort FROM Data_Car", -1, &q, nullptr) == SQLITE_OK)
+        while (kept && sqlite3_step(q) == SQLITE_ROW)
+            for (int c : {0, 1})
+                if (const auto* t = reinterpret_cast<const char*>(sqlite3_column_text(q, c)); t && std::strncmp(t, "_&", 2) == 0) {
+                    const uint64_t key = std::strtoull(t + 2, nullptr, 10) & 0xFFFF;
+                    if (key >= kFirstNameKey && !g_strings.count(static_cast<uint16_t>(key))) kept = false;
+                }
+    sqlite3_finalize(q);
+    sqlite3_close(db);
+    return kept;
 }
 
 // A car pack's statements that failed (a result line, "car pack <name><TAB>FAILED, ..."): for the MODS tab.
@@ -900,9 +1018,13 @@ void apply_layer_database(const Files& f, const std::vector<Sql>& given) {
     const std::string sig = signature(kind, *bs, sources);
     const State st        = read_state(f.layer_state);
     if (const auto t = stamp_of(f.layer); t && st.names(*t) && st.sig == sig) {
-        plog("database: same changes as last launch, reusing this folder's database on the temp drive");
-        replay(st);
-        return;
+        if (names_kept(f.layer)) {
+            plog("database: same changes as last launch, reusing this folder's database on the temp drive");
+            replay(st);
+            return;
+        }
+        plog("database: fh2-mods\\platform-db-layer-strings.txt doesn't have the keys of the car names this folder's database "
+             "gives as text, so it's built again");
     }
     switch (found) {
     case Found::foreign: plog("database: building on " + shown + " (another mod's)"); break;
@@ -1098,9 +1220,13 @@ void apply_database(const std::vector<FH2Mod*>& mods) {
     // so keeping it doesn't mean building again.
     const std::string sig = signature(kind, *bs, resolved);
     if (found == Found::ours && st.sig == sig) {
-        plog("database: same changes as last launch, reusing the copy");
-        replay(st);
-        return;
+        if (names_kept(f.target)) {
+            plog("database: same changes as last launch, reusing the copy");
+            replay(st);
+            return;
+        }
+        plog("database: fh2-mods\\platform-db-strings.txt doesn't have the keys of the car names the copy gives as text, so it's "
+             "built again");
     }
 
     switch (found) {

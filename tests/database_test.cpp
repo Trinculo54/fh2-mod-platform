@@ -30,12 +30,6 @@ static std::string slurp(const fs::path& f) {
     return {std::istreambuf_iterator<char>(in), {}};
 }
 static bool has(const std::string& s, const char* what) { return s.find(what) != std::string::npos; }
-// A text file the platform writes (CRLF), with LF line ends.
-static std::string lines_of(const fs::path& f) {
-    std::string s = slurp(f);
-    s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
-    return s;
-}
 static bool present(const fs::path& f) {
     std::error_code ec;
     return fs::exists(f, ec);
@@ -765,7 +759,7 @@ static void car_ids() {
     fs::create_directories(pack / "media");
     std::ofstream{pack / "pack.ini"} << "[pack]\nname = Test pack\nversion = 1\n\n[car TEST_Pack01]\nname = Test car\n";
     std::ofstream{pack / "TEST_Pack01.sql"} << "CREATE TEMP TABLE pc AS SELECT * FROM Data_Car WHERE Id = 441;\n"
-                                               "UPDATE pc SET Id = {car:TEST_Pack01}, MediaName = 'TEST_Pack01';\n"
+                                               "UPDATE pc SET Id = {car:TEST_Pack01}, MediaName = 'TEST_Pack01', DisplayName = 'Test car';\n"
                                                "INSERT INTO Data_Car SELECT * FROM pc; DROP TABLE pc;\n"
                                                "CREATE TEMP TABLE pe AS SELECT * FROM Data_Engine ORDER BY EngineID LIMIT 1;\n"
                                                "UPDATE pe SET EngineID = {car:TEST_Pack01};\n"
@@ -820,6 +814,49 @@ static void car_ids() {
     c.mods({});
     c.launch();
     CHECK(car(3003) == "TEST_Pack01" && car(3000) == "" && listed(record) == ids);
+
+    // The keys of the car names given as text gone (platform-db-layer-strings.txt): the database is built again, not
+    // reused with names no string table has.
+    const fs::path names = c.dir / "fh2-mods" / "platform-db-layer-strings.txt";
+    CHECK(has(listed(names), "65280\tTest car\n"));
+    fs::remove(names);
+    c.launch();
+    CHECK(has(c.log, "database: fh2-mods\\platform-db-layer-strings.txt doesn't have the keys of the car names this folder's "
+                     "database gives as text, so it's built again"));
+    CHECK(!has(c.log, "reusing this folder's database") && has(listed(names), "65280\tTest car\n"));
+
+    // The record lost (fh2-mods emptied to reinstall, say): its copy next to this folder's database has it.
+    const fs::path copy = layer.parent_path() / "platform-car-ids.txt";
+    CHECK(listed(copy) == ids);
+    fs::remove(record);
+    c.launch();
+    CHECK(listed(record) == ids && car(3003) == "TEST_Pack01");
+    CHECK(has(c.log, "database: 3 car Id(s) fh2-mods\\platform-car-ids.txt didn't have were taken from its copy next to this "
+                     "folder's database"));
+
+    // Both lost: the cars keep the Ids they have in the database built last time. Given new ones, TEST_Pack01 would be
+    // 3002 now that no mod adds car 3000. LIT_Pack01's own SQL put it at 3001, so it's recorded with that one.
+    fs::remove(record);
+    fs::remove(copy);
+    c.launch();
+    CHECK(car(3003) == "TEST_Pack01" && car(3500) == "WISH_Pack01" && car(3002) == "");
+    CHECK(has(c.log, "[car pack test-pack] database: TEST_Pack01 is car 3003 again, as in this folder's database on the temp "
+                     "drive, which the platform built last time (fh2-mods\\platform-car-ids.txt didn't have it)"));
+    const std::string recovered = "LIT_Pack01\t3001\nTEST_Pack01\t3003\nWISH_Pack01\t3500\n";
+    CHECK(listed(record) == recovered && listed(copy) == recovered);
+
+    // The record edited by hand, its last line left without a line end: a new car's line isn't joined to it.
+    std::string text = slurp(record);
+    text.erase(text.find_last_not_of("\r\n") + 1);
+    std::ofstream{record, std::ios::binary} << text;
+    const fs::path more = c.dir / "fh2-cars" / "more-pack";
+    fs::create_directories(more / "media");
+    std::ofstream{more / "pack.ini"} << "[pack]\nname = More pack\n\n[car MORE_Pack01]\nname = More car\nid = 3600\n";
+    std::ofstream{more / "MORE_Pack01.sql"} << "CREATE TEMP TABLE mc AS SELECT * FROM Data_Car WHERE Id = 441;\n"
+                                               "UPDATE mc SET Id = {car:MORE_Pack01}, MediaName = 'MORE_Pack01';\n"
+                                               "INSERT INTO Data_Car SELECT * FROM mc; DROP TABLE mc;\n";
+    c.launch();
+    CHECK(listed(record) == recovered + "MORE_Pack01\t3600\n" && listed(copy) == listed(record) && car(3600) == "MORE_Pack01");
 }
 
 // A mod that replaces zipmanifest.xml with set_file: its own without a car pack zip, as before; refused while the
@@ -882,19 +919,19 @@ static void upgrade() {
           slurp(old / "mediaoverride" / tables_en / "AIPlayers.str") == "2.8.0's names");
     CHECK(slurp(mo / "UI" / "other.xml") == "another mod's" && slurp(mo / tables_en / "Other.str") == "another mod's table");
     CHECK(same_file(c.T, g_traffic));
-    CHECK(lines_of(files) == "UI\\gone.xml\tGoneMod\tlayer\nUI\\keep.xml\tTestMod\tmediaoverride layer\n");
-    CHECK(lines_of(tables) == "AIPlayers.str\tlayer\n");   // Main.str removed with the first write: no title notices here
+    CHECK(listed(files) == "UI\\gone.xml\tGoneMod\tlayer\nUI\\keep.xml\tTestMod\tmediaoverride layer\n");
+    CHECK(listed(tables) == "AIPlayers.str\tlayer\n");   // Main.str removed with the first write: no title notices here
     CHECK(has(c.log, "files: 1 file(s) the platform wrote to mediaoverride before (an older platform, or a session that wrote there) "
                      "were moved to fh2-mods\\platform-old-overrides\\mediaoverride, as this session's go to this Azimuth folder's own layer"));
     CHECK(has(c.log, "string tables: 3 table file(s) the platform wrote to mediaoverride before"));
-    CHECK(has(lines_of(old / "moved.txt"), "\tmediaoverride\tStripped\\StringTables\\EN\\AIPlayers.str\n"));
+    CHECK(has(listed(old / "moved.txt"), "\tmediaoverride\tStripped\\StringTables\\EN\\AIPlayers.str\n"));
 
     // Next launch: the file that was open goes too; nothing else is moved again
     c.launch();
     CHECK(!present(mo / "UI" / "keep.xml") && slurp(old / "mediaoverride" / "UI" / "keep.xml") == "2.8.0's");
     CHECK(has(c.log, "files: moved mediaoverride\\UI\\keep.xml to fh2-mods\\platform-old-overrides\\mediaoverride") &&
           !has(c.log, "string tables: "));
-    CHECK(lines_of(files) == "UI\\gone.xml\tGoneMod\tlayer\nUI\\keep.xml\tTestMod\tlayer\n");
+    CHECK(listed(files) == "UI\\gone.xml\tGoneMod\tlayer\nUI\\keep.xml\tTestMod\tlayer\n");
     c.launch();
     CHECK(!has(c.log, "platform-old-overrides"));
 
@@ -905,8 +942,8 @@ static void upgrade() {
     CHECK(has(c.log, "media overrides: Extra Options is here, so mediaoverride is left to it"));
     CHECK(!present(layer / "UI" / "keep.xml") && slurp(old / "layer" / "UI" / "keep.xml") == "2.9.0's");
     CHECK(!present(layer / tables_en / "AIPlayers.str") && slurp(old / "layer" / tables_en / "AIPlayers.str") == "2.9.0's names");
-    CHECK(lines_of(files) == "UI\\gone.xml\tGoneMod\tmediaoverride\nUI\\keep.xml\tTestMod\tmediaoverride\n");
-    CHECK(lines_of(tables) == "AIPlayers.str\tmediaoverride\n");
+    CHECK(listed(files) == "UI\\gone.xml\tGoneMod\tmediaoverride\nUI\\keep.xml\tTestMod\tmediaoverride\n");
+    CHECK(listed(tables) == "AIPlayers.str\tmediaoverride\n");
     CHECK(has(c.log, "files: 1 file(s) the platform wrote to this Azimuth folder's own layer before"));
     CHECK(slurp(mo / "UI" / "other.xml") == "another mod's" && same_file(c.T, g_traffic));
 }
@@ -1146,31 +1183,36 @@ int wmain(int argc, wchar_t** argv) {
     // A server's database with the traffic mod's cars: the same size as its database.
     g_server_cars = make("server-cars.slt", "server cars", cars, 1759276800);
 
-    player();
-    uninstall();
-    replaced();
-    deleted_with_sql();
-    game_copy();
-    all_fail();
-    from_2_7_1();
-    fh2mp_copy();
-    fh2mp_other_folder();
-    fh2mp_coarse_dates();
-    fh2mp_near_date();
-    fh2mp_one_list();
-    fh2mp_copy_dated_now();
-    fh2mp_new_database();
-    fh2mp_after_release();
-    fh2mp_keep();
-    fh2mp_keep_newer();
-    fh2mp_copying();
-    car_pack();
-    car_ids();
-    zip_manifest();
-    upgrade();
-    other_install();
-    fh2ml();
-    failures();
+    // database_test.exe <case> runs that one alone (its function's name), to try a change quickly
+    const std::wstring only = argc > 1 ? argv[1] : L"";
+    const auto run = [&](const wchar_t* name, void (*test)()) {
+        if (only.empty() || only == name) test();
+    };
+    run(L"player", player);
+    run(L"uninstall", uninstall);
+    run(L"replaced", replaced);
+    run(L"deleted_with_sql", deleted_with_sql);
+    run(L"game_copy", game_copy);
+    run(L"all_fail", all_fail);
+    run(L"from_2_7_1", from_2_7_1);
+    run(L"fh2mp_copy", fh2mp_copy);
+    run(L"fh2mp_other_folder", fh2mp_other_folder);
+    run(L"fh2mp_coarse_dates", fh2mp_coarse_dates);
+    run(L"fh2mp_near_date", fh2mp_near_date);
+    run(L"fh2mp_one_list", fh2mp_one_list);
+    run(L"fh2mp_copy_dated_now", fh2mp_copy_dated_now);
+    run(L"fh2mp_new_database", fh2mp_new_database);
+    run(L"fh2mp_after_release", fh2mp_after_release);
+    run(L"fh2mp_keep", fh2mp_keep);
+    run(L"fh2mp_keep_newer", fh2mp_keep_newer);
+    run(L"fh2mp_copying", fh2mp_copying);
+    run(L"car_pack", car_pack);
+    run(L"car_ids", car_ids);
+    run(L"zip_manifest", zip_manifest);
+    run(L"upgrade", upgrade);
+    run(L"other_install", other_install);
+    run(L"fh2ml", fh2ml);
+    run(L"failures", failures);
 
     std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
     std::fflush(stdout);
