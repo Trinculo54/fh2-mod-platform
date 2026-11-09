@@ -223,8 +223,16 @@ DWORD WINAPI copy_saves(LPVOID p) {
 
 void start_copy(SnapJob* job) {
     HANDLE t = CreateThread(nullptr, 0, copy_saves, job, 0, nullptr);
-    if (t) CloseHandle(t);
-    else delete job;
+    if (t) {
+        CloseHandle(t);
+        return;
+    }
+    plog("save snapshot: the copy couldn't be started (error " + std::to_string(GetLastError()) + "), for " + job->who);
+    if (job->platform) {   // a copy that never started is one that failed: the MODS tab doesn't say there's one
+        std::scoped_lock lk{g_mu};
+        g_snap_platform = false;
+    }
+    delete job;
 }
 } // namespace
 
