@@ -6,7 +6,8 @@
 // Every call is thread-safe and quick: reads come from memory, and writes go to the file on a worker thread of the
 // store's own, never on the caller's (the game's UI thread among them). The store only ever errs towards showing a
 // cue again: a file that's missing, locked or can't be read reads as nothing seen, and a write that fails (or never
-// happens, because Azimuth ends the game first) leaves the file as it was.
+// happens, because Azimuth ends the game first) leaves the file as it was. Lines it can't read, and comments other
+// than its own, stay in the file as they are.
 #pragma once
 
 #include <cstdint>

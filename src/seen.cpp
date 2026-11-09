@@ -14,8 +14,10 @@
 //          clash with a tip's.
 //   value  "seen", or a count; 1 to 64 printable bytes without a tab.
 //   date   the day it was set (yyyy-mm-dd, local time), for whoever reads the file; the store doesn't use it.
-// A line that doesn't read as that is left out, and the same (who, key) twice keeps the last. No names, gamertags or
-// paths go in it.
+// A line that doesn't read as that (a later platform's, or a hand edit) isn't used, but stays in the file as it is,
+// and so do comment lines other than the platform's own three at the top: each write puts them back, in their order,
+// after those three and before the entries. The same (who, key) twice keeps the last. No names, gamertags or paths
+// go in it.
 //
 // Crash safety: the file is read once, at seen_open, and every change is kept in memory and in a list of changes
 // to make. The store's worker thread writes them about 0.1 s after the first: it reads the file again (another copy
@@ -28,9 +30,11 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <utility>
@@ -43,6 +47,13 @@ constexpr DWORD kCoalesceMs = 100;    // after the first change, so a burst of t
 constexpr int kTries        = 3;      // a write that fails is tried again after kRetryMs, this many times in all
 constexpr DWORD kRetryMs    = 1000;
 constexpr std::size_t kMaxWho = 260, kMaxKey = 64, kMaxValue = 64;
+
+// The platform's own comment lines at the top of the file. Any other line that isn't an entry is kept as it is.
+const char* const kHeader[] = {
+    "# FH2 Mod Platform: hints and tips the player has already seen, so each shows only once.",
+    "# Delete this file to see them all again. One line each, tab-separated: who (a mod's DLL, or * for",
+    "# the platform), key, value, and the day it was set.",
+};
 
 struct Entry {
     std::string who, value, date;     // who as last spelled
@@ -122,9 +133,11 @@ std::vector<std::string> split_tabs(const std::string& l) {
 
 enum class Read { ok, missing, unreadable };
 
-// The file's entries, and how many lines were left out. Takes no lock.
-Read read_file(const std::filesystem::path& file, Entries& out, int& bad) {
+// The file's entries; the lines to keep as they are (comments other than the platform's own, and lines that can't be
+// read), in order; and how many of them couldn't be read. Takes no lock.
+Read read_file(const std::filesystem::path& file, Entries& out, std::vector<std::string>& keep, int& bad) {
     out.clear();
+    keep.clear();
     bad = 0;
     const HANDLE h = CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -150,10 +163,15 @@ Read read_file(const std::filesystem::path& file, Entries& out, int& bad) {
         std::string line = text.substr(at, end - at);
         at = end + 1;
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.empty() || line[0] == '#') continue;
+        if (line.empty()) continue;
+        if (line[0] == '#') {
+            if (std::find(std::begin(kHeader), std::end(kHeader), line) == std::end(kHeader)) keep.push_back(line);
+            continue;
+        }
         const auto f = split_tabs(line);
         if (f.size() < 3 || !who_ok(f[0]) || !key_ok(f[1]) || !value_ok(f[2])) {
             ++bad;
+            keep.push_back(line);
             continue;
         }
         out[{lower(f[0]), f[1]}] = Entry{f[0], f[2], f.size() > 3 && printable(f[3]) ? f[3] : std::string()};
@@ -161,11 +179,12 @@ Read read_file(const std::filesystem::path& file, Entries& out, int& bad) {
     return Read::ok;
 }
 
-// Writes `entries` to the file through file.tmp and a rename. Takes no lock. On failure, `why` says why.
-bool write_file(const std::filesystem::path& file, const Entries& entries, std::string& why) {
-    std::string text = "# FH2 Mod Platform: hints and tips the player has already seen, so each shows only once.\r\n"
-                       "# Delete this file to see them all again. One line each, tab-separated: who (a mod's DLL, or * for\r\n"
-                       "# the platform), key, value, and the day it was set.\r\n";
+// Writes the platform's comment lines, `keep` as it is, then `entries`, to the file through file.tmp and a rename.
+// Takes no lock. On failure, `why` says why.
+bool write_file(const std::filesystem::path& file, const Entries& entries, const std::vector<std::string>& keep, std::string& why) {
+    std::string text;
+    for (const char* h : kHeader) text += std::string(h) + "\r\n";
+    for (const std::string& l : keep) text += l + "\r\n";
     for (const auto& [k, e] : entries) {
         text += e.who + "\t" + k.second + "\t" + e.value;
         if (!e.date.empty()) text += "\t" + e.date;
@@ -198,15 +217,16 @@ bool write_file(const std::filesystem::path& file, const Entries& entries, std::
 // One try at putting `changes` into the file: what's in it now, with the changes made on top. Takes no lock.
 bool write_changes(const std::filesystem::path& file, const std::vector<Change>& changes, std::string& why) {
     Entries now;
+    std::vector<std::string> keep;
     int bad = 0;
-    if (read_file(file, now, bad) == Read::unreadable) {
+    if (read_file(file, now, keep, bad) == Read::unreadable) {
         why = "it couldn't be read first, and it isn't written over unread";
         return false;
     }
     for (const Change& c : changes)
         if (c.set) now[c.key] = c.entry;
         else now.erase(c.key);
-    return write_file(file, now, why);
+    return write_file(file, now, keep, why);
 }
 
 DWORD WINAPI writer(LPVOID) {
@@ -267,8 +287,9 @@ void change(Store& s, Change c) {
 
 void seen_open(const std::filesystem::path& file, std::function<void(const std::string&)> log) {
     Entries entries;
+    std::vector<std::string> keep;
     int bad = 0;
-    const Read r = read_file(file, entries, bad);
+    const Read r = read_file(file, entries, keep, bad);
     Store& s = S();
     {
         std::scoped_lock lk{s.mu};
@@ -294,7 +315,7 @@ void seen_open(const std::filesystem::path& file, std::function<void(const std::
         log("platform-seen.txt couldn't be read (another program may have it open), so hints and tips already seen may show "
             "again this session");
     else if (bad)
-        log("platform-seen.txt: " + std::to_string(bad) + " line(s) couldn't be read and were left out");
+        log("platform-seen.txt: " + std::to_string(bad) + " line(s) couldn't be read, so they aren't used; they stay in the file as they are");
 }
 
 std::string seen_get(const std::string& who, const std::string& key) {

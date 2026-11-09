@@ -158,7 +158,29 @@ int main() {
     check(seen_get("A.dll", "One") == "3", "the same key twice: the last wins");
     check(seen_get("B.dll", "Two") == "seen", "a line without a date is read");
     check(!seen_has("C.dll", "Three"), "a commented line isn't read");
-    check(logged("platform-seen.txt: 2 line(s) couldn't be read and were left out"), "bad lines are left out, and the log says so");
+    check(logged("platform-seen.txt: 2 line(s) couldn't be read, so they aren't used; they stay in the file as they are"),
+          "bad lines aren't used, and the log says so");
+
+    // ---- lines it can't read and the player's own comments stay, as they are and in order, when it's written ----
+    {
+        seen_set("A.dll", "Kept");
+        check(seen_flush(3000), "flushed");
+        const std::string t = slurp(file);
+        const std::size_t own = t.find("# a comment\r\n"), commented = t.find("#C.dll\tThree\tseen\r\n"),
+                          bad1 = t.find("B.dll\tbad key\tseen\r\n"), bad2 = t.find("only two\tfields\r\n"), entry = t.find("A.dll\tKept\tseen\t");
+        check(own != std::string::npos && commented != std::string::npos, "the player's comment lines are kept");
+        check(bad1 != std::string::npos && bad2 != std::string::npos, "lines that can't be read are kept as they are");
+        check(own < bad1 && bad1 < bad2 && bad2 < commented && commented < entry, "in their order, before the entries");
+        check(t.rfind("# FH2 Mod Platform: hints and tips", 0) == 0 && t.find("# FH2 Mod Platform:", 1) == std::string::npos,
+              "the platform's own comment once, at the top");
+        check(has(t, "A.dll\tOne\t3\r\n") && has(t, "B.dll\tTwo\tseen\r\n"), "and the entries");
+        seen_open(file, log_line);
+        seen_set("A.dll", "KeptTwice");
+        check(seen_flush(3000), "flushed");
+        const std::string again = slurp(file);
+        check(again.find("# a comment") == again.rfind("# a comment") && again.find("only two\tfields") == again.rfind("only two\tfields"),
+              "written again: each kept line still once");
+    }
 
     // ---- a crash in the middle of a write leaves platform-seen.txt.tmp: it's ignored, and replaced
     put(dir / "platform-seen.txt.tmp", "A.dll\tHalf");
