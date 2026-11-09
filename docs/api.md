@@ -1,11 +1,11 @@
 # API reference
 
-Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5, 7 with 2.6, 8 with 2.7, 9 with 2.8 and 10 with 2.9. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 the Mods page, version 5 its sliders, version 6 mod descriptions and link rows for the MODS tab, version 7 byte patches and instruction hooks, version 8 pages of your own, version 9 title-screen entries, choice rows and online play (FH2MP), and version 10 text in the game's language, translations and the UI templates (pop-ups, tips, message boxes, UI sounds and page help); the sections for those say so.
+Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5, 7 with 2.6, 8 with 2.7, 9 with 2.8 and 10 with 2.9. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 settings rows (on each mod's page under MODS > YOUR MODS from 2.9.0), version 5 their sliders, version 6 mod descriptions and link rows for the MODS tab, version 7 byte patches and instruction hooks, version 8 pages of your own, version 9 title-screen entries, choice rows and online play (FH2MP), and version 10 text in the game's language, translations and the UI templates (pop-ups, tips, message boxes, UI sounds and page help); the sections for those say so.
 
 ## Rules that apply everywhere
 
 - **Threads:** every function is thread-safe and can be called from any thread.
-- **Strings:** strings passed in are copied, so you can free yours straight after. Names, versions, log lines and notices are UTF-8 (`const char*`). Game text is UTF-16 (`const wchar_t*`), because that's what the game uses. Text the platform puts into its pages (Mods page rows and choices, your pages' titles and rows, the MODS tab) is UTF-8 too. From 2.9.0, letters beyond ASCII reach the game as they are, as long as its font has them: before, the game read those pages as Windows-1252, so a `·` showed as `Â·`. Bytes that aren't valid UTF-8 are still read as Windows-1252, so text written that way looks the same as before.
+- **Strings:** strings passed in are copied, so you can free yours straight after. Names, versions, log lines and notices are UTF-8 (`const char*`). Game text is UTF-16 (`const wchar_t*`), because that's what the game uses. Text the platform puts into its pages (your rows and choices, your pages' titles and rows, the MODS tab) is UTF-8 too. From 2.9.0, letters beyond ASCII reach the game as they are, as long as its font has them: before, the game read those pages as Windows-1252, so a `·` showed as `Â·`. Bytes that aren't valid UTF-8 are still read as Windows-1252, so text written that way looks the same as before.
 - **Memory:** nothing the platform returns needs freeing, and the `FH2ModApi` pointer stays valid until the process ends.
 - **Compatibility:** members are only ever added at the end of `FH2ModApi`. If you use one added after version 1, check `api->api_version` (or `api->size`) first, so your mod still runs on an older platform.
 
@@ -42,10 +42,10 @@ Call once, from `fh2mod_init`. It returns your handle, or null if `info` is miss
 | `size` | `sizeof(FH2ModInfo)` |
 | `name` | Display name, used in the log and in notices. |
 | `version` | Your version, `x.y.z`. |
-| `github_repo` | `"Owner/Repo"`, or null. When set (and `check_updates` is 1), the platform checks your latest release on GitHub, at most every six hours, and shows "Name x.y.z is available" on the title screen when it's newer than `version`. The six hours start over when a different `version` is installed, and a remembered release older than `version` is never trusted, so installing an older or newer build checks again straight away. |
+| `github_repo` | `"Owner/Repo"`, or null. When set (and `check_updates` is 1), the platform checks your latest release on GitHub, at most every six hours, and shows "Name x.y.z is out: Pause > MODS > UPDATES" on the title screen when it's newer than `version` ("Name x.y.z is available" up to platform 2.8.0). The six hours start over when a different `version` is installed, and a remembered release older than `version` is never trusted, so installing an older or newer build checks again straight away. |
 | `platform_version` | The platform version you ship with. Pass `FH2MOD_PLATFORM_VERSION`. If the installed platform is older, players get "Old FH2 Mod Platform: reinstall Name". |
 | `check_updates` | 0 to never go online for your mod. Give players a setting for it. |
-| `description` | API 6: a sentence or two for the MODS tab's Installed mods page, or null. |
+| `description` | API 6: a sentence or two for your row on Pause > MODS > YOUR MODS and the "What it does" row on your mod's page, or null. It's the first thing players read about your mod. |
 | `offline_only` | API 9: nonzero if your mod shouldn't run in online play. See [Online play](#online-play-api-9). |
 
 The update check runs in the background. If GitHub can't be reached, the last answer is used.
@@ -314,7 +314,7 @@ if (api->api_version >= 7)
 
 Prefer `hook_function`, `hook_call` or `hook_pointer` when one of them can do the job: they don't depend on the exact instructions inside a function. An instruction hook's register meanings come from reading the game's code at that spot, so note them next to the address, as above.
 
-## The Mods page (API 4; sliders API 5)
+## Your mod's page (API 4; sliders API 5)
 
 ```c
 int add_setting(FH2Mod* mod, const FH2Setting* setting);
@@ -348,13 +348,21 @@ typedef struct FH2Setting {
 } FH2Setting;
 ```
 
-These put On/Off switches and sliders for your mod in the game's own menus. When at least one mod adds a row, Pause > Settings gets a sixth tile, MODS, and the page behind it lists every mod's rows in load order. It's laid out like the HUD options page: the row's description, followed by your mod's name, shows beside the list.
+These put On/Off switches and sliders for your mod in the game's own menus, on your mod's page under Pause > MODS > YOUR MODS. Pause > Settings gets a seventh tile, MODS, in a sixth column, whenever a mod is installed; from platform 2.9.0 it's a second door to the same YOUR MODS list. The page is laid out like the HUD options page, with the row's description beside the list, and holds everything your mod added, in a fixed order (platform 2.9.0):
+
+1. A red "Not working" row when your mod didn't load or start (it takes the focus), or a yellow "Update available" row when a newer release is out.
+2. Your rows, in the order you added them. A row that needs a restart ends in " *".
+3. Your hotkeys' rows, under a "Keys and buttons" heading ([Hotkeys](#hotkeys-api-9)).
+4. Your link rows (value "Browser") and your pages (value "Open"; [Pages](#pages-api-8)).
+5. An "About <Mod>" heading, then "What it does" (your `FH2ModInfo.description`, your version and your GitHub page), **Load this mod** (the player's switch for your whole mod) and, where FH2MP is installed, Load when playing online.
+
+The page opens with the focus on your first row, so put your main switch first. Labels have half the list's width: keep them to about 24 characters, and leave your mod's name out of them (the page's title is your mod's name). On the YOUR MODS list your row shows your version and state, and your description, ending in what A shows ("Press A for its 13 settings."), is the first thing players read about your mod. Up to platform 2.8.0, the rows were on a page of their own shared by every mod (Settings > MODS), with "(Mod)" after each description; from 2.9.0 that page only stands in for the MODS tab when the tab's hooks don't go in.
 
 Add your rows from `fh2mod_init`. The platform writes the page once every mod's `fh2mod_init` has returned, so a row added after that only shows from the next launch (the log says so). `key` is letters, digits and `_`, and unique within your mod. `add_setting` returns 1, or 0 with the reason in the log.
 
 **Your mod owns the value.** The platform doesn't store it anywhere. Pass the current value in `value`, from your ini or wherever you keep your settings. When the player changes the row, `on_change` gets the new value with your `user` pointer: save it, and start using it if it can change on the fly. `on_change` runs on the game's UI thread, inside the menu's own code, so keep it short and don't call into the game from it. A crash in it is caught and logged. `get_setting` returns a row's current value (-1 if you have no row called `key`). If you change a value yourself, from a hotkey say, `set_setting` makes the page show it the next time it opens; `on_change` isn't called for that.
 
-**Switches that need a restart.** Some changes can only take effect when the game starts, like anything the game reads once while loading. Mark those rows `needs_restart`. Their description then ends with "Takes effect the next time you start the game." While any of them differs from the value the game started with, a notice under the list says so. When the player leaves the Mods page with such a change, the game's own message box offers **Restart now**, **Restart later** and **Go back**. Restart now closes the game the way Azimuth's own Quit does, then starts Azimuth again with `--skip-launcher`, straight back into the game. Your `on_change` has already been called by then, so save there and the restart picks up the new value.
+**Switches that need a restart.** Some changes can only take effect when the game starts, like anything the game reads once while loading. Mark those rows `needs_restart`. Their label then ends in " *", their description ends with "Takes effect the next time you start the game.", and the panel under the list explains the mark. While any of them differs from the value the game started with, the panel names them ("Restart the game for: Breakable trees."). When the player leaves YOUR MODS with such a change, and only when a restart row has changed since the last time it asked, the game's own message box offers **Restart now**, **Restart later** and **Go back**. Restart now closes the game the way Azimuth's own Quit does, then starts Azimuth again with `--skip-launcher`, straight back into the game; **Go back** returns to the page and row the player left. Your `on_change` has already been called by then, so save there and the restart picks up the new value.
 
 ```cpp
 static void changed(void*, const char* key, int value) {
@@ -404,7 +412,9 @@ if (api->api_version >= 9) {
 }
 ```
 
-The log (`[Mods page]`) says when the page is ready, and each change is logged under your mod's name. If the game's menu code doesn't look as expected, there's no tile or page and the platform's three files for it are removed again; your mod keeps running and simply isn't told of changes. [`game-notes.md`](game-notes.md#menus) explains how the page is put together.
+**Link rows (API 6).** Set `kind = FH2_SETTING_LINK` and `url` (an `http://` or `https://` address), and the row sits with your pages on your mod's page, with the value "Browser" and the address under its description. A opens it in the player's browser, behind the game, and the page stays. A link row has no value: `get_setting` and `set_setting` ignore it.
+
+The log (`[MODS]`, `[Mods page]` up to platform 2.8.0) says when the pages are ready, and each change is logged under your mod's name ("Trees set to 0 on its MODS page"). If the game's menu code doesn't look as expected, there's no tile or page and the platform's three files for it are removed again; your mod keeps running and simply isn't told of changes. [`game-notes.md`](game-notes.md#menus) explains how the page is put together.
 
 ## Pages (API 8)
 
@@ -436,13 +446,13 @@ typedef struct FH2PageRow {
 } FH2PageRow;
 ```
 
-A page is a list of your own in the game's menus, laid out like the Mods page: each row has a label on the left and a value on the right, and the selected row's description shows beside the list, with your footer line at the bottom of it. It's for showing things (stats, a collection, what your mod has found) and, with `on_select`, for simple menus where A on a row does something.
+A page is a list of your own in the game's menus, laid out like your mod's page: each row has a label on the left and a value on the right, and the selected row's description shows beside the list, with your footer line at the bottom of it. It's for showing things (stats, a collection, what your mod has found) and, with `on_select`, for simple menus where A on a row does something.
 
-Your mod's own page under MODS > Installed mods gets a row for each of your pages (`label`, with `description` beside it), and A on it shows the page; B goes back. A page can also take over a pause-menu tile that does nothing on PC. For now that's `"Achievements"`, the tile on the pause menu and the one on its Storm Island tab, which on Xbox opened the console's achievements app. Only one mod can have a tile; a second one is told so in the log, and its page is still under Installed mods.
+Your mod's own page under Pause > MODS > YOUR MODS gets a row for each of your pages (`label`, with `description` beside it and the value "Open"), and A on it shows the page; B goes back. A page can also take over a pause-menu tile that does nothing on PC. For now that's `"Achievements"`, the tile on the PROGRESS tab and the one on the PORSCHE tab, which on Xbox opened the console's achievements app. Only one mod can have a tile; a second one is told so in the log, and its page is still on its mod's page.
 
 Add pages from `fh2mod_init`. `add_page` returns 1, or 0 with the reason in the log. Pages are written when every mod's `fh2mod_init` has returned, and a page added later only shows from the next launch.
 
-**Rows.** `set_page_rows` gives a page its rows, copied, in order, replacing the ones it had (up to 1000). You can call it at any time, from any thread. The page is written again each time it's opened, from the rows you last set, so keep them up to date as your data changes. If working them out is costly, do it in `on_open`, which runs just before the page is written: when its tile opens it, and when MODS > Installed mods opens, since that page holds every mod's pages. Until you set any rows, the page says it has nothing on it yet.
+**Rows.** `set_page_rows` gives a page its rows, copied, in order, replacing the ones it had (up to 1000). You can call it at any time, from any thread. The page is written again each time it's opened, from the rows you last set, so keep them up to date as your data changes. If working them out is costly, do it in `on_open`, which runs just before the page is written: when its tile opens it, and when MODS > YOUR MODS opens (from either door), since that page holds every mod's pages. Until you set any rows, the page says it has nothing on it yet.
 
 - `style` `FH2_ROW_DIM` greys the label and value, for something locked or not available yet. `FH2_ROW_HEADING` puts the label in the game's orange, as a heading over the rows after it. The selected row is the game's usual orange bar with white text, whatever its style.
 - `value_alert` shows the value in red.
@@ -473,7 +483,7 @@ if (api->api_version >= 8) {
 }
 ```
 
-The log (`[Mods page]`) says when a tile opens a page, and each `on_select` is logged under your mod's name. If the tile's code doesn't look as expected, the tile keeps doing what it did and the page is only under Installed mods. [`game-notes.md`](game-notes.md#menus) explains how the pages are put together.
+The log (`[MODS]`) says when a tile opens a page, and each `on_select` is logged under your mod's name. If the tile's code doesn't look as expected, the tile keeps doing what it did and the page is only on your mod's page. [`game-notes.md`](game-notes.md#menus) explains how the pages are put together.
 
 **Text on the tile.**
 
@@ -517,7 +527,7 @@ A fragment that fails is refused: `set_page_xaml` returns 0 and the log says whi
 
 **The crash guard (2.9.0).** Just before the game loads a page of your own design, the platform marks it as opening in `fh2-mods\platform-pages.txt`, and takes the mark off once the page has been up for 10 seconds or the player has left it. If the next session finds a mark, the game stopped while it was loading that page. That alone isn't proof (the player may have closed Azimuth's window), so the page is left out only when there's also a crash report in `fh2-mods\crashes` newer than the mark, or when the same page was left opening in two sessions running; otherwise the mark is dropped and the log says so. A page left out shows "This page couldn't be shown", and its row under Installed mods says the game crashed opening it, until your mod's DLL changes, which an update or a reinstall does; the log says so each session. While you work on a page, delete its line from the file to try it again with the same DLL.
 
-As with rows, the XAML is copied, and the page is written from the last you set each time it opens, so it's static: put your data straight into it, and call `set_page_xaml` again when it changes (or from `on_open`). Under MODS > Installed mods such a page shows its rows if you've set any, and otherwise its row says which tile opens it; a page of your own design needs a tile to be seen.
+As with rows, the XAML is copied, and the page is written from the last you set each time it opens, so it's static: put your data straight into it, and call `set_page_xaml` again when it changes (or from `on_open`). On your mod's page under MODS > YOUR MODS such a page shows its rows if you've set any, and otherwise its row is dim and says where the tile is ("Open it from Pause > PROGRESS > ACHIEVEMENTS, or the PORSCHE tab's ACHIEVEMENTS tile."); a page of your own design needs a tile to be seen.
 
 **Slots** are what makes it move. Each page has 16 ints, slot 0 to 15, which its XAML binds by name: `{Binding FH2Mod_Slot_<n>, Mode=TwoWay}` (a list's `SelectedIndex`, say), and `{Binding FH2Mod_Slot_<n>_Is_<v>}`, true while slot n is v (v from 0 to 9999). The platform puts three converters in the page's resources for `Visibility`: `FH2Mod_ShowIf` (collapsed when false), `FH2Mod_ShowIfHidden` (hidden when false: it keeps its place, and can take the focus as soon as it shows) and `FH2Mod_HideIf`. Slots are 0 when the page opens; set any you want otherwise from `on_open`. When a binding changes one, `on_slot` tells you. `get_page_slot` reads one; `set_page_slot` changes one, and from inside `on_button` the page's bindings see it at once. From `on_slot` they do too, except for the slot a binding is setting at that moment. Set from anywhere else, a slot is only stored: the page doesn't show it, and opening resets it.
 
@@ -651,7 +661,7 @@ int offline_only;
 
   What isn't stopped: the mod's own threads and anything it does from them, its rows' and pages' callbacks on the MODS tab (the player opens those), its HUD layer's `on_status`, and interfaces it published, which other mods can still call. The log says "online play after all" and names the stopped mods, and the MODS tab shows them as "Off online", stopped for online play. A mod from before the platform can't be stopped: the log says so. This is [issue #22](https://github.com/Trinculo54/fh2-mod-platform/issues/22).
 - **`offline_only`**: set it to 1 in your `FH2ModInfo` if your mod shouldn't run online. Online, `register_mod` then returns `NULL`, so call `register_mod` first in `fh2mod_init` and return straight away when it gives you `NULL` (as every mod should anyway); what you return then isn't reported as a problem. The platform remembers it, and from the next online launch doesn't load your DLL at all. Offline, nothing changes. Older platforms ignore the member, so set it whatever the version.
-- **The player decides in the end.** Where FH2MP is installed, each mod's page on MODS > Installed mods has a **Load when playing online** switch, set from your `offline_only` until the player changes it. Their choice is kept in `fh2-mods\platform-online.txt` and takes effect the next time the game starts from the launcher. It works for any DLL in `fh2-mods`, platform mods or not, so players can also turn off a mod whose author hasn't set the flag.
+- **The player decides in the end.** Where FH2MP is installed, each mod's page under MODS > YOUR MODS has a **Load when playing online** switch, set from your `offline_only` until the player changes it. Their choice is kept in `fh2-mods\platform-online.txt` and takes effect the next time the game starts from the launcher. It works for any DLL in `fh2-mods`, platform mods or not, so players can also turn off a mod whose author hasn't set the flag.
 - **`playing_online`** returns 1 when the game is online in that sense, 0 otherwise. Call it from anywhere, `fh2mod_init` included. From platform 2.9.0 it can turn from 0 to 1 during the session (online found later, above), never back, so check it when it matters, not once at the start. Use it to turn off just the part of your mod that shouldn't run online and keep the rest; anything your mod does from its own threads rather than through hooks is yours to stop when it turns 1. Check `api_version >= 9` first.
 - **What it can't switch off**: files you copied into `mediaoverride` yourself (your mod's zip, say). The game reads those online too. Files you put there with `set_file` are your mod's, and go with it.
 
@@ -722,7 +732,7 @@ int add_hotkey(FH2Mod* mod, const FH2Hotkey* hotkey);
 typedef struct FH2Hotkey {
     uint32_t size;                 /* sizeof(FH2Hotkey) */
     const char* key;               /* unique within your mod: "Mark" */
-    const char* label;             /* "Mark this spot", for its rows on the Mods page */
+    const char* label;             /* "Mark this spot", for its rows on your mod's page */
     uint32_t vk;                   /* a Windows virtual-key code (VK_F9, 'M'); 0 = none */
     uint32_t modifiers;            /* FH2_KEY_CTRL | FH2_KEY_SHIFT | FH2_KEY_ALT */
     uint32_t pad_chord;            /* FH2_PAD_LB | FH2_PAD_RB | FH2_PAD_Y ...; 0 = none */
@@ -736,7 +746,7 @@ A key on the keyboard, a chord on the controller or both, that call `on_press` o
 
 - **Only while the game is in front.** The platform polls the keyboard (`GetAsyncKeyState`) and the controllers (XInput, from System32) every 15 ms while Azimuth's window has the focus. It never takes a key from other programs (no `RegisterHotKey`), and the game still gets every key and button, so pick ones that do nothing harmful in game: an F-key, or LB+RB with a face button. The modifiers have to match exactly, so Ctrl+F5 doesn't set off a hotkey on F5.
 - **`on_press`** runs on the platform's hotkey thread, not the game's. Keep it short, and hand anything that touches the game to a hook. If it crashes, the log says so and the next press calls it again.
-- **The Mods page.** Each hotkey gets two choice rows in your mod's part of Pause > Settings > MODS: "<label>: key" (Off, F1 to F12, Ctrl+F1 to F12, or your own binding if it's none of those) and "<label>: controller" (Off, or LB+RB with Y, X, B, A or a d-pad direction, or your own chord). A change there takes effect straight away and calls `on_rebind` with the new binding. The platform doesn't keep bindings: save them in your settings and pass them in next time, as with your rows.
+- **Your mod's page.** Each hotkey gets two choice rows on your mod's page under Pause > MODS > YOUR MODS, under a "Keys and buttons" heading after your own rows: "<label>: key" (Off, F1 to F12, Ctrl+F1 to F12, or your own binding if it's none of those) and "<label>: controller" (Off, or LB+RB with Y, X, B, A or a d-pad direction, or your own chord). A change there takes effect straight away and calls `on_rebind` with the new binding. The platform doesn't keep bindings: save them in your settings and pass them in next time, as with your rows.
 - **When.** Add hotkeys from `fh2mod_init`, so their rows show (rows added later only show from the next launch). It returns 1 if the hotkey was added, 0 if not, and the log says why.
 
 ```cpp
@@ -795,9 +805,9 @@ The game picks its text language a few seconds after it starts, from its own lan
 
 - **`game_language`** puts the game's text language in `code`: the code its string tables are named by, in capitals (`EN`, `GB`, `DE`, `FR`, `ES`, `MX`, `IT`, `BR`, `NL`, `PL`, `RU`, `JP`, `KO`, `CHT`, `CZ`, `HU`; the game's Czech and Hungarian text is English). It returns 1, or 0 before the game has a language, or with no game. Cheap enough to ask every frame.
 - **`set_setting_text`** changes a row's label, description and, for a choice row, its choices' names. `NULL` leaves that part as it was; `choices` must have as many names as the row has. Link rows take a label and a description. It returns 1, or 0 when you have no row called `key` or the choices don't match, and the log says why.
-- **`set_mod_description`** changes your `FH2ModInfo.description`, shown on the MODS tab and with your mod's Load row on the Mods page.
+- **`set_mod_description`** changes your `FH2ModInfo.description`, shown on the YOUR MODS list and in "What it does" on your mod's page.
 
-The Mods page, the MODS tab and your mod's page are written each time they're opened, so new text shows the next time the player opens them. Call these from any thread, as often as you like: from your own thread once `game_language` answers, say.
+YOUR MODS (with every mod's page), the MODS tab's other pages and the list that stands in for them are written each time they're opened, so new text shows the next time the player opens them. Call these from any thread, as often as you like: from your own thread once `game_language` answers, say.
 
 ```cpp
 // in your own thread
@@ -834,7 +844,7 @@ FH2_ADD_TRANSLATIONS(api, g_mod, mymod_translations);
 
 FH2Setting s{sizeof s};
 s.key = "Trees";
-// L10N: the row on the Mods page
+// L10N: the row on the mod's page
 s.label = FH2_TR(api, g_mod, "row.Trees.label", "Breakable trees");
 s.description = FH2_TR(api, g_mod, "row.Trees.description", "Trees break when you hit them.");
 api->add_setting(g_mod, &s);

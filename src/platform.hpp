@@ -181,8 +181,9 @@ bool disk_image_readable();   // the exe on disk could be opened for disk_bytes_
 int hook_count();
 const char* hook_line(int i, bool* enabled);
 
-// settings.cpp: rows on the game's Mods page (API 4).
+// settings.cpp: rows on each mod's page under Pause > MODS > YOUR MODS (API 4).
 int settings_add(FH2Mod* mod, const FH2Setting* setting);
+void settings_mark_hotkey(FH2Mod* mod, const char* key);   // hotkeys.cpp: that row is a hotkey's
 int settings_get(FH2Mod* mod, const char* key);
 void settings_set(FH2Mod* mod, const char* key, int value);
 float settings_get_slider(FH2Mod* mod, const char* key);
@@ -216,8 +217,17 @@ struct ModEntry {
     bool offline_only = false;        // its author says it shouldn't run online (FH2ModInfo.offline_only)
     bool loads_online = true;         // loaded when playing online (the player's choice, else !offline_only)
     bool online_off = false;          // not running this time because the game is online (FH2MP)
+    bool fresh = false;               // new in fh2-mods since the last launch (platform-mods.txt didn't list it);
+                                      // the seen store's mod.new keeps it (a second start in one launch sees false)
 };
-std::vector<ModEntry> mod_entries();  // in load order, turned-off ones included
+// In load order, turned-off ones included. The first call also puts what's new in the seen store (first, mod.new).
+std::vector<ModEntry> mod_entries();
+// Whether fh2-mods\platform-mods.txt was there when this launch started: false on a first launch.
+bool mods_list_existed();
+// The platform's own lines on the title screen, in English (each language's Main.str gets them in its own
+// words), kept in fh2-mods\platform-title.txt; none takes them away. Written from settings_start, after the first
+// write of the tables.
+void set_platform_notice(const std::vector<std::string>& english_lines);
 // fh2-mods\platform-disabled.txt: the DLLs the MODS tab turned off (lower case).
 std::set<std::wstring> disabled_mods();
 void set_mod_enabled(const std::wstring& dll, bool on);

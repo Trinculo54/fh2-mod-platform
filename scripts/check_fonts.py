@@ -19,8 +19,9 @@ from pathlib import Path
 
 FALLBACK = {"JP": "DFGHSGothic-W5", "KO": "MalgunBdGm", "CHT": "DFYuanMedium-B5", "RU": "verdana"}
 
-# The calls that translate their first argument. Their own definitions (lang.cpp, text.cpp) aren't calls.
-CALL = re.compile(r"(?<![\w.:>])(tr|trf|tr_w|later|loc_string)\s*\(")
+# The calls that translate their first argument. Their own definitions (lang.cpp, text.cpp) aren't calls. title_line
+# (settings.cpp) marks the platform's title-screen lines, which tr_in translates for each language's Main.str.
+CALL = re.compile(r"(?<![\w.:>])(tr|trf|tr_w|tr_in|title_line|later|loc_string)\s*\(")
 ENGINE = {"lang.cpp", "lang.hpp", "text.cpp", "text.hpp"}
 # Text that reaches tr_w() another way: the title screen's lists add Back as their last choice (settings.cpp).
 ALSO = ["Back"]

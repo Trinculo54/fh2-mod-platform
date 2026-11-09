@@ -8,13 +8,13 @@ Azimuth 1.0 or later, without Extra Options. The platform then mounts its own fo
 
 ## Installing and removing a pack
 
-Put the pack's folder in `fh2-cars`, so that its `pack.ini` is at `fh2-cars\<pack>\pack.ini`, and start the game. Its cars are in the Autoshow under their make. `platform.log` lists each pack and the cars it adds, the Id each car got the first time ("FOR_MustangCL_15 is car 3000 from now on"), and why a pack was left out, if it was. The MODS tab's Installed mods lists the packs under the mods, with the cars each adds, and says in red when one isn't working; its About page has a row that opens `fh2-cars`.
+Put the pack's folder in `fh2-cars`, so that its `pack.ini` is at `fh2-cars\<pack>\pack.ini`, and start the game. Its cars are in the Autoshow under their make. `platform.log` lists each pack and the cars it adds, the Id each car got the first time ("FOR_MustangCL_15 is car 3000 from now on"), and why a pack was left out, if it was. The MODS tab's YOUR MODS lists the packs under the mods, with the cars each adds, and says in red when one isn't working; its About page has a row that opens `fh2-cars`.
 
 To remove a pack, delete its folder. Its cars and files are gone from the next start. A car you bought is in your save by its Id, and what the game does with a save whose car has gone hasn't been tried yet, so keep a copy of your saves before removing a pack whose car you own. A car keeps its Id for good (see below), so putting the pack back gives it the same one.
 
 ## This Azimuth folder's own files
 
-On Azimuth 1.0 or later without Extra Options, everything the platform writes for the game goes to the Azimuth folder itself, from 2.9.0: mods' text and files (`set_string`, `set_file`), the Mods pages, the database, and the packs' merged `zipmanifest.xml`. They're in `data\titles\1A96545B\tmp\fh2-platform\media`, part of the temporary drive Azimuth keeps for FH2 in its own folder, which the game reads ahead of `mediaoverride`. So Azimuth folders that share one game folder no longer see each other's mods. `mediaoverride` is still read, after this: files other mods copy there, a traffic car mod's database.
+On Azimuth 1.0 or later without Extra Options, everything the platform writes for the game goes to the Azimuth folder itself, from 2.9.0: mods' text and files (`set_string`, `set_file`), the MODS tab's pages, the database, and the packs' merged `zipmanifest.xml`. They're in `data\titles\1A96545B\tmp\fh2-platform\media`, part of the temporary drive Azimuth keeps for FH2 in its own folder, which the game reads ahead of `mediaoverride`. So Azimuth folders that share one game folder no longer see each other's mods. `mediaoverride` is still read, after this: files other mods copy there, a traffic car mod's database.
 
 With FH2MP in the Azimuth folder (an `fh2mp` folder there), the database is the exception: online play needs exactly the server's database, which FH2MP puts in `mediaoverride`, so the platform builds the database there as before ([api.md](api.md#add_sql-clear_sql-and-apply_database-api-2)). Packs' other files are still read.
 
