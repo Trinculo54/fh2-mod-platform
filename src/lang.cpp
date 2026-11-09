@@ -2894,6 +2894,19 @@ const Text kTexts[] = {
   "Tu widać okienka i wskazówki, które mody pokazują, gdy jedziesz, od najnowszych, z modem, który wysłał każde z nich.",
   "Здесь появятся всплывающие окна и подсказки, которые моды показывают, пока вы едете, сначала новые, с модом, который прислал каждое.",
   "Hier staan de pop-ups en tips die mods tonen terwijl je rijdt, nieuwste eerst, met de mod die ze stuurde."}},
+{"FH2 Mod Platform, after the mods in YOUR MODS, turns every mod's pop-ups or tips off. Recent pop-ups, on its page, says which mod sent each one.",
+ {"FH2 Mod Platform, depois dos mods em SEUS MODS, desliga os pop-ups ou as dicas de todos os mods. Pop-ups recentes, na página dele, mostra qual mod enviou cada um.",
+  "FH2 Mod Platform, nach den Mods unter DEINE MODS, schaltet die Pop-ups oder Tipps aller Mods aus. Letzte Pop-ups auf seiner Seite zeigt, von welcher Mod jedes kam.",
+  "FH2 Mod Platform, après les mods dans VOS MODS, désactive les pop-ups ou les astuces de tous les mods. Pop-ups récents, sur sa page, indique quel mod a envoyé chacun.",
+  "FH2 Mod Platform, después de los mods en TUS MODS, desactiva los avisos o los consejos de todos los mods. Avisos recientes, en su página, dice qué mod envió cada uno.",
+  "FH2 Mod Platform, después de los mods en TUS MODS, desactiva los avisos o los consejos de todos los mods. Avisos recientes, en su página, dice qué mod envió cada uno.",
+  "FH2 Mod Platform, dopo le mod in LE TUE MOD, disattiva i pop-up o i suggerimenti di tutte le mod. Pop-up recenti, nella sua pagina, dice quale mod ha inviato ciascuno.",
+  "マイMODのMODの下にあるFH2 Mod Platformで、すべてのMODのポップアップやヒントをオフにできます。そのページの最近のポップアップで、それぞれを送ったMODがわかります。",
+  "내 모드에서 모드 다음에 있는 FH2 Mod Platform으로 모든 모드의 팝업이나 팁을 끌 수 있습니다. 그 페이지의 최근 팝업에서 각각 어떤 모드가 보냈는지 알 수 있습니다.",
+  "我的模組中，模組之後的 FH2 Mod Platform 可以關閉所有模組的彈出通知或提示。其頁面上的最近的彈出通知會顯示每個是哪個模組發出的。",
+  "FH2 Mod Platform, po modach w TWOJE MODY, wyłącza okienka lub wskazówki wszystkich modów. Ostatnie okienka na jego stronie mówią, który mod wysłał każde z nich.",
+  "FH2 Mod Platform, после модов в ВАШИ МОДЫ, выключает всплывающие окна или подсказки всех модов. Недавние всплывающие окна на его странице показывают, какой мод прислал каждое.",
+  "FH2 Mod Platform, na de mods onder JOUW MODS, zet de pop-ups of tips van alle mods uit. Recente pop-ups op zijn pagina laat zien welke mod ze stuurde."}},
 };
 // clang-format on
 

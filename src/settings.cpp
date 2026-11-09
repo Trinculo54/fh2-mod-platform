@@ -2728,6 +2728,8 @@ std::vector<PageItem> help_items() {
                                                        "NEW: a mod you haven't looked at yet.")));
     items.push_back(info(tr("Turning a mod off"), tr("Load this mod, at the bottom of its page. It takes effect the next time you start the game. Outside "
                                                    "the game, move its DLL out of the fh2-mods folder.")));
+    items.push_back(info(tr("Pop-ups and tips"), tr("FH2 Mod Platform, after the mods in YOUR MODS, turns every mod's pop-ups or tips off. "
+                                                  "Recent pop-ups, on its page, says which mod sent each one.")));
     items.push_back(info(tr("Installing and updating"), tr("Extract the mod's zip into your Azimuth folder, then start the game again.")));
     items.push_back(info(tr("If MODS is missing"), tr("The MODS menus come from files the game has to read. If you use Extra Options, update it and keep "
                                                     "EnableMediaOverrides=1. fh2-mods\\platform.log says why.")));
