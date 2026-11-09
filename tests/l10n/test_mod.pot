@@ -17,38 +17,38 @@ msgid ""
 msgstr ""
 
 #. a row on the Mods page
-#: test_mod.cpp:202
+#: test_mod.cpp:206
 #, max-length:30
 msgctxt "row.Greeting.label"
 msgid "Test greeting"
 msgstr ""
 
-#: test_mod.cpp:203
+#: test_mod.cpp:207
 #, max-length:450
 msgctxt "row.Greeting.description"
 msgid "A row whose text is in the game's language."
 msgstr ""
 
-#: test_mod.cpp:206
+#: test_mod.cpp:210
 msgctxt "count.cars"
 msgid "{n} car"
 msgid_plural "{n} cars"
 msgstr[0] ""
 msgstr[1] ""
 
-#: test_mod.cpp:207
+#: test_mod.cpp:211
 #, max-length:30
 msgctxt "row.Stale.label"
 msgid "New English"
 msgstr ""
 
-#: test_mod.cpp:208
+#: test_mod.cpp:212
 #, max-length:30
 msgctxt "row.Fuzzy.label"
 msgid "Not sure yet"
 msgstr ""
 
-#: test_mod.cpp:213
+#: test_mod.cpp:217
 msgctxt "loading.tip"
 msgid "A loading tip from TestMod"
 msgstr ""

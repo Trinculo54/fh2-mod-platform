@@ -565,7 +565,8 @@ typedef struct FH2ModApi {
        the choices' names. NULL leaves that part as it was; `choices` must
        have as many names as the row has (`choice_count`). Link rows take a
        label and a description. Returns 1, or 0 if you have no row called
-       `key` or the choices don't match (the log says why).
+       `key` or the choices don't match (the log says why). The log notes
+       the first change of each row in a session, not later ones.
 
        set_mod_description: your FH2ModInfo.description, shown on the YOUR
        MODS list and in "What it does" on your mod's page. */

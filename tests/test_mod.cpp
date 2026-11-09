@@ -189,7 +189,11 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     char lang[8];
     if (!api->game_language(lang, sizeof lang) && !lang[0]) api->log(g_mod, "no game language yet");
     static const char* const renamed[] = {"LB", "RB & <renamed>", "A & <B>"};
-    if (api->set_setting_text(g_mod, "Button", "Test button, renamed", nullptr, renamed, 3)) api->log(g_mod, "setting text ok");
+    // named twice, and the second time again: the log says only the first
+    api->set_setting_text(g_mod, "Button", "Test button, named first", nullptr, nullptr, 0);
+    if (api->set_setting_text(g_mod, "Button", "Test button, renamed", nullptr, renamed, 3) &&
+        api->set_setting_text(g_mod, "Button", "Test button, renamed", nullptr, renamed, 3))
+        api->log(g_mod, "setting text ok");
     api->set_setting_text(g_mod, "Button", nullptr, nullptr, renamed, 2);   // refused: it has 3
     api->set_setting_text(g_mod, "Nope", "x", nullptr, nullptr, 0);          // refused: no such row
     api->set_mod_description(g_mod, "TestMod's description, set later.");

@@ -1968,7 +1968,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.add_hotkey        = hotkey_add;
                 g_api.add_command       = command_add;
                 g_api.game_language     = api_game_language;
-                g_api.set_setting_text  = settings_set_text;
+                g_api.set_setting_text  = api_set_setting_text;
                 g_api.set_mod_description = api_set_mod_description;
                 g_api.language          = l10n_language;
                 g_api.add_translation   = l10n_add_translation;

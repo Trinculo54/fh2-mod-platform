@@ -123,6 +123,7 @@ struct LinkRow {
     std::string key, label, description, url;
 };
 std::deque<LinkRow> g_links;         // guarded by g_mu
+std::set<std::pair<const FH2Mod*, std::string>> g_text_told;   // rows set_setting_text has changed, logged once (g_mu)
 std::atomic<bool> g_written{false};  // the pages have been written
 
 // Pages of the mods' own (API 8): a row on their mod's page under Installed mods opens them
@@ -5522,17 +5523,26 @@ void settings_mark_hotkey(FH2Mod* m, const char* key) {
     if (Row* r = find_row(m, key)) r->hotkey = true;
 }
 
-// New text for a row (API 10): the pages are written as they're opened, so it shows the next time.
-int settings_set_text(FH2Mod* m, const char* key, const char* label, const char* description, const char* const* choices,
-                      uint32_t choice_count) {
+// New text for a row (API 10): the pages are written as they're opened, so it shows the next time. `told`: the mod's
+// own call (set_setting_text), whose first change of each row in a session is logged; the platform's own calls for a
+// mod's rows (hotkeys, the HUD layer's row) aren't.
+static int set_row_text(FH2Mod* m, const char* key, const char* label, const char* description, const char* const* choices,
+                        uint32_t choice_count, bool told) {
     if (!m || !key) return 0;
     std::scoped_lock lk{g_mu};
+    // logged once a row's text has changed, the first time this session only: a mod may set it often
+    const auto tell = [&](bool changed) {
+        if (told && changed && g_text_told.emplace(m, key).second)
+            log_line(m->name, std::string("set_setting_text: ") + key + " has new text, shown the next time its page opens");
+    };
     if (Row* r = find_row(m, key)) {
         if (choices && choice_count != r->choices.size()) {
             log_line(m->name, std::string("set_setting_text: ") + key + " has " + std::to_string(r->choices.size()) +
                                   " choices, not " + std::to_string(choice_count));
             return 0;
         }
+        const std::string label_was = r->label, description_was = r->description;
+        const std::vector<std::string> choices_were = r->choices;
         if (label && *label) r->label = label;
         if (description) r->description = description;
         if (choices)
@@ -5542,18 +5552,31 @@ int settings_set_text(FH2Mod* m, const char* key, const char* label, const char*
         if (description) l10n_note(m, std::string("row.") + key + ".description", description);
         if (choices)
             for (uint32_t c = 0; c < choice_count; ++c) l10n_note(m, std::string("row.") + key + ".choice." + std::to_string(c), choices[c]);
+        tell(r->label != label_was || r->description != description_was || r->choices != choices_were);
         return 1;
     }
     for (LinkRow& l : g_links)
         if (l.mod == m && l.key == key) {
+            const std::string label_was = l.label, description_was = l.description;
             if (label && *label) l.label = label;
             if (description) l.description = description;
             if (label && *label) l10n_note(m, std::string("row.") + key + ".label", label);
             if (description) l10n_note(m, std::string("row.") + key + ".description", description);
+            tell(l.label != label_was || l.description != description_was);
             return 1;
         }
     log_line(m->name, std::string("set_setting_text: there's no row called ") + key);
     return 0;
+}
+
+int settings_set_text(FH2Mod* m, const char* key, const char* label, const char* description, const char* const* choices,
+                      uint32_t choice_count) {
+    return set_row_text(m, key, label, description, choices, choice_count, false);
+}
+
+int api_set_setting_text(FH2Mod* m, const char* key, const char* label, const char* description, const char* const* choices,
+                         uint32_t choice_count) {
+    return set_row_text(m, key, label, description, choices, choice_count, true);
 }
 
 int pages_add(FH2Mod* m, const FH2Page* p) {

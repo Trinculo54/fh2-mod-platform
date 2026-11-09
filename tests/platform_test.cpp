@@ -637,6 +637,9 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] playing offline") && !has(log, "started from the FH2MP launcher"));
         // text in the game's language (API 10)
         CHECK(has(log, "[TestMod] no game language yet") && has(log, "[TestMod] setting text ok"));
+        // the first change of a row in a session is logged, not the next ones, nor the platform's own for the hotkeys' rows
+        CHECK(count(log, "[TestMod] set_setting_text: Button has new text, shown the next time its page opens") == 1 &&
+              !has(log, "set_setting_text: Hotkey"));
         // translations (API 10): Polish last time (the runner's platform-language.ini), Polish and Brazilian Portuguese built
         // into TestMod (tests/l10n), and a Brazilian Portuguese file in fh2-mods\lang\TestMod that's used instead
         CHECK(has(log, "Language: mods' text starts in Polish (pl), the game's language last time, and follows the game's own once it has picked it"));

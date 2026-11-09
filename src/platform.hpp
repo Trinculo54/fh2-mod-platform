@@ -235,9 +235,12 @@ void settings_set_slider(FH2Mod* mod, const char* key, float value);
 // "fh2mod Platform ui set" (Developer=1): the platform's Mod pop-ups or Tips row, or a mod's Pop-ups row (`which`:
 // ModPopups, Tips or the mod's name), changed as the player would. Returns the command's reply.
 std::string settings_player_set(const std::string& which, bool on);
-// A row's text, in the game's language (API 10).
+// A row's text, in the game's language (API 10): settings_set_text for the platform's own calls for a mod's rows,
+// api_set_setting_text for the mod's (set_setting_text), which logs the first change of each row in a session.
 int settings_set_text(FH2Mod* mod, const char* key, const char* label, const char* description, const char* const* choices,
                       uint32_t choice_count);
+int api_set_setting_text(FH2Mod* mod, const char* key, const char* label, const char* description, const char* const* choices,
+                         uint32_t choice_count);
 // Pages of the mods' own (API 8).
 int pages_add(FH2Mod* mod, const FH2Page* page);
 int pages_set_rows(FH2Mod* mod, const char* page_key, const FH2PageRow* rows, uint32_t count);
