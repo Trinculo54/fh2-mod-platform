@@ -2981,7 +2981,7 @@ bool g_popup_ok = false;
 // about a restart as the player comes back through it, and Go back goes in again by the same door.
 enum Route { kRouteNone, kRouteSettings, kRouteTab };
 int g_route      = kRouteNone;
-int g_route_page = 1;                    // the MODS tab's page the player was on (HubPage)
+int g_route_page = kHubInstalled;        // the MODS tab's page the player was on (HubPage)
 bool g_go_back   = false;                // the next page opens where the player left it (Go back)
 std::atomic<bool> g_hub_ready{false};    // the MODS tab's hooks are in: the Settings door opens YOUR MODS
 
@@ -2997,7 +2997,7 @@ void mods_tile_pressed(void* page) {
     mark_home();
     g_route = kRouteSettings;
     if (g_hub_ready.load()) {
-        prepare_hub(1, std::exchange(g_go_back, false));   // kHubInstalled
+        prepare_hub(kHubInstalled, std::exchange(g_go_back, false));
     } else {
         g_go_back = false;
         write_mods_page();   // up to date: the mods may have changed their rows' text (set_setting_text)
