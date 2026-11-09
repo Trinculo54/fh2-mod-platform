@@ -832,6 +832,10 @@ void popups_mod_faulted(FH2Mod* m) {
     if (m) queue().faulted(mod_ref(m));
 }
 
+void popups_mod_stopped(FH2Mod* m) {
+    if (m) queue().mod_stopped(mod_ref(m));
+}
+
 void popups_set_platform_toasts(bool on) { queue().set_platform_toasts(on); }
 void popups_set_mod_toasts(FH2Mod* m, bool on) { queue().set_mod_toasts(m, on); }
 void popups_set_tips(bool on) { queue().set_tips(on); }

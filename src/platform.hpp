@@ -24,6 +24,10 @@ struct FH2Mod {
     // its hotkeys, commands, pad layers, HUD layer calls and title-screen entries do nothing.
     // Read and written through fh2platform::stopped_online and stop_online (atomic).
     bool stopped_online = false;
+    // What it has done to the game that can't be undone (kRan bits, platform 2.9.0): its hooks or byte patches went
+    // in, or its game text, SQL or files were written for the game (the loader's first write, or later). Such a mod
+    // is never stopped by FH2Platform.Online's going_online, only reported. Through ran_bits and note_ran (atomic).
+    uint32_t ran = 0;
     // table (lower case) -> edits
     std::map<std::string, std::map<uint16_t, std::wstring>> set;
     std::map<std::string, std::map<std::wstring, std::wstring>> repl;
@@ -260,6 +264,23 @@ inline bool stopped_online(const FH2Mod* m) {
     return m && std::atomic_ref<bool>(const_cast<FH2Mod*>(m)->stopped_online).load();
 }
 inline void stop_online(FH2Mod* m) { std::atomic_ref<bool>(m->stopped_online).store(true); }
+// FH2Mod::ran, from any thread.
+constexpr uint32_t kRanHooks = 1;   // a hook or byte patch of its went in (hooks.cpp's switch_hooks)
+constexpr uint32_t kRanEdits = 2;   // its game text, SQL or files were written for the game
+inline uint32_t ran_bits(const FH2Mod* m) { return m ? std::atomic_ref<uint32_t>(const_cast<FH2Mod*>(m)->ran).load() : 0; }
+inline void note_ran(FH2Mod* m, uint32_t bits) {
+    if (m) std::atomic_ref<uint32_t>(m->ran).fetch_or(bits);
+}
+// The loader has begun its first write of the string tables and the database: a mod's text, SQL and files from then
+// on are the game's (kRanEdits). Any thread.
+bool first_write_begun();
+// files.cpp: whether the mod has files of its own in place (set_file).
+bool owns_files(FH2Mod* mod);
+// `f` with no hook switched (hooks.cpp) or file set (files.cpp) meanwhile, for FH2Platform.Online's going_online:
+// whether a mod has run, and stopping it if it hasn't, as one step. Taken after the platform's own lock, never
+// before it.
+bool hooks_locked(const std::function<bool()>& f);
+bool files_locked(const std::function<bool()>& f);
 // fh2-mods\platform-online.txt: the player's choice per DLL, "Load when playing online".
 void set_mod_online(const std::wstring& dll, bool on);
 // The latest release of a mod on GitHub, once checked ("" before that, or if unknown).

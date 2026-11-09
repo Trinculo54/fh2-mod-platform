@@ -343,6 +343,7 @@ struct Layer {
     std::atomic<int> wish{0};
     std::atomic<uint32_t> lapsed_epoch{kNoEpoch};   // LAPSED while it equals epoch
     std::atomic<uint32_t> wish_killed{kNoEpoch};    // the wish doesn't count while it equals hold_epoch
+    std::atomic<bool> stopped{false};   // its mod was stopped for online play (stop_layer): lapsed at every frame
     std::atomic<uint32_t> pulses{0};
     std::atomic<uint64_t> calls{0};
     std::atomic<uint32_t> status{0};
@@ -725,9 +726,9 @@ struct HudEngine::Impl {
     }
 
     // ---- the frame's steps --------------------------------------------------------------------------
-    bool wish_counts(const Layer& L) const {
-        return L.wish.load() != 0 && L.wish_killed.load() != L.hold_epoch.load();
-    }
+    bool wished(const Layer& L) const { return L.wish.load() != 0 && L.wish_killed.load() != L.hold_epoch.load(); }
+    // A stopped layer's (stop_layer) doesn't count from the moment it's stopped; stops() marks it lapsed.
+    bool wish_counts(const Layer& L) const { return wished(L) && !L.stopped.load(); }
 
     void collect(int n) {
         for (int i = 0; i < n; ++i) {
@@ -838,6 +839,27 @@ struct HudEngine::Impl {
             L.idle = 0;
         }
         return ended;
+    }
+
+    // A layer whose mod was stopped for online play (stop_layer): lapsed at once, on screen or not, whatever the
+    // mod still calls. hud_status keeps a lease, but a stopped mod can only hide its layer and let go of the hold.
+    void stops(int n) {
+        for (int i = 0; i < n; ++i) {
+            Layer& L = layers[i];
+            if (!L.stopped.load()) continue;
+            uint64_t ps     = 0;
+            const bool show = candidate(L, &ps);
+            const bool wish = wished(L);
+            if (!show && !wish) continue;
+            if (show) {
+                L.killed     = ps;
+                L.end_logged = true;
+            }
+            L.lapsed_epoch.store(L.epoch.load());
+            L.wish_killed.store(L.hold_epoch.load());
+            L.idle = 0;
+            mlog(i, "HUD layer: this mod was stopped for online play, so its layer is hidden and its hold on the game's HUD is let go");
+        }
     }
 
     void targets(const Data& s, bool kbd) {
@@ -1536,6 +1558,11 @@ int HudEngine::pulse(int layer, int pulse) {
     return 1;
 }
 
+void HudEngine::stop_layer(int layer) {
+    if (layer < 0 || layer >= d_->count.load(std::memory_order_acquire)) return;
+    d_->layers[layer].stopped.store(true);
+}
+
 uint32_t HudEngine::status(int layer) {
     Layer& L = d_->layers[layer];
     d_->call(L);
@@ -1769,6 +1796,7 @@ HudEngine::FrameOut HudEngine::frame(const FrameIn& in) {
         d.refresh();
     }
     d.collect(n);
+    d.stops(n);
     d.choose_owner(n);
     if (d.leases(in, n, dt)) d.choose_owner(n);
     d.feed_step(in, dt);

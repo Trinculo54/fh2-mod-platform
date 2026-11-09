@@ -140,6 +140,10 @@ public:
     int hold(int layer, int hold);
     int play_sound(int layer, uint32_t sound);
     int post_feed(int layer, const FH2HudFeedLine* line);   // interface version 2
+    // Its mod was stopped for online play (any thread): from the next frame its layer is hidden and its hold let
+    // go, as when its lease runs out, whatever it calls (its hud_status still keeps a lease). The glue refuses its
+    // shows with parts and its holds from then on.
+    void stop_layer(int layer);
 
     // ---- the session (the loader thread, after every fh2mod_init) -----------------------------------
     uint32_t parts() const;                              // the union of the layers' parts

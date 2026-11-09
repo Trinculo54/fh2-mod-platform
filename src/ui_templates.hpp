@@ -24,6 +24,9 @@ void ui_note_callback(FH2Mod* mod);
 // The platform caught a crash in one of a mod's callbacks: its waiting pop-ups and tip are dropped (and, as the
 // other templates are built, what else of its the design takes down). Any thread.
 void ui_mod_faulted(FH2Mod* mod);
+// The mod was stopped for online play (platform.cpp's go_online): its waiting pop-ups, tips and UI sounds are
+// dropped, with a line in its name. Any thread.
+void ui_mod_stopped(FH2Mod* mod);
 // How many times the platform has caught a crash in the mod's callbacks so far (a message box doesn't call the
 // on_choose of a mod that faulted after it was shown).
 uint32_t ui_mod_faults(const FH2Mod* mod);

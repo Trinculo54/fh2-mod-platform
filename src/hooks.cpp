@@ -1036,6 +1036,11 @@ int switch_hooks(FH2Mod* m, FH2Hook* hook, bool on) {
     }
     int count = 0;
     for (FH2Hook* h : mine) count += h->enabled == on;
+    // In, for this mod: what its detours do from now on can't be undone, so going online later only reports it
+    // (platform.cpp's FH2Platform.Online).
+    if (on)
+        for (FH2Hook* h : mine)
+            if (h->enabled && h->site->live) note_ran(m, kRanHooks);
     if (count)
         log_line(m->name, std::string(on ? "enabled " : "disabled ") + std::to_string(count) +
                               (count == 1 ? " hook" : " hooks") +
@@ -1702,6 +1707,11 @@ void* api_wait_for_code(uint32_t timeout_ms) {
 }
 
 } // namespace
+
+bool hooks_locked(const std::function<bool()>& f) {
+    std::scoped_lock lk{g_mu};
+    return f();
+}
 
 // The HUD layer's code checks (hud_layer.cpp): whether the exe on disk holds `expect` at game address p,
 // n <= 256 bytes. Only the file's raw bytes are read, never memory, so a patch another mod made in

@@ -1124,17 +1124,24 @@ struct FH2MessageBox {
 
    playing_online: the same as FH2ModApi.playing_online (1 online, 0 not).
 
-   going_online: call it before connecting. From then on the game counts as
-   online: mods that shouldn't run online and had already started (offline,
-   before FH2MP's session was found) are stopped until the game restarts:
-   their hooks and byte patches go off, and their game text, SQL and files
-   are taken out. Returns how many such mods had started in this game, 0
-   for none, and puts their names in `names` as "Nitro, Other", UTF-8, cut
-   short between characters to fit `size` and NUL-terminated. `names` may
-   be NULL (or `size` 0) to get only the count.
-   Over 0, they ran offline first and may have changed the game in ways the
-   platform can't undo: don't connect, and ask the player to start the game
-   from the FH2MP launcher. Call it from any thread, as often as you like. */
+   going_online: call it before connecting. It reports before it changes
+   anything. Returns how many mods that shouldn't run online have already
+   run in this game (offline, before FH2MP's session was found): their hooks
+   or byte patches went in, or their game text, SQL or files were written for
+   the game, which the platform can't undo; a mod from before the platform
+   that's loaded counts too. Their names go in `names` as "Nitro, Other",
+   UTF-8, cut short between characters to fit `size` and NUL-terminated.
+   `names` may be NULL (or `size` 0) to get only the count.
+   0: the game counts as online from then on, and the mods that shouldn't run
+   online but hadn't run yet are stopped until the game restarts, as at load.
+   Connect.
+   Over 0: nothing changed (no mod stopped, playing_online still 0 if it was):
+   stay offline, and ask the player to start the game from the FH2MP
+   launcher.
+   Once the game counts as online (at load, or after a 0), it changes nothing
+   and returns the mods that had run before the platform stopped them.
+   It never rewrites the string tables or the game database. Call it from
+   FH2MP's own thread, as often as you like. */
 #define FH2_ONLINE_INTERFACE "FH2Platform.Online"
 
 typedef struct FH2PlatformOnline {

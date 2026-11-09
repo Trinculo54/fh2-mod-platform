@@ -482,6 +482,13 @@ int main() {
         q.show_tip(A, &t, 0);
         q.faulted(A);
         check(q.waiting() == 1 && logged("[ModA] ModA faulted, so its waiting pop-ups were dropped (2)"), "a fault drops the mod's pop-ups and tip");
+        // stopped for online play (platform 2.9.0, go_online): the same, said so, and the tip isn't marked seen
+        q.show_toast(A, &a, 0);
+        q.show_tip(A, &t, 0);
+        q.mod_stopped(A);
+        check(q.waiting() == 1 && logged("[ModA] stopped for online play, so its waiting pop-ups and tips were dropped (2); none is marked seen") &&
+                  q.tip_seen(A, "T") == 0,
+              "a mod stopped for online play: its pop-ups and tip go, unseen; the other mod's stay");
         q.set_available(0, "the game's notification code isn't as expected");
         check(q.waiting() == 0 && logged("[ModB] pop-up dropped: the game's notification code isn't as expected (B (key b))"), "off: everything waiting goes");
         check(q.show_toast(A, &a, 0) == 0 && q.show_tip(A, &t, 0) == 0, "off: later calls return 0");

@@ -765,6 +765,16 @@ void reuse_strings(const fs::path& file) {
     }
 }
 
+// Online, FH2MP's copy of the server's database in mediaoverride is the one the game has to play with (FH2MP hashes
+// it for every request): nothing is built over it, and nothing kept is put back over it. The platform's records stay
+// as they are, so the next launch offline goes on from them. In-memory car names (Data_Car.str) were the platform's
+// copy's, which isn't there.
+void fh2mp_left_alone() {
+    plog("database: mediaoverride's gamedbRC.slt is FH2MP's copy of the server's, and the game is online, so it's left as it "
+         "is: no database changes this time");
+    g_strings.clear();
+}
+
 // A car pack's statements that failed (a result line, "car pack <name><TAB>FAILED, ..."): for the MODS tab.
 void note_pack_result(const std::string& source, const std::string& result) {
     const std::string pack = "car pack ", failed = "FAILED, so none of its changes were made: ";
@@ -859,7 +869,11 @@ void apply_layer_database(const Files& f, const std::vector<Sql>& given) {
                  "); no database changes this time");
             return;
         }
-        release(f, st, classify(f, st), false, "this folder's database is on the game's temp drive now");
+        if (const Found found = classify(f, st); found == Found::fh2mp && playing_online())
+            plog("database: mediaoverride's gamedbRC.slt is FH2MP's copy of the server's, and the game is online, so nothing "
+                 "the platform kept is put back over it");
+        else
+            release(f, st, found, false, "this folder's database is on the game's temp drive now");
     }
     if (given.empty()) {
         drop_layer_copy(f, "no car pack or mod changes the database any more");
@@ -1057,6 +1071,10 @@ void apply_database(const std::vector<FH2Mod*>& mods) {
         }
     const auto was    = stamp_of(f.target);
     const Found found = classify(f, st);
+    if (found == Found::fh2mp && playing_online()) {
+        fh2mp_left_alone();
+        return;
+    }
     if (sources.empty()) {
         release(f, st, found, false);
         keep_strings(f.strings, {});

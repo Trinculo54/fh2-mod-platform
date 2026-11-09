@@ -212,6 +212,7 @@ void on_tick(FH2Context*, void*) {
     }
     if (!any) return;
     FH2Mod* m = const_cast<FH2Mod*>(static_cast<const FH2Mod*>(due.mod));
+    if (stopped_online(m)) return;   // stopped for online play just after it asked (go_online drops what waits)
     uint32_t code = 0;
     tell(m, due.sound, play(due.sound, &code));
 }
@@ -302,5 +303,10 @@ bool ui_sound_play_direct(uint32_t sound, uint32_t* code) {
 }
 
 void ui_sounds_prepare(const FH2ModApi* api) { g_api = api; }
+
+void ui_sounds_mod_stopped(FH2Mod* m) {
+    if (const std::size_t n = m ? g_rules.forget(m) : 0)
+        log_line(m->name, "stopped for online play, so its waiting UI sounds were dropped (" + std::to_string(n) + ")");
+}
 
 } // namespace fh2platform

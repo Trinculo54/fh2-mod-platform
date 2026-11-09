@@ -15,6 +15,8 @@ int ui_sounds_play(FH2Mod* mod, uint32_t sound);
 bool ui_sound_play_direct(uint32_t sound, uint32_t* code);
 // fill_ui_api: the API the sounds' own hook is made through.
 void ui_sounds_prepare(const FH2ModApi* api);
+// The mod was stopped for online play (platform.cpp's go_online): its sounds waiting for the game's tick go.
+void ui_sounds_mod_stopped(FH2Mod* mod);
 
 // settings.cpp: the MODS tab's own way of playing a sound by its FMOD name (the GameString to the player at
 // game+0x365A298, its vtable +0x08), without the MODS tab's checks, which ui_sounds.cpp makes its own, at the game's

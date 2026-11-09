@@ -13,10 +13,13 @@
 // writes the session while the mods start, so OfflineMod is stopped, its text, SQL and file taken
 // out), "online-renamed" (the same DLL, known as FH2MP now), "online-register" (FakeFH2MP.dll as
 // MpClient.dll, new, finds its session when it registers: the mods before it that shouldn't run
-// online are stopped, the ones after it aren't started) and "online-ready" (no session; FH2MP's
-// going_online, once every mod has started, stops OfflineMod and its text, SQL and file are taken
-// out again); last, "hud": HudTestMod.dll adds a HUD layer (the HUD layer preview,
-// include/fh2mod_hud.h).
+// online are stopped, the ones after it aren't started), "online-ready" (no session; FH2MP's
+// going_online, once every mod has started, finds OfflineMod and HelloMod have run, so nothing
+// changes) and "online-clean" (OfflineMod only registered: going_online stops it and the game goes
+// online). "online-stale" and "online-nolimit" (between "fh2mp-off" and "online-root") follow FH2MP's
+// own rules for its session: a three-hour-old one in data\bin and a fresh one next to azimuth.exe
+// don't count, and the old one does with FH2MP_SESSION_MAX_AGE_S=0. Last, "hud": HudTestMod.dll adds
+// a HUD layer (the HUD layer preview, include/fh2mod_hud.h).
 // Given the game exe, "full" and "hud" map all of it after loading the platform (Azimuth's "Play"), and the
 // runner has it in FH2\Mount as well: the code checks pass and the hooks go in (but not the MODS menus', which
 // would run game code this copy can't: see map_game). Without it, there's no game, and the parts that wait for
@@ -411,9 +414,10 @@ int wmain(int argc, wchar_t** argv) {
             : hud_phase ? has(log, "mod(s) loaded") && has(log, "[HudTestMod] after init:") && has(log, "[HUD layer] page:") &&
                             (argc <= 2 || !menus || hud_started(log))
             : online_phase ? has(log, "mod(s) loaded") &&
-                                 ((phase != L"online-late" && phase != L"online-ready") || has(log, "[OfflineMod] after start:")) &&
+                                 ((phase != L"online-late" && phase != L"online-ready" && phase != L"online-clean") ||
+                                  has(log, "[OfflineMod] after start:")) &&
                                  ((phase != L"online-late" && phase != L"online-renamed" && phase != L"online-register" &&
-                                   phase != L"online-ready") ||
+                                   phase != L"online-ready" && phase != L"online-clean") ||
                                   has(log, "[FH2MP] going_online:"))
                            : has(log, "mod(s) loaded") && has(log, "TestMod version") &&
                                  (phase == L"full" ? has(log, "late edit applied") && has(log, "save snapshot:") && (argc <= 2 || full_started(log))
@@ -1055,8 +1059,10 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(!fs::exists(layer() / L"UI\\OfflineMod.txt"));
             CHECK(str("LoadingMessages.str", 0x6875) != L"from OfflineMod" && db_xp(1) != 4242);
             CHECK(!has(log, "[OfflineMod] database:"));
-            // what FH2MP is told before it connects
+            // what FH2MP is told before it connects: OfflineMod's hook had gone in before it was stopped (a stop before
+            // anything of a mod ran isn't told: "online-register")
             CHECK(has(log, "[FH2MP] going_online: 1 started (OfflineMod; cut short \"Off\"), playing_online 1"));
+            CHECK(!has(log, "FH2MP asked to go online (FH2Platform.Online), but"));
             CHECK(has(known, "ZzFH2MP.dll\tFH2MP\t0.0.1"));
             if (pages) CHECK(has(installed, "local:BindingProxy.C=\"Off online  1.0.0  &gt;\"") && has(installed, "Stopped for online play"));
         } else if (phase == L"online-renamed") {
@@ -1082,23 +1088,52 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(!has(log, "[TestMod] ") && !has(log, "TestMod.dll: fh2mod_init returned"));
             CHECK(has(log, "OfflineMod.dll is set to stay off when playing online; not started (FH2MP went online after it was loaded)"));
             CHECK(!has(log, "[OfflineMod] running"));
-            CHECK(has(log, "[FH2MP] going_online: 1 started (HelloMod; cut short \"Hel\"), playing_online 1"));
+            // HelloMod was stopped before anything of it ran (its text not written yet, no hooks): FH2MP isn't told of it
+            CHECK(has(log, "[FH2MP] going_online: 0 started (; cut short \"\"), playing_online 1"));
+            CHECK(!has(log, "FH2MP asked to go online (FH2Platform.Online), but"));
             CHECK(has(known, "MpClient.dll\tFH2MP\t0.0.1"));
         } else if (phase == L"online-ready") {
-            // FH2MP (MpClient.dll, known now) has no session: offline, so OfflineMod starts, and its text, SQL and file are
-            // written. FH2MP's going_online, once every mod has started, makes the game online: OfflineMod and HelloMod (the
-            // player's switch) are stopped, and the tables and the database are written again without them.
+            // FH2MP (MpClient.dll, known now) has no session: offline, so OfflineMod starts, hooks, and its text, SQL and
+            // file are written, as HelloMod's text is (the player's switch off). FH2MP's going_online, once every mod has
+            // started, finds that they've run: nothing changes (no mod stopped, the game offline), and FH2MP is told.
             CHECK(!has(log, "started from the FH2MP launcher") && !has(log, "counts as online play"));
             CHECK(has(log, "[OfflineMod] running offline") && has(log, "[FH2MP] in fh2mod_init: offline"));
             CHECK(has(log, "[OfflineMod] replaced media\\UI\\OfflineMod.txt") && has(log, "[OfflineMod] database: "));
-            CHECK(has(log, "online play after all: FH2MP said it's going online (FH2Platform.Online)"));
-            CHECK(has(log, "[OfflineMod] stopped for online play") && has(log, "[HelloMod] stopped for online play"));
-            CHECK(has(log, "[OfflineMod] stopped replacing media\\UI\\OfflineMod.txt"));
-            CHECK(has(log, "[FH2MP] going_online: 2 started (HelloMod, OfflineMod; cut short \"Hel\"), playing_online 1"));
-            CHECK(!fs::exists(layer() / L"UI\\OfflineMod.txt"));
+            CHECK(has(log, "FH2MP asked to go online (FH2Platform.Online), but mods that shouldn't run online have already run in this "
+                           "game: HelloMod (its game text, files or database changes were written); OfflineMod (its hooks went in, and "
+                           "its game text, files or database changes were written). Nothing was changed, so the game stays offline"));
+            CHECK(!has(log, "online play after all") && !has(log, "stopped for online play"));
+            CHECK(has(log, "[FH2MP] going_online: 2 started (HelloMod, OfflineMod; cut short \"Hel\"), playing_online 0"));
+            CHECK(has(log, "[OfflineMod] after start: online=0, the detour ran, enable_hooks gave 1"));
+            CHECK(fs::exists(layer() / L"UI\\OfflineMod.txt"));
             const auto text = str("LoadingMessages.str", 0x6875);
             std::printf("LoadingMessages 0x6875 after going_online: [%ls], AIPlayers 1 XP %d\n", text.c_str(), db_xp(1));
-            CHECK(text != L"from OfflineMod" && db_xp(1) != 4242);
+            CHECK(text == L"from OfflineMod" && db_xp(1) == 4242);
+        } else if (phase == L"online-clean") {
+            // The same, with OfflineMod only registered (FH2_TEST_OFFLINE_IDLE) and HelloMod set to load online: nothing of
+            // OfflineMod has run, so going_online stops it and the game goes online, with nothing to write again.
+            CHECK(!has(log, "counts as online play") && has(log, "[OfflineMod] running offline"));
+            CHECK(!has(log, "FH2MP asked to go online (FH2Platform.Online), but"));
+            const std::size_t at = log.find("online play after all: FH2MP said it's going online (FH2Platform.Online)");
+            CHECK(at != std::string::npos && has(log, "[OfflineMod] stopped for online play") && !has(log, "[HelloMod] stopped"));
+            CHECK(has(log, "[FH2MP] going_online: 0 started (; cut short \"\"), playing_online 1"));
+            // its hook and file, once online, are refused
+            CHECK(has(log, "[OfflineMod] can't enable hooks: it was stopped for online play"));
+            CHECK(has(log, "[OfflineMod] after start: online=1, the original ran, enable_hooks gave 0, set_file gave 0"));
+            // no table or database written again for it, on FH2MP's thread or any other
+            CHECK(at == std::string::npos || (log.find(" wrote ", at) == std::string::npos && log.find("database: ", at) == std::string::npos));
+        } else if (phase == L"online-stale") {
+            // FH2MP's rules for its session: data\bin's is three hours old, and the fresh one next to azimuth.exe isn't where
+            // FH2MP looks with a data\bin there. Offline.
+            CHECK(!has(log, "counts as online play") && !has(log, "started from the FH2MP launcher"));
+            CHECK(has(log, "FH2MP's session file (data\\bin\\fh2mp-session.txt) was written 1") &&
+                  has(log, " minutes ago, outside FH2MP's limit of 30 minutes, so FH2MP won't use it; it doesn't make this game online"));
+            CHECK(has(log, "[OfflineMod] running offline"));
+        } else if (phase == L"online-nolimit") {
+            // FH2MP_SESSION_MAX_AGE_S=0: no limit, so the old one counts
+            CHECK(has(log, "FH2MP.dll (FH2MP) is turned on and FH2MP's session file is there (data\\bin\\fh2mp-session.txt), "
+                           "so this game counts as online play"));
+            CHECK(has(log, "OfflineMod.dll is set to stay off when playing online; not loaded") && !has(log, "won't use it"));
         } else {
             // fh2mp-off: FH2MP turned off on the MODS tab, so a session file doesn't make it online
             CHECK(!has(log, "started from the FH2MP launcher") && has(log, "FH2MP.dll is turned off on the MODS tab"));
