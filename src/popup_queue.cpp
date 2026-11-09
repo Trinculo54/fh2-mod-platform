@@ -543,6 +543,17 @@ void PopupQueue::faulted(const PopupMod& m) {
     if (n) log(m.name, m.name + " faulted, so its waiting pop-ups were dropped (" + std::to_string(n) + ")");
 }
 
+void PopupQueue::mod_stopped(const PopupMod& m) {
+    std::scoped_lock lk{mu_};
+    int n = 0;
+    for (std::size_t i = items_.size(); i-- > 0;)
+        if (items_[i].mod == m.id) {
+            items_.erase(items_.begin() + static_cast<std::ptrdiff_t>(i));
+            ++n;
+        }
+    if (n) log(m.name, "stopped for online play, so its waiting pop-ups and tips were dropped (" + std::to_string(n) + "); none is marked seen");
+}
+
 void PopupQueue::set_available(int state, const std::string& why) {
     std::scoped_lock lk{mu_};
     if (state == available_) return;

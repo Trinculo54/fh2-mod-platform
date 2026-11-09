@@ -108,8 +108,8 @@ run_layout() {   # run_layout mediaoverride|own
     wine azimuth.exe online-renamed
     # FH2MP under a name the platform doesn't know yet (MpClient.dll), its session already there: online once it
     # registers, with mods before it that the player set to stay off online (HelloMod) stopped, and the ones after
-    # it (OfflineMod, TestMod) not started. Then FH2MP saying it's going online with no session at all, after the
-    # mods have started: OfflineMod's text, SQL and file come out again.
+    # it (OfflineMod, TestMod) not started. Then FH2MP asking to go online with no session at all, after the mods have
+    # started: OfflineMod and HelloMod have run (a hook, text, SQL, a file), so nothing changes and FH2MP is told.
     rm fh2-mods/ZzFH2MP.dll
     cp "$b/FakeFH2MP.dll" fh2-mods/MpClient.dll
     cp "$b/TestMod.dll" fh2-mods/
@@ -117,6 +117,10 @@ run_layout() {   # run_layout mediaoverride|own
     wine azimuth.exe online-register
     rm fh2-mods/TestMod.dll data/bin/fh2mp-session.txt
     FH2_TEST_NO_SESSION=1 FH2_TEST_OFFLINE_EDITS=1 wine azimuth.exe online-ready
+    # The same with OfflineMod only registered, nothing of it run, and HelloMod set to load online: FH2MP's
+    # going_online stops OfflineMod, and the game goes online.
+    printf 'HelloMod.dll\t1\n' > fh2-mods/platform-online.txt
+    FH2_TEST_NO_SESSION=1 FH2_TEST_OFFLINE_IDLE=1 wine azimuth.exe online-clean
     # back as the HUD phase has always had it
     rm fh2-mods/MpClient.dll
     cp "$b/Legacy.dll" fh2-mods/FH2MP.dll

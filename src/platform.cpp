@@ -85,8 +85,11 @@ std::atomic<bool> g_online{false};
 // FH2MP this launch: FH2MP.dll when it's there and turned on, else the first DLL to register as
 // FH2MP, or "" (under g_mu)
 std::wstring g_fh2mp_dll;
-std::vector<std::string> g_started_offline;       // what go_online found running that shouldn't run online
-bool g_first_write = false;                       // the loader has begun its first write of the tables and the database (under g_mu)
+// What go_online stopped that had already run (FH2Mod::ran), and the mods from before the platform it found
+// running that shouldn't run online: what FH2Platform.Online's going_online tells FH2MP (under g_mu)
+std::vector<std::string> g_started_offline;
+// the loader has begun its first write of the tables and the database (set under g_mu; first_write_begun)
+std::atomic<bool> g_first_write{false};
 
 std::mutex g_log_mu;
 FILE* g_log = nullptr;
@@ -612,6 +615,7 @@ void api_set_string(FH2Mod* m, const char* table, uint16_t key, const wchar_t* t
     if (!m || !table) return;
     std::scoped_lock lk{g_mu};
     if (stopped_online(m)) return;   // stopped for online play (go_online)
+    if (g_first_write) note_ran(m, kRanEdits);   // from now on its text is the game's
     m->set[lower(table)][key] = text ? text : L"";
     if (auto it = m->set_tr.find(lower(table)); it != m->set_tr.end()) it->second.erase(key);
     touch(table);
@@ -622,6 +626,8 @@ void api_set_string(FH2Mod* m, const char* table, uint16_t key, const wchar_t* t
 void api_set_string_tr(FH2Mod* m, const char* table, uint16_t key, const char* msg_key, const wchar_t* english) {
     if (!m || !table) return;
     std::scoped_lock lk{g_mu};
+    if (stopped_online(m)) return;   // stopped for online play (go_online)
+    if (g_first_write) note_ran(m, kRanEdits);
     m->set_tr[lower(table)][key] = {msg_key ? msg_key : "", english ? english : L""};
     if (auto it = m->set.find(lower(table)); it != m->set.end()) it->second.erase(key);
     touch(table);
@@ -631,6 +637,7 @@ void api_replace_string(FH2Mod* m, const char* table, const wchar_t* from, const
     if (!m || !table || !from) return;
     std::scoped_lock lk{g_mu};
     if (stopped_online(m)) return;   // stopped for online play (go_online)
+    if (g_first_write) note_ran(m, kRanEdits);
     m->repl[lower(table)][from] = to ? to : L"";
     touch(table);
 }
@@ -708,6 +715,7 @@ void api_add_sql(FH2Mod* m, const char* sql) {
     if (!m || !sql || !*sql) return;
     std::scoped_lock lk{g_mu};
     if (stopped_online(m)) return;   // stopped for online play (go_online)
+    if (g_first_write) note_ran(m, kRanEdits);
     m->sql.emplace_back(sql);
 }
 
@@ -831,9 +839,12 @@ int api_playing_online() { return g_online ? 1 : 0; }
 // - when FH2MP's fh2mod_init has returned: FH2MP reads its session there, and the launcher may have
 //   written it after the loader looked (Play pressed while the game was starting);
 // - when FH2MP asks through FH2Platform.Online before it connects (going_online).
-// Online found then, the mods that shouldn't run online and had already started are stopped
-// (go_online). The other way round (online at load, and FH2MP then finds its session too old) only
-// leaves those mods out for that one start.
+// Online found as FH2MP starts (the first two), the mods that shouldn't run online and had already
+// started are stopped (go_online): FH2MP is online whatever the platform says. Asked through
+// going_online, the platform first looks for those that have already run (FH2Mod::ran): with any,
+// nothing changes and FH2MP is told, so it can stay offline; with none, it goes online as at load.
+// The other way round (online at load, and FH2MP then finds its session too old) only leaves those
+// mods out for that one start.
 
 // Whether FH2MP may have a session to play online with: why, for the log.
 bool fh2mp_session(std::string* why) {
@@ -925,51 +936,72 @@ bool loads_online(const std::wstring& dll, const std::map<std::wstring, bool>& c
 // are held back, and the ones that had started (their author's offline_only, or the player's "Load
 // when playing online" switch) are stopped until the game restarts:
 // - their hooks and byte patches go off, and enable_hooks is refused;
-// - their game text, SQL and files (set_file) are taken out, and new ones refused; once the loader
-//   has written the tables and the database, they're written again without them;
+// - their game text, SQL and files (set_file) are taken out, and new ones refused;
+// - their waiting pop-ups, tips and UI sounds are dropped, and their HUD layer lapses;
 // - their hotkeys, commands, pad layers, HUD layer calls and title-screen entries do nothing.
-// What they did to the game some other way can't be undone, so FH2Platform.Online's going_online
-// tells FH2MP about them. Mods from before the platform can't be stopped at all: they're named in the
+// As FH2MP starts, that's before the loader's first write of the tables and the database, which then
+// leaves them out. FH2Platform.Online's going_online only gets here when none of them has run
+// (FH2Mod::ran), so none of them has anything in the tables or the database to take out then. What
+// they had already done (FH2Mod::ran) can't be undone, so they're kept for going_online to tell FH2MP
+// (g_started_offline). Mods from before the platform can't be stopped at all: they're named in the
 // log, and told to FH2MP the same way.
-void go_online(const std::string& why) {
+struct GoingOnline {
     std::vector<FH2Mod*> stop;
     std::vector<std::wstring> others;   // mods from before the platform (fh2wheel too) already loaded
     bool strings = false, sql = false, rewrite = false;
-    {
-        std::scoped_lock lk{g_mu};
-        if (g_online.exchange(true)) return;
-        const auto choices = online_choices();
-        for (const auto& m : g_mods) {
-            if (is_the_fh2mp(m->dll)) continue;
-            const auto c = choices.find(lower_w(m->dll));
-            if (c != choices.end() ? c->second : !m->offline_only) continue;
-            stop_online(m.get());
-            // its text and SQL go: the tables it edits are written again, and the database built again
-            for (const auto& [t, _] : m->set) g_dirty.insert(t);
-            for (const auto& [t, _] : m->repl) g_dirty.insert(t);
-            strings = strings || !m->set.empty() || !m->repl.empty();
-            sql     = sql || !m->sql.empty();
-            m->set.clear();
-            m->repl.clear();
-            m->sql.clear();
-            stop.push_back(m.get());
-            g_started_offline.push_back(m->name);
-        }
-        for (const auto& f : g_found) {
-            if (!f.loaded || f.has_init) continue;
-            // a mod from before the platform loads once the game is found: one that hasn't yet won't
-            if (lower_w(f.file) != L"fh2wheel.dll" && launched_game() == Launched::not_yet) continue;
-            const auto c = choices.find(lower_w(f.file));
-            if (c != choices.end() ? c->second : !remembered_offline_only(f.file)) continue;
-            others.push_back(f.file);
-            g_started_offline.push_back(narrow(f.file));
-        }
-        // Before the loader's first write of the tables and the database, that write leaves them out.
-        rewrite = g_first_write;
+};
+
+// Under g_mu: the mods that have started and shouldn't run online, and the mods from before the
+// platform already loaded that shouldn't either.
+void online_off(std::vector<FH2Mod*>& mods, std::vector<std::wstring>& others) {
+    const auto choices = online_choices();
+    for (const auto& m : g_mods) {
+        if (is_the_fh2mp(m->dll)) continue;
+        const auto c = choices.find(lower_w(m->dll));
+        if (c != choices.end() ? c->second : !m->offline_only) continue;
+        mods.push_back(m.get());
     }
+    for (const auto& f : g_found) {
+        if (!f.loaded || f.has_init) continue;
+        // a mod from before the platform loads once the game is found: one that hasn't yet won't
+        if (lower_w(f.file) != L"fh2wheel.dll" && launched_game() == Launched::not_yet) continue;
+        const auto c = choices.find(lower_w(f.file));
+        if (c != choices.end() ? c->second : !remembered_offline_only(f.file)) continue;
+        others.push_back(f.file);
+    }
+}
+
+// Under g_mu: the game counts as online from now on, and `g` says what finish_online stops. False if
+// it already did. The mods are marked stopped before playing_online turns 1, so a mod that sees it turn
+// finds itself stopped.
+bool begin_online(GoingOnline& g) {
+    if (g_online) return false;
+    online_off(g.stop, g.others);
+    for (FH2Mod* m : g.stop) {
+        stop_online(m);
+        // its text and SQL go: the tables it edits are written again, and the database built again
+        for (const auto& [t, _] : m->set) g_dirty.insert(t);
+        for (const auto& [t, _] : m->set_tr) g_dirty.insert(t);
+        for (const auto& [t, _] : m->repl) g_dirty.insert(t);
+        g.strings = g.strings || !m->set.empty() || !m->set_tr.empty() || !m->repl.empty();
+        g.sql     = g.sql || !m->sql.empty();
+        m->set.clear();
+        m->set_tr.clear();
+        m->repl.clear();
+        m->sql.clear();
+        if (ran_bits(m)) g_started_offline.push_back(m->name);
+    }
+    for (const auto& f : g.others) g_started_offline.push_back(narrow(f));
+    // Before the loader's first write of the tables and the database, that write leaves them out.
+    g.rewrite = g_first_write;
+    g_online  = true;
+    return true;
+}
+
+void finish_online(const std::string& why, const GoingOnline& g) {
     plog("online play after all: " + why + ". The mods had started as for offline play; from now on the game counts as "
          "online");
-    for (FH2Mod* m : stop) {
+    for (FH2Mod* m : g.stop) {
         const int off = g_api.disable_hooks(m, nullptr);
         clear_file(m, nullptr);
         log_line(m->name, off ? "stopped for online play: it shouldn't run online, and FH2MP went online after it had started. Its "
@@ -978,24 +1010,87 @@ void go_online(const std::string& why) {
                               : "stopped for online play: it shouldn't run online, and FH2MP went online after it had started. "
                                 "Its game text, database changes and files are taken out, but some of its hooks or byte patches "
                                 "couldn't be turned off (the lines above say which)");
+        ui_mod_stopped(m);           // its waiting pop-ups, tips and UI sounds
+        hud_layer_mod_stopped(m);    // its HUD layer lapses at the next frame, whatever it calls
     }
-    for (const auto& f : others)
+    for (const auto& f : g.others)
         plog(narrow(f) + " shouldn't run online, but it's a mod from before the platform, so it can't be stopped; start the "
              "game from the FH2MP launcher to leave it out");
-    if (stop.empty() && others.empty()) plog("no mod that shouldn't run online had started");
-    if (rewrite && strings) apply_all();
-    if (rewrite && sql) build_database();
+    if (g.stop.empty() && g.others.empty()) plog("no mod that shouldn't run online had started");
+    if (g.rewrite && (g.strings || g.sql)) {
+        // Only when a DLL registers as FH2MP after the loader's first write (FH2MP registers in its fh2mod_init):
+        // going_online stops only mods with nothing written for the game. On a thread of its own, as the caller may
+        // be the game's.
+        const bool sql = g.sql;
+        std::thread([sql] {
+            if (sql) build_database();
+            apply_all();
+        }).detach();
+    }
+}
+
+void go_online(const std::string& why) {
+    GoingOnline g;
+    {
+        std::scoped_lock lk{g_mu};
+        if (!begin_online(g)) return;
+    }
+    finish_online(why, g);
 }
 
 // ---- FH2Platform.Online (platform 2.9.0): for FH2MP ---------------------------------
 
 int online_playing() { return g_online ? 1 : 0; }
 
+// What FH2MP is told. Online already: the mods go_online stopped that had run, and the mods from
+// before the platform it couldn't stop. Not yet: the mods that shouldn't run online and have already
+// run, and the mods from before the platform already loaded. With any of those, nothing changes; with
+// none, the game goes online, those mods stopped as at load. Counted and gone online as one step: under
+// g_mu, so a mod can't write text or SQL in between, and with the hooks' and files' locks held, so no
+// hook of theirs goes in and no file of theirs is set in between either.
 int online_going(char* names, size_t size) {
-    go_online("FH2MP said it's going online (FH2Platform.Online)");
-    std::scoped_lock lk{g_mu};
+    std::vector<std::string> ran;
+    std::string what;   // for the log: each one, and what it did
+    GoingOnline g;
+    bool went = false, refused = false;
+    {
+        std::scoped_lock lk{g_mu};
+        if (g_online) {
+            ran = g_started_offline;
+        } else {
+            std::vector<FH2Mod*> mods;
+            std::vector<std::wstring> others;
+            online_off(mods, others);
+            hooks_locked([&] {
+                return files_locked([&] {
+                    for (FH2Mod* m : mods)
+                        if (const uint32_t r = ran_bits(m)) {
+                            ran.push_back(m->name);
+                            what += (what.empty() ? "" : "; ") + m->name + " (" +
+                                    ((r & kRanHooks) && (r & kRanEdits) ? "its hooks went in, and its game text, files or database changes were written"
+                                     : (r & kRanHooks)                  ? "its hooks went in"
+                                                                        : "its game text, files or database changes were written") +
+                                    ")";
+                        }
+                    for (const auto& f : others) {
+                        ran.push_back(narrow(f));
+                        what += (what.empty() ? "" : "; ") + narrow(f) + " (a mod from before the platform, already loaded)";
+                    }
+                    if (ran.empty()) went = begin_online(g);
+                    return went;
+                });
+            });
+            refused = !ran.empty();
+        }
+    }
+    if (went) finish_online("FH2MP said it's going online (FH2Platform.Online)", g);
+    static std::atomic<bool> told{false};
+    if (refused && !told.exchange(true))
+        plog("FH2MP asked to go online (FH2Platform.Online), but mods that shouldn't run online have already run in this game: " +
+             what + ". Nothing was changed, so the game stays offline and they keep running; FH2MP is told their names, so it "
+             "can ask the player to start the game from the FH2MP launcher");
     std::string list;
-    for (const auto& n : g_started_offline) list += (list.empty() ? "" : ", ") + n;
+    for (const auto& n : ran) list += (list.empty() ? "" : ", ") + n;
     if (names && size) {
         std::size_t n = std::min(list.size(), static_cast<std::size_t>(size - 1));
         // cut short between characters, not inside one (UTF-8 continuation bytes are 10xxxxxx)
@@ -1004,7 +1099,7 @@ int online_going(char* names, size_t size) {
         std::memcpy(names, list.data(), n);
         names[n] = '\0';
     }
-    return static_cast<int>(g_started_offline.size());
+    return static_cast<int>(ran.size());
 }
 
 const FH2PlatformOnline g_online_iface{sizeof(FH2PlatformOnline), online_playing, online_going};
@@ -1359,6 +1454,11 @@ DWORD WINAPI load_mods(LPVOID) {
         g_first_write = true;   // a mod stopped for online play from here on has the tables and the database written again
         g_dirty.insert("main.str");
         g_table_names.emplace("main.str", "Main.str");
+        // What's in this write is the game's from now on: those mods have run (going_online won't stop them). Their
+        // later edits count as they come (api_set_string and the rest, set_file).
+        for (const auto& m : g_mods)
+            if (!m->set.empty() || !m->set_tr.empty() || !m->repl.empty() || !m->sql.empty() || owns_files(m.get()))
+                note_ran(m.get(), kRanEdits);
     }
     apply_all();
     build_database();
@@ -1379,7 +1479,7 @@ DWORD WINAPI load_mods(LPVOID) {
         std::scoped_lock lk{g_mu};
         for (const auto& t : read_manifest()) {
             bool edited = false;
-            for (const auto& m : g_mods) edited = edited || m->set.count(t) || m->repl.count(t);
+            for (const auto& m : g_mods) edited = edited || m->set.count(t) || m->set_tr.count(t) || m->repl.count(t);
             if (!edited && t != "main.str") g_dirty.insert(t);
         }
     }
@@ -1482,6 +1582,8 @@ std::set<std::wstring> remembered_fh2mp() {
 } // namespace
 
 bool playing_online() { return g_online; }
+
+bool first_write_begun() { return g_first_write; }
 
 bool fh2mp_installed() {
     std::error_code ec;

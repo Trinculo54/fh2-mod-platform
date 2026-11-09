@@ -1391,7 +1391,8 @@ int i_add_hud_layer(FH2Mod* m, const FH2HudLayer* layer) {
     return 1;
 }
 // A mod stopped for online play (platform.cpp's go_online) can only take its layer down: hide it, let
-// go of the game's HUD, and read its status. Its layer lapses once its lease runs out.
+// go of the game's HUD, and read its status. Its layer lapses at the next frame (hud_layer_mod_stopped),
+// even while it still calls hud_status.
 int i_set_hud_state(FH2Mod* m, const FH2HudState* s) {
     const int i = stopped_online(m) ? -1 : g_eng.layer_of(m);
     return i < 0 ? 0 : g_eng.set_state(i, s);
@@ -1443,6 +1444,10 @@ std::atomic<bool> g_pump_late_logged{false};
 const void* hud_interface() { return &g_iface; }
 FH2Mod* hud_layer_owner() { return &g_layer_mod; }
 bool hud_layer_active() { return g_active.load(); }
+
+void hud_layer_mod_stopped(FH2Mod* m) {
+    if (const int i = m ? g_eng.layer_of(m) : -1; i >= 0) g_eng.stop_layer(i);
+}
 int hud_layer_choice() { return g_choice.load(); }
 
 void hud_layer_refresh_text() {

@@ -127,6 +127,11 @@ void ui_mod_faulted(FH2Mod* mod) {
     popups_mod_faulted(mod);
 }
 
+void ui_mod_stopped(FH2Mod* mod) {
+    popups_mod_stopped(mod);
+    ui_sounds_mod_stopped(mod);
+}
+
 uint32_t ui_mod_faults(const FH2Mod* mod) {
     std::scoped_lock lk{g_faults_mu};
     const auto it = g_faults.find(mod);

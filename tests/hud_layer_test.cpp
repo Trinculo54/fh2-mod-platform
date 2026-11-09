@@ -1394,6 +1394,44 @@ static void t4_lease() {
         check(r.lines_with("[TrialEditor] hold_game_hud: held") == 2 && r.lines_with("[TrialEditor] hold_game_hud: let go") == 0,
               "T4 each hold logged (\"held\" twice; the lapse logs its own line)");
     }
+    {
+        // a mod stopped for online play (platform 2.9.0, go_online) with its bar shown and the game's HUD held, that
+        // keeps calling hud_status from a thread of its own: lapsed within a frame, and it stays that way
+        Rig r;
+        const int a = r.add("TrialEditor", FH2_HUD_PART_BAR, 5000);
+        r.build();
+        r.step();
+        FH2HudState s = bar_frame();
+        r.e->set_state(a, &s);
+        r.e->show(a, FH2_HUD_PART_BAR);
+        r.e->hold(a, 1);
+        r.steps(10);
+        CHECK(r.e->hold_wanted() && r.e->owner() == a && (r.bits(a) & FH2_HUD_SHOWN));
+        r.e->stop_layer(a);
+        check(!r.e->hold_wanted() && r.e->holders().empty(), "T4 stopped for online play: its hold on the game's HUD is let go at once");
+        r.e->status(a);
+        r.step();
+        const std::vector<Told> v = r.last();
+        check(r.e->owner() == -1 && (r.bits(a) & FH2_HUD_LAPSED) && !(r.bits(a) & FH2_HUD_SHOWN) && told_in(v, "Bar", 0),
+              "T4 ... and at the next frame its bar is hidden (with a fade), LAPSED");
+        for (int i = 0; i < 400; ++i) {   // 8 s of hud_status, past its 5 s lease
+            r.e->status(a);
+            r.step();
+        }
+        check(r.e->owner() == -1 && !r.e->hold_wanted() && (r.bits(a) & FH2_HUD_LAPSED),
+              "T4 ... and its hud_status calls don't bring the bar or the hold back");
+        check(r.lines_with("[TrialEditor] HUD layer: this mod was stopped for online play, so its layer is hidden and its hold on the game's "
+                           "HUD is let go") == 1 &&
+                  r.lines_with("no call for") == 0,
+              "T4 ... logged once, not as a lapsed lease");
+        // a stopped layer neither shown nor holding: nothing to say
+        Rig q;
+        const int b = q.add("TrialEditor", FH2_HUD_PART_BAR, 5000);
+        q.build();
+        q.e->stop_layer(b);
+        q.steps(5);
+        check(q.lines_with("stopped for online play") == 0 && !(q.bits(b) & FH2_HUD_LAPSED), "T4 a stopped layer that was neither shown nor holding: no line");
+    }
 }
 
 // ---- T5: parts and CLEAN --------------------------------------------------------------------------------

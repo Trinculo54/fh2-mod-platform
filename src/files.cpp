@@ -160,6 +160,7 @@ int set_file(FH2Mod* mod, const char* media_path, const void* data, std::size_t 
     }
     g_owner[key] = mod;
     mod->files.insert(key);
+    if (first_write_begun()) note_ran(mod, kRanEdits);   // the game may read it from now on (owns_files before)
     if (known != manifest.end()) manifest.erase(known);
     manifest[rel] = mod->name;
     write_files_manifest(manifest);
@@ -178,6 +179,16 @@ int mod_set_file(FH2Mod* mod, const char* media_path, const void* data, std::siz
         return 0;
     }
     return set_file(mod, media_path, data, size);
+}
+
+bool files_locked(const std::function<bool()>& f) {
+    std::scoped_lock lk{g_files_mu};
+    return f();
+}
+
+bool owns_files(FH2Mod* mod) {
+    std::scoped_lock lk{g_files_mu};
+    return mod && !mod->files.empty();
 }
 
 void clear_file(FH2Mod* mod, const char* media_path) {

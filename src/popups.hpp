@@ -36,6 +36,8 @@ int popups_hud_on_screen();
 // waiting pop-ups and tip go). Any thread.
 void popups_note_callback(FH2Mod* mod);
 void popups_mod_faulted(FH2Mod* mod);
+// The mod was stopped for online play (platform.cpp's go_online): its waiting pop-ups and tips go. Any thread.
+void popups_mod_stopped(FH2Mod* mod);
 
 // For the player's rows (the settings restructure): "Mod pop-ups", a mod's own "Pop-ups", "Tips", "Show tips again"
 // and "Recent pop-ups". Every switch is on until one of these says otherwise.

@@ -113,6 +113,8 @@ public:
     void note_callback(const void* mod, double now);
     // The platform caught a crash in one of the mod's callbacks: its waiting pop-ups and tip go.
     void faulted(const PopupMod& m);
+    // The mod was stopped for online play (platform.cpp's go_online): its waiting pop-ups and tips go, unseen.
+    void mod_stopped(const PopupMod& m);
     // Whether pop-ups can show this session: -1 not known yet (they're queued meanwhile), 1 yes, 0 no (`why`, a
     // sentence: everything waiting is dropped, and later calls return 0).
     void set_available(int state, const std::string& why = "");

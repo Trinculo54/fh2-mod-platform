@@ -112,6 +112,10 @@ int main() {
         for (uint32_t s : five) r.ask(&a, s, 4000, false, 1);
         check(r.waiting() == UiSoundRules::kPerMod, "four wait for a mod at most");
         check(r.tick(4010, 1, due, dropped) && due.sound == FH2_SOUND_BACK, "a fifth drops its oldest");
+        // a mod stopped for online play (platform 2.9.0): its waiting sounds go, another mod's stay
+        r.ask(&b, FH2_SOUND_INFO, 4020, false, 1);
+        check(r.forget(&a) == 3 && r.waiting() == 1 && r.tick(4030, 1, due, dropped) && due.mod == &b && r.forget(&a) == 0,
+              "forget: the stopped mod's waiting sounds go, another mod's play");
         check(kUiSounds[FH2_SOUND_NOTIFY].world_only && kUiSounds[FH2_SOUND_TICK_END].world_only && !kUiSounds[FH2_SOUND_INFO].world_only &&
                   kUiSounds[FH2_SOUND_SHUTTER].slot == 0x2C5F0C0 && std::string(kUiSounds[FH2_SOUND_SELECT].name) == "SELECT",
               "the sound table: the world-only four, the game's name slots");

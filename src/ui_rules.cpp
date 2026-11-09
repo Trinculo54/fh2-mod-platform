@@ -151,6 +151,13 @@ std::size_t UiSoundRules::waiting() const {
     return queue_.size();
 }
 
+std::size_t UiSoundRules::forget(const void* mod) {
+    std::scoped_lock lk{mu_};
+    const std::size_t before = queue_.size();
+    std::erase_if(queue_, [mod](const Waiting& w) { return w.mod == mod; });
+    return before - queue_.size();
+}
+
 // ---- page help and hint lines ------------------------------------------------------------------------------------
 
 const char* glyph_name(uint32_t glyph) {

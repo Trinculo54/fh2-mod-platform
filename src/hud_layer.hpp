@@ -20,6 +20,7 @@ void hud_layer_page_written(bool ok, const std::string& page);
 void hud_layer_start();                          // the end of settings_start (and its no-game-folder return)
 uint8_t* hud_layer_find(const wchar_t* name);    // d_find_property, for FH2Mod_Hud_ names
 bool hud_layer_active();                         // a layer was added this session
+void hud_layer_mod_stopped(FH2Mod* mod);         // go_online: its layer lapses at the next frame (HudEngine::stop_layer)
 const char* hud_layer_crash_text();              // crash.cpp: a fixed buffer, "" without a layer
 std::string hud_layer_session_text();            // session.cpp: "" without a layer
 int hud_layer_choice();                          // the Button prompts row: 0 Automatic, 1 Controller, 2 Keyboard and mouse

@@ -98,6 +98,8 @@ public:
     // The game's tick: the oldest waiting sound to play now (false if none), and what was dropped on the way.
     bool tick(double now, int on_screen, Due& out, std::vector<Dropped>& dropped);
     std::size_t waiting() const;
+    // The mod was stopped for online play: its waiting sounds go. How many.
+    std::size_t forget(const void* mod);
 
 private:
     struct Waiting {
