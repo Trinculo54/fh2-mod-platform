@@ -136,6 +136,133 @@ If players will want to turn parts of your mod on and off, or tune a number, giv
 
 For your README, a sentence players can follow: "In game: Pause > MODS > YOUR MODS > MyMod (Pause > Settings > MODS opens the same list)."
 
+## Showing things to the player
+
+From platform 2.9.0 (API 10) a mod never needs XAML to tell the player something: the UI templates are pieces of the game's own UI that you fill with text, and the platform draws them in the game's look, decides when they show and logs what they showed. [`api.md`](api.md#ui-templates-api-10) has every call in full, and marks the ones still being built in this test build.
+
+| You want to | Use | Since |
+|---|---|---|
+| Tell the player something happened (an unlock, a file written) | `show_toast` (or `fh2ui_notify`) | 2.9.0 |
+| Answer the player's own key press | `show_toast` with `FH2_TOAST_FLAG_REPLY`; `play_ui_sound` if it returns 0 | 2.9.0 |
+| Report a fault the player must act on | `show_toast` with `FH2_TOAST_FLAG_URGENT`, saying what to do | 2.9.0 |
+| Teach a control once | `show_tip` | 2.9.0 |
+| Ask for a confirmation or a choice | `show_message_box`, from your page | 2.9.0 |
+| Say what the buttons do on your page | `set_page_help` | 2.9.0 |
+| Show a short status on your page ("Saved.") | `set_page_hints` and `show_page_hint` | 2.9.0 |
+| Say something before the game starts | `set_notice`, `add_title_entry` | 2.8.0 |
+| Show a state that lasts while driving (a ghost, a score) | a card or status line | 2.9.1 |
+| Acknowledge a press within a tenth of a second | a chip or status line | 2.9.1 |
+| Count down to something | `show_countdown` | 2.9.x |
+| Run a mode with its own controls | the HUD layer | 2.9.x |
+| Watch numbers while testing | `set_overlay_text` | 2.9.x |
+
+Use [`include/fh2mod_ui.h`](../include/fh2mod_ui.h): each call there is the API member without `api` and `mod`, and does nothing (returning 0) on a platform older than 2.9.0, so your mod needs no version checks. [`include/fh2mod_l10n.h`](../include/fh2mod_l10n.h)'s `FH2_TR` gives the text in the player's language. Set both up once in `fh2mod_init`, and say what you'll use there too: the platform only hooks the game's notification in a session where a mod has declared pop-ups or tips.
+
+```cpp
+#include "fh2mod_ui.h"
+#include "fh2mod_l10n.h"
+
+g_mod = api->register_mod(&info);
+fh2_helpers_init(api, g_mod);
+fh2ui_ui_uses(FH2_UI_USES_TOASTS | FH2_UI_USES_TIPS);   // ui_uses: from fh2mod_init only
+```
+
+What works this session, whenever it matters (`ui_status`):
+
+```cpp
+const uint32_t ui = fh2ui_ui_status();
+if (ui & FH2_UI_TOASTS_OFF) { /* the player turned pop-ups off: don't nag in other ways either */ }
+if (ui & FH2_UI_KEYBOARD)   { /* the keyboard was used last: name keys, not buttons */ }
+```
+
+A pop-up, in one call or in full (`show_toast`), and taking a waiting one down (`clear_toast`):
+
+```cpp
+fh2ui_notify(FH2_TR(FH2_API, FH2_MOD, "toast.ready", "Breakable trees are on"),
+             FH2_TR(FH2_API, FH2_MOD, "toast.ready.line", "Change it under Pause > MODS"));
+
+FH2Toast t{};
+t.size     = sizeof t;
+t.key      = "Snapshot";                          // a second one with this key replaces it while it waits
+t.title    = FH2_TR(FH2_API, FH2_MOD, "toast.snapshot", "Snapshot written");
+t.subtitle = FH2_TR(FH2_API, FH2_MOD, "toast.where", "WreckingBall-defs.txt, next to the game");
+t.icon     = FH2_ICON_PHOTO;
+t.flags    = FH2_TOAST_FLAG_REPLY;                // from a hotkey's on_press: it answers the press
+if (!fh2ui_show_toast(&t)) fh2ui_play_ui_sound(FH2_SOUND_SELECT);   // off, or an older platform
+
+fh2ui_clear_toast("Snapshot");                    // it isn't true any more: take it down if it's still waiting
+```
+
+A fault the player has to fix: `FH2_TOAST_FLAG_URGENT`, and say what to do.
+
+```cpp
+FH2Toast f{};
+f.size     = sizeof f;
+f.key      = "NoData";
+f.title    = FH2_TR(FH2_API, FH2_MOD, "toast.nodata", "Track data missing");
+f.subtitle = FH2_TR(FH2_API, FH2_MOD, "toast.nodata.fix", "Reinstall MyMod from its zip");
+f.flags    = FH2_TOAST_FLAG_URGENT;               // first in the queue; twice a session
+fh2ui_show_toast(&f);
+```
+
+A tip that teaches a control once (`show_tip`), until the player has used it (`set_tip_seen`), and asking whether it was seen (`tip_seen`):
+
+```cpp
+FH2Tip tip{};
+tip.size          = sizeof tip;
+tip.key           = "FirstSnapshot";
+tip.text          = FH2_TR(FH2_API, FH2_MOD, "tip.snapshot", "Press {button} to write a snapshot");
+tip.button.hotkey = "Snapshot";                   // the player's own binding for your hotkey
+tip.flags         = FH2_TIP_FLAG_UNTIL_DONE;
+tip.max_sessions  = 3;
+if (!fh2ui_tip_seen("FirstSnapshot")) fh2ui_show_tip(&tip);
+/* in the hotkey's on_press */ fh2ui_set_tip_seen("FirstSnapshot", 1);
+```
+
+A sound on its own, to answer a press when there's nothing to say (`play_ui_sound`); never the only cue:
+
+```cpp
+fh2ui_play_ui_sound(FH2_SOUND_SELECT);
+```
+
+A confirmation from your page (`show_message_box`, from the page's own callbacks only):
+
+```cpp
+static void on_reset_choice(void*, const char*, uint32_t choice) {
+    if (choice == 1) reset_progress();            // 0 is "Keep my progress"; FH2_BOX_BACK is Back
+}
+static void on_select(void*, const char*, const char* row) {
+    if (strcmp(row, "Reset") != 0) return;
+    const char* choices[] = {FH2_TR(FH2_API, FH2_MOD, "box.keep", "Keep my progress"), FH2_TR(FH2_API, FH2_MOD, "box.reset", "Reset")};
+    FH2MessageBox b{};
+    b.size         = sizeof b;
+    b.key          = "Reset";
+    b.title        = FH2_TR(FH2_API, FH2_MOD, "box.title", "Reset your progress?");
+    b.message      = FH2_TR(FH2_API, FH2_MOD, "box.msg", "Every achievement goes back to locked. Your save isn't touched.");
+    b.choices      = choices;
+    b.choice_count = 2;
+    b.on_choose    = on_reset_choice;
+    fh2ui_show_message_box(&b);
+}
+```
+
+Your page's help bar (`set_page_help`) and a hint line for short statuses (`set_page_hints`, `show_page_hint`):
+
+```cpp
+FH2Prompt open{};
+open.glyph = FH2_GLYPH_A;
+open.label = FH2_TR(FH2_API, FH2_MOD, "help.open", "Open");
+fh2ui_set_page_help("Main", &open, 1);            // relabels A; (B) Back stays
+
+const char* hints[] = {FH2_TR(FH2_API, FH2_MOD, "hint.saved", "Saved."), FH2_TR(FH2_API, FH2_MOD, "hint.reset", "Progress reset.")};
+fh2ui_set_page_hints("Main", hints, 2);           // in fh2mod_init or the page's on_open
+/* in on_reset_choice, after resetting */ fh2ui_show_page_hint("Main", 1, FH2_HINT_INFO);
+```
+
+**The player stays in charge.** The platform's own page under YOUR MODS has "Mod pop-ups" and "Tips" for every mod, "Show tips again" and "Recent pop-ups" (which mod sent what), and your page gets a "Pop-ups" row when you declare pop-ups, unless you have a row of your own (`FH2_UI_USES_OWN_SWITCH`). So write each pop-up as if it might not show: keep what matters in your log and on your page too.
+
+**Trying them out.** With `Developer=1` under `[popups]` in `fh2-mods\platform-popups.ini`, the platform's page gets a "UI templates" page that fires each template once, and `fh2mod Platform ui demo`, `ui toast`, `ui tip`, `ui keyboard` and `ui pad` do the same from a command line; `fh2mod Platform ui` alone says what's on screen and waiting, and why. [`api.md`](api.md#trying-templates-fh2mod-platform-ui-and-the-test-page) has them all.
+
 ## A HUD of your own (preview)
 
 A test build of the platform, "2.8.0 + HUD layer preview 3", lets a mod show a bar, labels and button prompts of its own in the game's free-roam HUD, drawn by the game's UI in its own look. It's only in that build, for the testers of a mod that needs it, and it will change before it joins the API. [`hud-layer-preview.md`](hud-layer-preview.md) has how to use it, and how to carry on without it everywhere else.

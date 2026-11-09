@@ -782,6 +782,8 @@ fh2mod --pid 1234 MyMod stats
 - **The pipe.** It starts when the first command is added: `\\.\pipe\fh2mod-<process id>`, also in `fh2-mods\platform-session.json`. It refuses remote clients, and its DACL lets in only the Windows user the game runs as, so only that user's programs on that PC can connect. A request is one line of UTF-8: `list`, or `<mod> <command> [args]`, with a mod name that has spaces in double quotes. The reply is text, and the connection then closes. Any tool can use it the way `fh2mod.exe` does (`tools/fh2mod.cpp`).
 - **Which game.** Without `--pid`, `fh2mod.exe` finds the one running game with a command pipe; when there are more (the game started twice, or two installs), it lists their process ids for `--pid`.
 - **On Linux** the pipe is inside the game's Wine prefix, so run `fh2mod.exe` with the same prefix (`wine`, or `protontricks -c`).
+- **The platform's own command** (platform 2.9.0), `fh2mod Platform ui`, says what pop-ups and tips are on screen and waiting, and why ([Trying templates](#trying-templates-fh2mod-platform-ui-and-the-test-page)). It's listed with the others, but adding it never starts the pipe: it works once a mod's command has, or with `Developer=1` in `fh2-mods\platform-popups.ini`.
+- **Arguments** reach your command as `fh2mod.exe` got them, joined with single spaces; a shell takes quotes away first, so for text with spaces in it, take the rest of the line, or a separator such as `|`.
 
 ```cpp
 api->add_command(g_mod, "debris", "debris clear: removes every broken piece now",
@@ -1117,6 +1119,56 @@ static void on_select(void*, const char*, const char* row_key) {
     fh2ui_show_message_box(&b);   // works here: on_select is a page callback
 }
 ```
+
+### What the player controls
+
+The player decides whether pop-ups and tips show, in rows the platform adds itself. None of them is an API call: write your pop-ups so that they can be off.
+
+- **The platform's own page.** "FH2 Mod Platform", the last line of YOUR MODS's list of mods (Pause > MODS > YOUR MODS), opens the platform's page:
+  - **Mod pop-ups**: "Same as Notifications" (the default) or "Off". The game's notification only shows while its own Notifications option is on (Pause > Settings > HUD), so the platform can't offer more than following it. Off: no mod's pop-ups show, and `ui_status` says `FH2_UI_TOASTS_OFF`.
+  - **Tips**: On or Off, for every mod's tips (`FH2_UI_TIPS_OFF`). It doesn't silence the platform's own hints about where mod settings are, which stop by themselves once the player has opened YOUR MODS.
+  - **Show tips again**: A marks every mod's tips unseen, so each shows once more.
+  - **Recent pop-ups**: a page of the last 10 pop-ups and tips, newest first, each with the time it showed, its title (a tip's line) and the mod that sent it, "(private)" for one flagged `FH2_TOAST_FLAG_PRIVATE`. It answers "which mod keeps popping up?", since a pop-up in the game's look can't be told from the game's own. It's up to date each time YOUR MODS opens.
+- **Your mod's page.** With `FH2_UI_USES_TOASTS` declared and no `FH2_UI_USES_OWN_SWITCH`, your page gets a **Pop-ups** row (On/Off) above Load this mod, so a player can quieten your mod without turning every mod's pop-ups off. With `FH2_UI_USES_OWN_SWITCH`, your own row is the switch: check it before calling `show_toast`.
+- **At once, and kept.** A change takes effect straight away, needs no restart, and is kept in `fh2-mods\platform-popups.ini`: `[player]` `ModPopups` and `Tips` (1 or 0), and `[mods]` with a line per mod whose row is off (`MyMod.dll=0`, by its DLL's file name). Players can edit the file too; it's read when the game starts.
+- The list that stands in for the MODS tab when its menus can't show (Pause > Settings > MODS) has the same rows, under each mod and under "FH2 Mod Platform".
+
+### Trying templates: `fh2mod Platform ui` and the test page
+
+The platform has a command of its own, run with `fh2mod.exe` like a mod's ([Commands](#commands-api-9)):
+
+```
+fh2mod Platform ui            what's on screen and waiting, and why; the player's choices
+fh2mod Platform ui recent     Recent pop-ups, as the page lists them
+```
+
+`ui` prints whether pop-ups can show this session (and why not), whether the platform's watch on the game's own notifications is in, the game's Notifications option, the HUD page's state, what's on screen and each pop-up and tip waiting with what it waits for, then the player's choices. A private pop-up shows by its key only, so the output can go into a bug report as it is. The command never starts the command pipe by itself: it works whenever one of your mod's commands has started it, or with `Developer=1`.
+
+**Developer=1.** Add it to `fh2-mods\platform-popups.ini` and start the game:
+
+```ini
+[popups]
+Developer=1
+```
+
+Players never see what it adds:
+
+- The command pipe starts even when no mod has a command, and the pop-up hooks go in even when no mod declared pop-ups or tips.
+- `ui`'s tests, each from the platform (its own pop-ups use none of your mod's limits; the player's Mod pop-ups and Tips rows still apply):
+
+  ```
+  fh2mod Platform ui toast Snapshot written | WreckingBall-defs.txt, next to the game | photo reply
+  fh2mod Platform ui tip Press {button} to try it | A
+  fh2mod Platform ui keyboard      buttons in tips written as keys, whatever was used last
+  fh2mod Platform ui pad           ... for the controller
+  fh2mod Platform ui auto          ... for the device used last again
+  fh2mod Platform ui demo          four pop-ups (normal, reply, urgent, private) and a tip, each saying what it is, and a sound
+  ```
+
+  `toast` takes the title, the line, then any of an icon (`none`, `trophy`, `roads`, `photo`, `boards`, `bucket`, `carmeet`, `club`, `payout`, `barnfind`) and `urgent`, `reply`, `private`, separated by `|` (so no quotes are needed; text in double quotes, `\"Title\" \"Line\"` on a command line, works too). A test pop-up has the key `Test`, so the next replaces it while it waits. `tip` takes its text, with `{button}`, and a button: `A`, `B`, `X`, `Y`, `LB` or `RB` (with Space, Esc, X, Y, Q and E for the keyboard); it shows after 5 s of driving, at least 3 minutes after the last tip.
+- **UI templates**, a page on the platform's own page, whose rows each fire one template once when you press A: a pop-up, an urgent one, a reply, a private one, a tip, the next UI sound, a message box, the next of the page's hint texts, the three button settings above, everything in turn, and taking down the platform's waiting test pop-ups. Pop-ups and tips wait while you're in the menus, so they show once you're back driving. The log says what each did. The page's text is English: it's for developers only.
+
+Everything the tests do is logged in the platform's name (`[Platform]`), as a mod's would be.
 
 ## Crash reports
 
