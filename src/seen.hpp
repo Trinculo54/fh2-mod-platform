@@ -47,5 +47,8 @@ int seen_clear_if(const std::function<bool(const std::string& who, const std::st
 // Waits up to `timeout_ms` until every change so far is in the file. True when it is; false when it isn't yet (the
 // file was locked, say: the store tries again at the next change). For tests, and before a planned restart.
 bool seen_flush(uint32_t timeout_ms);
+// Whether the store already knows the file can't be written now: it couldn't be read when last tried (it's never
+// written over unread), or the last try at writing it failed. A seen_flush would then wait out its timeout.
+bool seen_unwritable();
 
 } // namespace fh2platform

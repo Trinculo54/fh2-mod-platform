@@ -441,6 +441,12 @@ int seen_clear_if(const std::function<bool(const std::string&, const std::string
     return n;
 }
 
+bool seen_unwritable() {
+    Store& s = S();
+    std::scoped_lock lk{s.mu};
+    return s.open && (s.unread || s.said_unwritable);
+}
+
 bool seen_flush(uint32_t timeout_ms) {
     Store& s = S();
     std::unique_lock lk{s.mu};

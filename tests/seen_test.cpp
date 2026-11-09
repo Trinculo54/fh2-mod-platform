@@ -160,6 +160,7 @@ int main() {
     check(!seen_has("C.dll", "Three"), "a commented line isn't read");
     check(logged("platform-seen.txt: 2 line(s) couldn't be read, so they aren't used; they stay in the file as they are"),
           "bad lines aren't used, and the log says so");
+    check(!seen_unwritable(), "a file that reads isn't known to be unwritable");
 
     // ---- lines it can't read and the player's own comments stay, as they are and in order, when it's written ----
     {
@@ -215,11 +216,13 @@ int main() {
         clear_log();
         seen_open(file, log_line);
         check(!seen_has("A.dll", "One") && logged("platform-seen.txt couldn't be read"), "locked at the start: nothing seen, and said");
+        check(seen_unwritable(), "locked at the start: known not to be writable (start-up doesn't wait for it)");
         CloseHandle(lock);
         seen_set("A.dll", "Later");
         check(seen_get("A.dll", "One") == "3" && seen_has("A.dll", "WhileLocked") && seen_has("A.dll", "Later") &&
                   logged("platform-seen.txt could be read now, so the hints and tips seen before count again"),
               "free at the next change: read again then, so what was seen counts again");
+        check(!seen_unwritable(), "and no longer known not to be writable");
         check(seen_flush(3000), "flushed");
         const std::string t = slurp(file);
         check(has(t, "A.dll\tLater\tseen") && has(t, "A.dll\tOne\t3") && has(t, "A.dll\tWhileLocked"),
@@ -239,7 +242,7 @@ int main() {
               "Show tips again while it's locked: kept for the write, and said");
         check(!seen_clear("A.dll", "mod.new"), "a clear while it's locked: not known to have been set");
         seen_set("C.dll", "tip.New");
-        check(!seen_flush(1500), "still locked: not written");
+        check(seen_unwritable() && !seen_flush(1500), "still locked: not written");
         CloseHandle(lock);
         check(seen_flush(4000), "free again: written");
         const std::string t = slurp(file);
@@ -276,6 +279,7 @@ int main() {
         check(seen_set("A.dll", "One") && seen_has("A.dll", "One"), "set in memory");
         check(!seen_flush(3500) && !fs::exists(gone), "not written");
         check(logged("platform-seen.txt couldn't be written (platform-seen.txt.tmp can't be made"), "the log says why");
+        check(seen_unwritable(), "a write that failed: known not to be writable");
     }
 
     fs::remove_all(dir, ec);
