@@ -110,10 +110,10 @@ run_layout() {   # run_layout mediaoverride|own
 }
 
 # Mods' text in the pages (src/xml_text.cpp), the platform's text in any language (src/text.cpp), car packs'
-# car Ids (src/car_ids.cpp), mods' translations (src/l10n.cpp), what the player has already seen (src/seen.cpp) and
-# what's different under Wine and Proton (src/wine.cpp) on their own, then the platform. With Python 3, TestMod's
-# translation files are checked to be up to date with tools/l10n (its .pot from its source, its built-in .inc from
-# tests/l10n/*.po).
+# car Ids (src/car_ids.cpp), mods' translations (src/l10n.cpp), what the player has already seen (src/seen.cpp), the
+# pop-up queue's rules (src/popup_queue.cpp) and what's different under Wine and Proton (src/wine.cpp) on their own,
+# then the platform. With Python 3, TestMod's translation files are checked to be up to date with tools/l10n (its .pot
+# from its source, its built-in .inc from tests/l10n/*.po).
 wine "$b/xml_text_test.exe"
 wine "$b/text_test.exe"
 # Every English text the code translates is in src/lang.cpp's table, with its placeholders kept (and with
@@ -126,6 +126,7 @@ fi
 wine "$b/car_ids_test.exe"
 wine "$b/l10n_test.exe"
 wine "$b/seen_test.exe"
+wine "$b/ui_queue_test.exe"
 if command -v python3 > /dev/null; then
     python3 -I "$root/tools/l10n/extract.py" --check --domain TestMod -o "$root/tests/l10n/test_mod.pot" "$root/tests/test_mod.cpp"
     python3 -I "$root/tools/l10n/po2inc.py" --check "$root/tests/l10n/test_mod_l10n.inc" test_mod_translations \
