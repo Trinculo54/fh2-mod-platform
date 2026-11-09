@@ -1776,6 +1776,16 @@ std::string tr(const char* english) {
     return t ? t->t[l] : english;
 }
 
+std::string tr_in(const char* english, std::string_view table_code) {
+    if (!english) return "";
+    for (int i = 0; i < kLangs; ++i)
+        if (table_code.size() == std::strlen(kCodes[i]) && _strnicmp(table_code.data(), kCodes[i], table_code.size()) == 0) {
+            const Text* t = find_text(english);
+            return t ? t->t[i] : english;
+        }
+    return english;
+}
+
 std::string trf(const char* english, std::initializer_list<std::string> args) {
     return fill(tr(english), std::vector<std::string>(args));   // the same placeholders as later() messages
 }

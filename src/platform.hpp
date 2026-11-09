@@ -215,8 +215,14 @@ struct ModEntry {
     bool offline_only = false;        // its author says it shouldn't run online (FH2ModInfo.offline_only)
     bool loads_online = true;         // loaded when playing online (the player's choice, else !offline_only)
     bool online_off = false;          // not running this time because the game is online (FH2MP)
+    bool fresh = false;               // new in fh2-mods since the last launch (platform-mods.txt didn't list it)
 };
 std::vector<ModEntry> mod_entries();  // in load order, turned-off ones included
+// Whether fh2-mods\platform-mods.txt was there when this launch started: false on a first launch.
+bool mods_list_existed();
+// The platform's own lines on the title screen, in English (each language's Main.str gets them in its own
+// words); none takes them away. Written from settings_start, after the first write of the tables.
+void set_platform_notice(const std::vector<std::string>& english_lines);
 // fh2-mods\platform-disabled.txt: the DLLs the MODS tab turned off (lower case).
 std::set<std::wstring> disabled_mods();
 void set_mod_enabled(const std::wstring& dll, bool on);

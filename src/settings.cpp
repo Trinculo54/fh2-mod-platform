@@ -38,6 +38,7 @@
 #include "l10n.hpp"
 #include "lang.hpp"
 #include "platform.hpp"
+#include "seen.hpp"
 #include "strings.hpp"
 #include "text.hpp"
 #include "updates.hpp"
@@ -745,13 +746,16 @@ uint8_t* notice_descriptor() {
     return g_notice_desc;
 }
 
-// FH2Mod_ModNotice: whether the freeroam HUD shows its "a mod didn't load" notice (see
-// write_hud_notice). The game builds the HUD page early, around the start screen, so the value
+// FH2Mod_ModNotice: whether the freeroam HUD shows its notice about the mods (see write_hud_notice: a mod
+// that didn't load, the first-run welcome or the mods new this time). The game builds the HUD page early, around the start screen, so the value
 // is false until the page is first shown (its vtable +0x488, see d_hud_shown), true for a
 // little while then, and false again from the next time it's shown: once a session.
 uint8_t* g_mod_notice_desc = nullptr;
 std::atomic<ULONGLONG> g_mod_notice_at{0};   // when the HUD was first shown (0: not yet)
 std::atomic<bool> g_mod_notice_done{false};
+enum NoticeKind { kNoticeNone, kNoticeFailed, kNoticeWelcome, kNoticeNewMods };
+int g_notice_kind = kNoticeNone;         // what the notice is this session (set before the hooks)
+constexpr int kWelcomeSessions = 3;      // the welcome plays in this many sessions at most
 bool mod_notice_on() {
     const ULONGLONG at = g_mod_notice_at.load();
     return at && !g_mod_notice_done.load() && GetTickCount64() - at < 15000;
@@ -2159,11 +2163,68 @@ std::vector<PageItem> car_pack_items() {
 
 std::string mods_folder();             // with About, below
 
-// A mod that's new since the player last looked: added to fh2-mods after the platform had seen others there, and
-// its page not opened since (fh2-mods\platform-seen.txt).
-bool mod_is_new(const ModEntry&) { return false; }
+// ---- being told once (fh2-mods\platform-seen.txt, see seen.hpp) -----------------------------------
+// The platform's own entries ("*"):
+//   home              YOUR MODS has been opened, from either door. Until then the title screen says where mod
+//                     settings are, the MODS tab has a NEW badge, and the freeroam HUD welcomes the player (below).
+//   welcome.sessions  how many sessions the HUD's welcome has played in: three at most.
+//   first             "new" or "upgrade": the first launch of this platform here, and whether an older one had
+//                     run first (platform-mods.txt was there). An upgrade gets "Mod settings have moved" once.
+// A mod's (its DLL's file name):
+//   mod.new           it appeared in fh2-mods since the launch before: "New" on its row and the NEW badge, until
+//                     its page is opened.
+// Deleting the file brings every hint back, which is also how to test them.
+bool home_seen() { return seen_has(kSeenPlatform, "home"); }
+std::string seen_who(const ModEntry& e) { return narrow(e.dll); }
+
+// A mod that's new since the player last looked: added to fh2-mods since the launch before, and its page not
+// opened since.
+bool mod_is_new(const ModEntry& e) { return seen_has(seen_who(e), "mod.new"); }
+
 // The NEW badge's cue: YOUR MODS not opened yet, or a mod that's new.
-bool new_to_player() { return false; }
+bool new_to_player() {
+    if (g_entries.empty()) return false;
+    if (!home_seen()) return true;
+    for (const ModEntry& e : g_entries)
+        if (mod_is_new(e)) return true;
+    return false;
+}
+
+// YOUR MODS opened (UI thread): the first-run hints are done with.
+void mark_home() {
+    if (!home_seen() && seen_set(kSeenPlatform, "home")) slog("YOUR MODS has been opened: the hints about where mod settings are stop");
+}
+
+// Mod i's page opened: it isn't new any more.
+void mark_page_opened(std::size_t i) {
+    if (i < g_entries.size() && seen_clear(seen_who(g_entries[i]), "mod.new")) slog(g_entries[i].name + "'s page has been opened: it isn't marked new any more");
+}
+
+// A line of the platform's own for the title screen, in English: each language's Main.str gets it in its words (tr_in).
+std::string title_line(const char* english) { return english; }
+
+std::vector<std::string> g_fresh_names;   // the mods new in fh2-mods this launch (settings_start)
+
+// At start, before the pages and the HUD are written: marks the mods new since the launch before, and puts the
+// line about where mod settings are on the title screen until YOUR MODS has been opened.
+void first_run_cues() {
+    for (const ModEntry& e : g_entries)
+        if (e.fresh && e.enabled) {
+            seen_set(seen_who(e), "mod.new");
+            g_fresh_names.push_back(e.name);
+        }
+    std::vector<std::string> lines;
+    if (!g_entries.empty() && !home_seen()) {
+        bool moved = false;
+        if (!seen_has(kSeenPlatform, "first")) {   // the first launch of this platform here
+            moved = mods_list_existed();
+            seen_set(kSeenPlatform, "first", moved ? "upgrade" : "new");
+        }
+        lines.push_back(moved ? title_line("Mod settings have moved: Pause > MODS") : title_line("Mod settings: Pause > MODS (the last tab)"));
+        slog(moved ? "title screen: mod settings have moved (once, after an older platform)" : "title screen: where mod settings are, until YOUR MODS is opened");
+    }
+    set_platform_notice(lines);
+}
 
 // What A on a mod's row on YOUR MODS shows, counted from what the mod added (its rows, links and
 // pages), as the last sentence of the row's description. Counts go in as {0} alone, so each language
@@ -2929,8 +2990,11 @@ void prepare_hub(int which, bool resume);   // with the MODS tab's tiles, below
 
 // The Settings page's MODS tile: YOUR MODS, through the HUD tile's handler, so B comes back to Settings. Without
 // the MODS tab's hooks, the list that stands in for it.
+void mark_home();
+
 void mods_tile_pressed(void* page) {
     hub_reset();
+    mark_home();
     g_route = kRouteSettings;
     if (g_hub_ready.load()) {
         prepare_hub(1, std::exchange(g_go_back, false));   // kHubInstalled
@@ -3314,6 +3378,7 @@ TileFn o_car_packs = nullptr, o_expansions = nullptr, o_extras = nullptr, o_vip 
 void prepare_hub(int which, bool resume) {
     // the mods' pages on it get to set their rows first
     if (which == kHubInstalled) {
+        mark_home();
         pages_opening();
     } else if (which >= kHubTilePage && static_cast<std::size_t>(which - kHubTilePage) < kTileCount) {
         int j = -1;
@@ -3476,7 +3541,8 @@ void switch_view(void* page, int k, bool back, int row) {
         const ModPage& pg = g_pages[g_view_page[k]];
         slog("showing " + pg.mod->name + "'s page " + pg.key);
     } else if (static_cast<std::size_t>(k) <= g_entries.size()) {
-        slog("showing " + g_entries[k - 1].name + "'s settings");
+        slog("showing " + g_entries[k - 1].name + "'s page");
+        mark_page_opened(static_cast<std::size_t>(k - 1));
     }
 }
 
@@ -4015,9 +4081,15 @@ uint64_t d_hud_shown(void* page, void* b, void* c, void* d) {
     const uint64_t r = o_hud_shown(page, b, c, d);
     if (!g_mod_notice_desc) return r;
     ULONGLONG none = 0;
-    if (g_mod_notice_at.compare_exchange_strong(none, GetTickCount64()))
-        slog("showing the HUD's notice about mods that didn't load");   // first shown: it plays
-    else if (g_mod_notice_done.exchange(true))
+    if (g_mod_notice_at.compare_exchange_strong(none, GetTickCount64())) {   // first shown: it plays
+        if (g_notice_kind == kNoticeWelcome) {   // one of its sessions
+            const int n = std::atoi(seen_get(kSeenPlatform, "welcome.sessions").c_str()) + 1;
+            seen_set(kSeenPlatform, "welcome.sessions", std::to_string(n));
+            slog("showing the HUD's welcome (session " + std::to_string(n) + " of " + std::to_string(kWelcomeSessions) + " at most)");
+        } else {
+            slog(g_notice_kind == kNoticeFailed ? "showing the HUD's notice about mods that didn't load" : "showing the HUD's notice about new mods");
+        }
+    } else if (g_mod_notice_done.exchange(true))
         return r;                                                       // over already
     notify_changed(page, g_mod_notice_desc);
     return r;
@@ -5067,11 +5139,43 @@ void settings_set_slider(FH2Mod* m, const char* key, float value) {
 // with a bigger title) saying which, and to
 // look under MODS. It fades in a couple of seconds after the HUD first shows, stays nine
 // seconds and goes, once a session (FH2Mod_ModNotice). With nothing wrong, the game's HUD.
+// The names in a sentence: "A", "A and B", "A, B and C", "A, B, C and 2 more" (mods' names: not translated).
+std::string names_text(const std::vector<std::string>& names) {
+    std::string which;
+    for (std::size_t i = 0; i + 1 < names.size() && i < 2; ++i) which += (i ? ", " : "") + names[i];
+    if (names.size() <= 1) return names.empty() ? "" : names[0];
+    if (names.size() <= 3) return trf("{0} and {1}", {which, names.back()});
+    return trf("{0} and {1} more", {which + ", " + names[2], std::to_string(names.size() - 3)});
+}
+
 bool write_hud_notice() {
-    std::vector<std::string> names;
-    for (const ModEntry& e : g_entries)
+    std::vector<std::string> names, loaded;
+    for (const ModEntry& e : g_entries) {
         if (!mod_problem(e).empty()) names.push_back(e.name);
-    if (names.empty() && !hud_layer_wants_page()) {
+        if (e.enabled && e.mod) loaded.push_back(e.name);
+    }
+    // What the notice says this session, if anything: a mod that didn't load wins; then, until YOUR MODS has been
+    // opened, a welcome naming the mods (in three sessions at most); then the mods new since the launch before.
+    std::string title, text;
+    const int sessions = std::atoi(seen_get(kSeenPlatform, "welcome.sessions").c_str());
+    if (!names.empty()) {
+        g_notice_kind = kNoticeFailed;
+        title = names.size() == 1 ? tr("A MOD DIDN'T LOAD") : trf("{0} MODS DIDN'T LOAD", {std::to_string(names.size())});
+        text  = trf(names.size() == 1 ? "{0} isn't working. See Pause > MODS > YOUR MODS." : "{0} aren't working. See Pause > MODS > YOUR MODS.",
+                    {names_text(names)});
+    } else if (!loaded.empty() && !home_seen() && sessions < kWelcomeSessions) {
+        g_notice_kind = kNoticeWelcome;
+        title = tr("YOUR MODS ARE READY");
+        text  = trf(loaded.size() == 1 ? "{0} is loaded. Pause, then MODS (the last tab), to change its settings."
+                                       : "{0} are loaded. Pause, then MODS (the last tab), to change their settings.",
+                    {names_text(loaded)});
+    } else if (!g_fresh_names.empty()) {
+        g_notice_kind = kNoticeNewMods;
+        title = g_fresh_names.size() == 1 ? trf("NEW MOD: {0}", {upper_game(g_fresh_names[0])}) : trf("{0} NEW MODS", {std::to_string(g_fresh_names.size())});
+        text  = g_fresh_names.size() == 1 ? tr("Its settings are under Pause > MODS > YOUR MODS.")
+                                          : trf("{0}: their settings are under Pause > MODS > YOUR MODS.", {names_text(g_fresh_names)});
+    }
+    if (g_notice_kind == kNoticeNone && !hud_layer_wants_page()) {
         remove_leftover_file("UI/Scenes/Anthem/A_Hud.xaml");   // last session's notice
         return true;
     }
@@ -5080,17 +5184,11 @@ bool write_hud_notice() {
     const std::size_t r = page.find(res_end), z = page.rfind(root_end);
     const std::size_t g = z == std::string::npos ? z : page.rfind("</Grid>", z);
     if (page.empty() || r == std::string::npos || g == std::string::npos) {
-        slog("A_Hud.xaml doesn't look as expected; no notice about mods that didn't load");
+        slog("A_Hud.xaml doesn't look as expected; no notice on the freeroam HUD");
         hud_layer_splice(page);   // says why the HUD layer is left out too
         return false;
     }
-    if (!names.empty()) {   // the notice only when a mod didn't load (a HUD layer may need the page anyway)
-        const std::string title = names.size() == 1 ? tr("A MOD DIDN'T LOAD") : trf("{0} MODS DIDN'T LOAD", {std::to_string(names.size())});
-        std::string which;   // the mods' names: not translated
-        for (std::size_t i = 0; i < names.size() && i < 3; ++i) which += (i ? ", " : "") + names[i];
-        if (names.size() > 3) which = trf("{0} and {1} more", {which, std::to_string(names.size() - 3)});
-        const std::string text = trf(names.size() == 1 ? "{0} isn't working. See MODS in the pause menu."
-                                                       : "{0} aren't working. See MODS in the pause menu.", {which});
+    if (g_notice_kind != kNoticeNone) {   // the notice only when there's one (a HUD layer may need the page anyway)
         auto key = [](double v, double t, bool ease_in) {
             char b[256];
             std::snprintf(b, sizeof b,
@@ -5123,7 +5221,7 @@ bool write_hud_notice() {
             "                </Style.Triggers>\r\n"
             "            </Style>\r\n        ";
         const std::string notice =
-            "\r\n            <!-- FH2 Mod Platform: mods that didn't load -->\r\n"
+            "\r\n            <!-- FH2 Mod Platform: a notice about the mods -->\r\n"
             "            <StackPanel Style=\"{StaticResource FH2Mod_Style_ModNotice}\" Opacity=\"0\" HorizontalAlignment=\"Center\" "
             "VerticalAlignment=\"Top\" Margin=\"0,220,0,0\" RenderTransformOrigin=\"0.5,0.5\">\r\n"
             "                <StackPanel.RenderTransform>\r\n"
@@ -5146,13 +5244,13 @@ bool write_hud_notice() {
         page.insert(r, style);
     }
     // the HUD layer finds its own insertion points again, after the notice's
-    if (!hud_layer_splice(page) && names.empty()) {
+    if (!hud_layer_splice(page) && g_notice_kind == kNoticeNone) {
         remove_leftover_file("UI/Scenes/Anthem/A_Hud.xaml");   // nothing to write: the layer was left out
         hud_layer_page_written(false, page);
         return true;
     }
     const bool written = set_file(&g_owner_mod, "UI/Scenes/Anthem/A_Hud.xaml", page.data(), page.size()) != 0;
-    g_hud_notice       = written && !names.empty();
+    g_hud_notice       = written && g_notice_kind != kNoticeNone;
     hud_layer_page_written(written, page);
     return written;
 }
@@ -5218,6 +5316,7 @@ void settings_start(const FH2ModApi* api) {
         clear_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseOptions.xaml");
     }
     if (!mods_page) remove_leftover_file("UI/Scenes/Anthem/A_ModOptions.xaml");
+    first_run_cues();
     if (!write_hud_notice()) remove_leftover_file("UI/Scenes/Anthem/A_Hud.xaml");
     write_title_page();
     slog(std::to_string(n) + " row(s) from mods, " + std::to_string(g_entries.size()) + " mod(s) on the MODS tab" +

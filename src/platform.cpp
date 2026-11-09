@@ -279,6 +279,11 @@ std::set<std::string> read_manifest() {
 
 std::vector<std::string> split_lines(const char* s);   // below
 
+// The platform's own lines on the title screen (settings.cpp: where mod settings are), as fh2-mods\notices\~platform.txt,
+// which sorts after the mods' own. In English there; each language's Main.str gets them in its own words (apply_all).
+const wchar_t* const kPlatformNotice = L"~platform";
+std::vector<std::string> g_platform_notice;   // as last written (guarded by g_mu)
+
 // Rebuilds every dirty table from all mods' edits (later registrations win
 // on the same key), and Main.str's "TO START" from the notices.
 void apply_all() {
@@ -341,6 +346,11 @@ void apply_all() {
                 if (is_main && key == kToStartKey)
                     // a notice a mod got from tr() (API 10) in this table's language, then the platform's own lines
                     s = title_with_notices(g_azimuth, s, [&](const std::wstring& who, const std::vector<std::string>& lines) {
+                        if (who == kPlatformNotice) {
+                            std::vector<std::string> out;
+                            for (const std::string& l : lines) out.push_back(tr_in(l.c_str(), lang));
+                            return out;
+                        }
                         for (const auto& m : g_mods) {
                             std::string text;
                             if (_wcsicmp(m->wname.c_str(), who.c_str()) || !l10n_text_in(m.get(), "notice", lang, text)) continue;
@@ -484,7 +494,7 @@ void check_updates(FH2Mod* m) {
     // It's in English for now, as the old-platform notice is: it goes into Main.str for every language, and
     // translated it would be in English or the player's language depending on when the check finishes.
     const bool had   = !m->update_notice.empty();
-    m->update_notice = newer ? fill("{0} {1} is available", {m->name, latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest})
+    m->update_notice = newer ? fill("{0} {1} is out: Pause > MODS > UPDATES", {m->name, latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest})
                              : std::string();
     if (newer || had) {
         refresh_notice(m);
@@ -622,6 +632,24 @@ void api_clear_strings(FH2Mod* m, const char* table) {
 }
 
 void api_apply_strings(FH2Mod*) { apply_all(); }
+
+} // namespace
+
+void set_platform_notice(const std::vector<std::string>& english_lines) {
+    std::error_code ec;
+    {
+        std::scoped_lock lk{g_mu};
+        const bool there = fs::exists(g_azimuth / "fh2-mods" / "notices" / (std::wstring(kPlatformNotice) + L".txt"), ec);
+        if (english_lines == g_platform_notice && there != english_lines.empty()) return;   // as it is already
+        g_platform_notice = english_lines;
+        write_notice_file(g_azimuth, kPlatformNotice, L"", english_lines);   // no lines: the file goes
+        g_dirty.insert("main.str");
+        g_table_names.emplace("main.str", "Main.str");
+    }
+    apply_all();
+}
+
+namespace {
 
 void api_set_notice(FH2Mod* m, const char* lines) {
     if (!m) return;
@@ -1468,7 +1496,28 @@ std::string mod_description(FH2Mod* m) {
     return d;
 }
 
+// platform-mods.txt as this launch first found it, before mod_entries writes it again: whether it was there at all
+// (a first launch has none) and the DLLs it listed (lower case). What's new since the last launch is told by it.
+struct KnownBefore {
+    bool existed = false;
+    std::set<std::wstring> dlls;
+};
+const KnownBefore& known_before() {
+    static const KnownBefore k = [] {
+        KnownBefore b;
+        std::error_code ec;
+        b.existed = fs::is_regular_file(known_path(), ec);
+        for (const auto& l : read_lines(known_path()))
+            if (const auto f = split_tabs(l); !f.empty() && !f[0].empty()) b.dlls.insert(lower_w(f[0]));
+        return b;
+    }();
+    return k;
+}
+
+bool mods_list_existed() { return known_before().existed; }
+
 std::vector<ModEntry> mod_entries() {
+    const KnownBefore& before = known_before();
     // remembered: dll -> name, version, description
     std::map<std::wstring, std::vector<std::wstring>> known;
     for (const auto& l : read_lines(known_path())) {
@@ -1529,6 +1578,8 @@ std::vector<ModEntry> mod_entries() {
                 e.name = e.name.substr(0, cut) + "...";
             }
         }
+        // new in fh2-mods since the last launch: a platform mod the list didn't have (when there was a list)
+        e.fresh = before.existed && (e.mod || e.platform_mod) && !before.dlls.count(lower_w(f.file));
         if (e.mod || e.platform_mod)
             remember.push_back(f.file + L"\t" + widen(e.name) + L"\t" + widen(e.version) + L"\t" + widen(e.description) + L"\t" +
                                widen(e.repo) + L"\t" + (e.offline_only ? L"1" : L"0"));

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <initializer_list>
 #include <string>
+#include <string_view>
 
 namespace fh2platform {
 
@@ -15,5 +16,9 @@ std::string tr(const char* english);
 std::string trf(const char* english, std::initializer_list<std::string> args);
 // For text the game asks for as it shows it: a pointer that stays valid.
 const wchar_t* tr_w(const wchar_t* english);
+// `english` in the language of the string tables in `table_code` (a zip's name: "PL", "br", "nl"), for text written
+// into every language's tables at once (the title screen); itself for English, Czech and Hungarian (the game's text
+// is English there) and for text without a translation.
+std::string tr_in(const char* english, std::string_view table_code);
 
 } // namespace fh2platform
