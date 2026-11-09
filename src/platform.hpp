@@ -127,6 +127,25 @@ void write_engine_synths();
 bool instance_layer();
 // Where overrides are written: instance_media(), else the game's mediaoverride.
 std::filesystem::path override_root();
+// The two places the platform writes files for the game (its roots): mediaoverride, and this Azimuth folder's own
+// layer. From 2.9.0 a line of fh2-mods\platform-files.txt or platform-tables.txt ends in the roots its file is in
+// ("mediaoverride", "layer", or both); a line without them is from 2.8.0 or older (which wrote mediaoverride) or a
+// 2.9.0 test build (which may have written the layer), so it counts as both.
+enum : unsigned { kRootOverride = 1, kRootLayer = 2, kRootBoth = 3 };
+unsigned current_root();                                // this session's (instance_layer)
+std::filesystem::path root_folder(unsigned root);       // one root's folder
+std::string root_names(unsigned roots);                 // as a manifest line ends
+std::string root_shown(unsigned root);                  // one root, for the log
+unsigned parse_roots(const std::string& text);          // the reverse; kRootBoth when it names none
+// At start, before anything is written: the platform's own files (platform-files.txt) and string tables
+// (platform-tables.txt) in the root this session doesn't write to (what 2.8.0 left in mediaoverride, or a
+// session with the other root), moved into fh2-mods\platform-old-overrides\<root>\, keeping their paths.
+// Nothing the manifests don't list is touched. files.cpp; the tables' part is move_old_tables (platform.cpp).
+void move_old_overrides();
+void move_old_tables();
+// Moves the platform's copy of `rel` (relative to the root's folder) to fh2-mods\platform-old-overrides\<root>\rel,
+// and lists it in moved.txt there: 1 moved, 0 nothing there, -1 couldn't be moved (`error` says why).
+int move_old_override(unsigned root, const std::filesystem::path& rel, std::string& error);
 const std::vector<CarPack>& car_packs();
 // Finds the packs, puts their files on the temp drive, and writes the merged zipmanifest.xml to
 // instance_media(). Their SQL goes into the database with the mods' (apply_database).

@@ -398,6 +398,7 @@ void start_media_overrides() {
     if (!extra_options_dir().empty()) {
         plog("media overrides: Extra Options is here, so mediaoverride is left to it");
         plog("media overrides: the platform's files go to mediaoverride for this whole session");
+        move_old_overrides();
         car_packs_unavailable(later("Extra Options is loaded."));
         return;
     }
@@ -408,6 +409,7 @@ void start_media_overrides() {
         plog("media overrides: Extra Options' winmm.dll is next to azimuth.exe and Wine is set to load it, but the "
              "list of loaded DLLs can't be read to see whether it has; mediaoverride is left to it");
         plog("media overrides: the platform's files go to mediaoverride for this whole session");
+        move_old_overrides();
         car_packs_unavailable("Extra Options is set to load");
         std::thread(wait_for_extra_options).detach();
         return;
@@ -417,10 +419,12 @@ void start_media_overrides() {
         plog("media overrides: this Azimuth folder has data\\titles\\1A96545B (where Azimuth keeps the game's T:\\ drive), "
              "so for this whole session its own files go to " + narrow(instance_media().wstring()) + " (the game's " +
              temp_drive_spelling(instance_media()) + "), read ahead of mediaoverride");
+        move_old_overrides();   // first: the packs' merged zipmanifest.xml is built on what the game reads without them
         prepare_car_packs();
     } else {
         plog("media overrides: this Azimuth folder has no data\\titles\\1A96545B yet (Azimuth makes it the first time the "
              "game starts), so for this whole session the platform's files go to mediaoverride, mounted as up to 2.8.0");
+        move_old_overrides();
         car_packs_unavailable(later("This Azimuth folder has no data\\titles\\1A96545B folder yet: Azimuth makes it the first "
                                     "time the game starts."));
     }

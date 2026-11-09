@@ -69,6 +69,7 @@ std::wstring g_azimuth_str, g_game_str;
 std::recursive_mutex g_mu;
 std::vector<std::unique_ptr<FH2Mod>> g_mods;
 std::map<std::string, std::string> g_table_names; // lower -> as first given
+std::map<std::string, unsigned> g_table_roots;    // lower -> the roots the platform wrote it to (platform-tables.txt)
 std::set<std::string> g_dirty;                    // lower-case table names
 std::wstring g_current_dll;                       // the DLL whose fh2mod_init is running
 struct Found {                                    // every DLL in fh2-mods, in load order
@@ -266,18 +267,31 @@ bool this_copy_runs() {
 
 fs::path manifest_path() { return g_azimuth / "fh2-mods" / "platform-tables.txt"; }
 
+// The tables written last time, and where (g_table_roots): "Table.str<TAB>roots" lines (platform.hpp). 2.8.0 wrote
+// the name alone, and takes the rest of a line for part of the name, as a table it never finds.
 std::set<std::string> read_manifest() {
     std::set<std::string> t;
+    g_table_roots.clear();
     std::ifstream in{manifest_path()};
     std::string line;
     while (std::getline(in, line)) {
         while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
-        if (!line.empty()) {
-            t.insert(lower(line));
-            g_table_names.emplace(lower(line), line);
+        const auto tab = line.find('\t');
+        const std::string name = line.substr(0, tab);
+        if (!name.empty()) {
+            t.insert(lower(name));
+            g_table_names.emplace(lower(name), name);
+            g_table_roots[lower(name)] = tab == std::string::npos ? kRootBoth : parse_roots(line.substr(tab + 1));
         }
     }
     return t;
+}
+
+void write_manifest(const std::set<std::string>& written) {
+    std::ofstream out{manifest_path(), std::ios::trunc};
+    for (const auto& t : written)
+        out << (g_table_names.count(t) ? g_table_names[t] : t) << "\t"
+            << root_names(g_table_roots.count(t) ? g_table_roots[t] : current_root()) << "\n";
 }
 
 std::vector<std::string> split_lines(const char* s);   // below
@@ -356,7 +370,15 @@ void apply_all() {
         const auto add    = table == "data_car.str" ? database_strings() : std::map<uint16_t, std::wstring>{};
         const bool remove = keys.empty() && tr_keys.empty() && texts.empty() && !notices && add.empty();
         const auto name   = g_table_names.count(table) ? g_table_names[table] : table;
-        const int n       = override_string_table(
+        // Where the platform wrote it before: removed from each; written to this session's root, and still listed in
+        // a root a copy couldn't be moved from at start (move_old_tables), so a later removal reaches it too.
+        const unsigned was = g_table_roots.count(table) ? g_table_roots[table] : 0u;
+        int removed_elsewhere = 0;
+        if (remove)
+            for (const unsigned r : {kRootOverride, kRootLayer})
+                if ((was & r) && r != current_root())
+                    removed_elsewhere += override_string_table(g_game, name, {}, true, root_folder(r));
+        const int n       = removed_elsewhere + override_string_table(
             g_game, name,
             [&](std::string_view lang, uint16_t key, const std::wstring& t) {
                 std::wstring s = t;
@@ -392,7 +414,9 @@ void apply_all() {
         if (remove) {
             if (n) plog("removed " + name + " overrides (" + std::to_string(n) + " languages)");
             written.erase(table);
+            g_table_roots.erase(table);
         } else {
+            g_table_roots[table] = was | current_root();
             plog("wrote " + name + " for " + std::to_string(n) + " languages (" + std::to_string(keys.size() + tr_keys.size()) +
                  " key edits, " + (tr_keys.empty() ? "" : std::to_string(tr_keys.size()) + " of them in each language's own words, ") + std::to_string(texts.size()) + " text replacements" +
                  (add.empty() ? "" : ", " + std::to_string(add.size()) + " car names added") +
@@ -401,9 +425,50 @@ void apply_all() {
         }
     }
     g_dirty.clear();
-    std::ofstream out{manifest_path(), std::ios::trunc};
-    for (const auto& t : written) out << (g_table_names.count(t) ? g_table_names[t] : t) << "\n";
+    write_manifest(written);
 }
+
+} // namespace
+
+void move_old_tables() {
+    std::scoped_lock lk{g_mu};
+    if (g_game.empty()) return;
+    const std::set<std::string> tables = read_manifest();
+    const unsigned at = current_root();
+    bool changed      = false;
+    std::size_t moved = 0;
+    for (const auto& t : tables) {
+        const std::string name = g_table_names.count(t) ? g_table_names[t] : t;
+        unsigned roots         = at;   // and those a copy couldn't be moved from, to try again next time
+        for (const unsigned r : {kRootOverride, kRootLayer}) {
+            if (!(g_table_roots[t] & r) || r == at) continue;
+            // each language's copy: <root>\Stripped\StringTables\<language>\<table>
+            std::error_code ec;
+            for (const auto& lang : fs::directory_iterator(root_folder(r) / "Stripped" / "StringTables", ec)) {
+                if (!lang.is_directory(ec)) continue;
+                const fs::path rel = fs::path{L"Stripped"} / L"StringTables" / lang.path().filename() / fs::path{name};
+                std::string error;
+                const int done = move_old_override(r, rel, error);
+                if (done > 0) ++moved;
+                if (done < 0) {
+                    roots |= r;
+                    plog("string tables: couldn't move " + root_names(r) + "\\" + narrow(rel.wstring()) +
+                         " to fh2-mods\\platform-old-overrides (" + error + "); trying again next launch");
+                }
+            }
+        }
+        changed          = changed || roots != g_table_roots[t];
+        g_table_roots[t] = roots;
+    }
+    if (changed) write_manifest(tables);
+    if (moved)
+        plog("string tables: " + std::to_string(moved) + " table file(s) the platform wrote to " + root_shown(kRootBoth & ~at) +
+                 " before (an older platform, or a session that wrote there) were moved to fh2-mods\\platform-old-overrides\\" +
+                 root_names(kRootBoth & ~at) + ", as this session's go to " + root_shown(at) +
+                 "; moved.txt there lists them");
+}
+
+namespace {
 
 void refresh_notice(FH2Mod* m) {
     std::vector<std::string> lines = m->notice;

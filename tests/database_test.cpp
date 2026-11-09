@@ -30,6 +30,12 @@ static std::string slurp(const fs::path& f) {
     return {std::istreambuf_iterator<char>(in), {}};
 }
 static bool has(const std::string& s, const char* what) { return s.find(what) != std::string::npos; }
+// A text file the platform writes (CRLF), with LF line ends.
+static std::string lines_of(const fs::path& f) {
+    std::string s = slurp(f);
+    s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
+    return s;
+}
 static bool present(const fs::path& f) {
     std::error_code ec;
     return fs::exists(f, ec);
@@ -187,11 +193,12 @@ struct Case {
         CopyFileW(from.c_str(), to.c_str(), FALSE);
     }
 
-    // Starts the game, and shows what the platform logged about the database.
-    void launch() {
+    // Starts the game, and shows what the platform logged about the database. `how`: "eo" with Extra Options
+    // loaded (the hook test's stand-in, as fake-eo.dll), "snapshot" also waiting for the platform's save snapshot.
+    void launch(const wchar_t* how = L"") {
         STARTUPINFOW si{sizeof si};
         PROCESS_INFORMATION pi{};
-        std::wstring cmd = L"azimuth.exe launch";
+        std::wstring cmd = std::wstring(L"azimuth.exe launch ") + how;
         const auto exe = fs::absolute(dir / "azimuth.exe"), cwd = fs::absolute(dir);
         DWORD code = 1;
         if (CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, cwd.c_str(), &si, &pi)) {
@@ -208,7 +215,9 @@ struct Case {
             if (end == std::string::npos) end = log.size();
             std::string line = log.substr(at, end - at);
             if (!line.empty() && line.back() == '\r') line.pop_back();
-            if (has(line, "database:") || has(line, "database override")) std::printf("    %s\n", line.c_str());
+            if (has(line, "database:") || has(line, "database override") || has(line, "files:") || has(line, "string tables:") ||
+                has(line, "car packs:") || has(line, "save snapshot:"))
+                std::printf("    %s\n", line.c_str());
             at = end + 1;
         }
     }
@@ -813,6 +822,75 @@ static void car_ids() {
     CHECK(car(3003) == "TEST_Pack01" && car(3000) == "" && listed(record) == ids);
 }
 
+// An update from 2.8.0 in an Azimuth folder with its own layer (data\titles\1A96545B), where 2.8.0 wrote its files and
+// string tables to mediaoverride and listed them without a root: the ones it listed are moved to
+// fh2-mods\platform-old-overrides\mediaoverride once, before anything is written, and nothing else in mediaoverride
+// is touched (another mod's file and table, another mod's database). A file that can't be moved is tried again next
+// launch. Then Extra Options, which mounts mediaoverride: what the platform wrote to the layer is moved aside the
+// same way, to platform-old-overrides\layer.
+static void upgrade() {
+    Case c{"upgrade-from-2.8.0"};
+    fs::create_directories(c.dir / "data" / "titles" / "1A96545B");
+    const fs::path mo = c.dir / "FH2" / "Mount" / "mediaoverride", old = c.dir / "fh2-mods" / "platform-old-overrides";
+    const fs::path layer  = c.dir / "data" / "titles" / "1A96545B" / "tmp" / "fh2-platform" / "media";
+    const fs::path files  = c.dir / "fh2-mods" / "platform-files.txt", tables = c.dir / "fh2-mods" / "platform-tables.txt";
+    const fs::path tables_en = fs::path{"Stripped"} / "StringTables" / "EN", tables_pl = fs::path{"Stripped"} / "StringTables" / "PL";
+    const auto write = [](const fs::path& f, const std::string& text) {
+        fs::create_directories(f.parent_path());
+        std::ofstream{f, std::ios::binary} << text;
+    };
+    write(mo / "UI" / "keep.xml", "2.8.0's");
+    write(mo / "UI" / "gone.xml", "2.8.0's, for a mod removed since");
+    write(mo / "UI" / "other.xml", "another mod's");
+    write(mo / tables_en / "Main.str", "2.8.0's notice");
+    write(mo / tables_pl / "Main.str", "2.8.0's notice");
+    write(mo / tables_en / "AIPlayers.str", "2.8.0's names");
+    write(mo / tables_en / "Other.str", "another mod's table");
+    Case::put(g_traffic, c.T);
+    write(files, "UI\\keep.xml\tTestMod\nUI\\gone.xml\tGoneMod\n");
+    write(tables, "Main.str\nAIPlayers.str\n");
+    c.mods({});
+
+    // keep.xml is open in another program: it stays where it is, listed in both roots, and is tried again next launch
+    HANDLE h = hold(mo / "UI" / "keep.xml");
+    c.launch();
+    CloseHandle(h);
+    CHECK(slurp(mo / "UI" / "keep.xml") == "2.8.0's" && has(c.log, "files: couldn't move mediaoverride\\UI\\keep.xml"));
+    CHECK(!present(mo / "UI" / "gone.xml") && slurp(old / "mediaoverride" / "UI" / "gone.xml") == "2.8.0's, for a mod removed since");
+    CHECK(!present(mo / tables_en / "Main.str") && !present(mo / tables_pl / "Main.str") && !present(mo / tables_en / "AIPlayers.str"));
+    CHECK(slurp(old / "mediaoverride" / tables_pl / "Main.str") == "2.8.0's notice" &&
+          slurp(old / "mediaoverride" / tables_en / "AIPlayers.str") == "2.8.0's names");
+    CHECK(slurp(mo / "UI" / "other.xml") == "another mod's" && slurp(mo / tables_en / "Other.str") == "another mod's table");
+    CHECK(same_file(c.T, g_traffic));
+    CHECK(lines_of(files) == "UI\\gone.xml\tGoneMod\tlayer\nUI\\keep.xml\tTestMod\tmediaoverride layer\n");
+    CHECK(lines_of(tables) == "AIPlayers.str\tlayer\n");   // Main.str removed with the first write: no title notices here
+    CHECK(has(c.log, "files: 1 file(s) the platform wrote to mediaoverride before (an older platform, or a session that wrote there) "
+                     "were moved to fh2-mods\\platform-old-overrides\\mediaoverride, as this session's go to this Azimuth folder's own layer"));
+    CHECK(has(c.log, "string tables: 3 table file(s) the platform wrote to mediaoverride before"));
+    CHECK(has(lines_of(old / "moved.txt"), "\tmediaoverride\tStripped\\StringTables\\EN\\AIPlayers.str\n"));
+
+    // Next launch: the file that was open goes too; nothing else is moved again
+    c.launch();
+    CHECK(!present(mo / "UI" / "keep.xml") && slurp(old / "mediaoverride" / "UI" / "keep.xml") == "2.8.0's");
+    CHECK(has(c.log, "files: moved mediaoverride\\UI\\keep.xml to fh2-mods\\platform-old-overrides\\mediaoverride") &&
+          !has(c.log, "string tables: "));
+    CHECK(lines_of(files) == "UI\\gone.xml\tGoneMod\tlayer\nUI\\keep.xml\tTestMod\tlayer\n");
+    c.launch();
+    CHECK(!has(c.log, "platform-old-overrides"));
+
+    // Extra Options installed: the platform's files in the layer are moved aside, and the lists say mediaoverride
+    write(layer / "UI" / "keep.xml", "2.9.0's");
+    write(layer / tables_en / "AIPlayers.str", "2.9.0's names");
+    c.launch(L"eo");
+    CHECK(has(c.log, "media overrides: Extra Options is here, so mediaoverride is left to it"));
+    CHECK(!present(layer / "UI" / "keep.xml") && slurp(old / "layer" / "UI" / "keep.xml") == "2.9.0's");
+    CHECK(!present(layer / tables_en / "AIPlayers.str") && slurp(old / "layer" / tables_en / "AIPlayers.str") == "2.9.0's names");
+    CHECK(lines_of(files) == "UI\\gone.xml\tGoneMod\tmediaoverride\nUI\\keep.xml\tTestMod\tmediaoverride\n");
+    CHECK(lines_of(tables) == "AIPlayers.str\tmediaoverride\n");
+    CHECK(has(c.log, "files: 1 file(s) the platform wrote to this Azimuth folder's own layer before"));
+    CHECK(slurp(mo / "UI" / "other.xml") == "another mod's" && same_file(c.T, g_traffic));
+}
+
 // A copy another install of the platform built (with the mark): built over
 // from the game's own, and kept aside.
 static void other_install() {
@@ -1006,10 +1084,16 @@ int wmain(int argc, wchar_t** argv) {
         // launch's log goes first: the platform only starts a new one from its own thread, and on a
         // slow drive the old one's "mod(s) loaded" could otherwise end this launch before it starts.
         DeleteFileW(L"fh2-mods\\platform.log");
+        const std::wstring how = argc > 2 ? argv[2] : L"";
+        if (how == L"eo") {   // Extra Options, loaded before the platform as azimuth.exe's import is
+            wchar_t eo[MAX_PATH];
+            if (!GetFullPathNameW(L"..\\..\\fake-eo.dll", MAX_PATH, eo, nullptr) || !LoadLibraryW(eo)) return 4;
+        }
         if (!LoadLibraryW(L"d3dcompiler_47.dll")) return 2;
         for (int i = 0; i < 600; ++i) {
             Sleep(50);
-            if (has(slurp(L"fh2-mods\\platform.log"), "mod(s) loaded")) TerminateProcess(GetCurrentProcess(), 0);
+            const std::string log = slurp(L"fh2-mods\\platform.log");
+            if (has(log, "mod(s) loaded") && (how != L"snapshot" || has(log, "save snapshot:"))) TerminateProcess(GetCurrentProcess(), 0);
         }
         TerminateProcess(GetCurrentProcess(), 3);
         return 3;
@@ -1062,6 +1146,7 @@ int wmain(int argc, wchar_t** argv) {
     fh2mp_copying();
     car_pack();
     car_ids();
+    upgrade();
     other_install();
     fh2ml();
     failures();

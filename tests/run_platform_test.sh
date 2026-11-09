@@ -39,6 +39,8 @@ run_layout() {   # run_layout mediaoverride|own
     [ "$1" = own ] && mkdir -p "$dir/data/titles/1A96545B/saves/1A96545B"
     cp "$b/platform_test.exe" "$dir/azimuth.exe"
     cp "$b/d3dcompiler_47.dll" "$b/database_test.exe" "$b/DbMod.dll" "$b/fh2mod.exe" "$dir/"
+    # the hook test's stand-in for Extra Options, which the database test loads by this name when it plays it
+    cp "$b/winmm.dll" "$dir/fake-eo.dll"
     cp "$b/AaaMod.dll" "$b/HelloMod.dll" "$b/TestMod.dll" "$b/Legacy.dll" "$dir/fh2-mods/"
     # the game exe where Azimuth has it, for the phases that map it (the platform reads its code from there)
     [ -n "$game_exe" ] && ln -s "$game_exe" "$dir/FH2/Mount/forza_durango_release_final.exe"

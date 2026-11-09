@@ -443,6 +443,25 @@ fs::path override_root() {
     return instance_layer() ? instance_media() : game_mount() / "mediaoverride";
 }
 
+unsigned current_root() { return instance_layer() ? kRootLayer : kRootOverride; }
+
+fs::path root_folder(unsigned root) { return root == kRootLayer ? instance_media() : game_mount() / "mediaoverride"; }
+
+std::string root_names(unsigned roots) {
+    std::string s = roots & kRootOverride ? "mediaoverride" : "";
+    if (roots & kRootLayer) s += s.empty() ? "layer" : " layer";
+    return s;
+}
+
+std::string root_shown(unsigned root) { return root == kRootLayer ? "this Azimuth folder's own layer" : "mediaoverride"; }
+
+unsigned parse_roots(const std::string& text) {
+    unsigned roots = 0;
+    std::istringstream words{text};
+    for (std::string w; words >> w;) roots |= w == "mediaoverride" ? kRootOverride : w == "layer" ? kRootLayer : 0u;
+    return roots ? roots : kRootBoth;
+}
+
 const std::vector<CarPack>& car_packs() { return g_packs; }
 
 void car_packs_unavailable(const std::string& why) {
