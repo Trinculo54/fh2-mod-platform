@@ -174,7 +174,9 @@ namespace {
 std::vector<std::string> g_snap_for; // "Mod (reason)"
 uint32_t g_snap_keep = 0;
 bool g_snap_closed   = false;        // every fh2mod_init has returned
-bool g_snap_platform = false;        // the platform's own copy started this session (platform_save_snapshot)
+bool g_snap_platform = false;        // the platform's own copy started this session (platform_save_snapshot), until it fails
+int g_snap_earlier   = -1;           // whether save-snapshots had one from an earlier session: -1 not looked yet
+                                     // (platform_save_snapshots_kept looks once a session)
 fs::path saves_dir() { return azimuth_dir() / L"data" / L"titles" / L"1A96545B" / L"saves"; }
 
 // The platform's own copies (car packs' cars missing from the database) are save-snapshots\car-packs-<session id>,
@@ -206,6 +208,10 @@ DWORD WINAPI copy_saves(LPVOID p) {
         }
     if (ec || files == 0) {
         plog("save snapshot: copying the saves failed" + (ec ? " (" + ec.message() + ")" : std::string()) + ", for " + j.who);
+        if (j.platform) {   // so the MODS tab doesn't say there's a copy
+            std::scoped_lock lk{g_mu};
+            g_snap_platform = false;
+        }
         return 0;
     }
     if (j.platform) prune(root, kPlatformSnapshots, L"", j.keep, true);
@@ -217,8 +223,16 @@ DWORD WINAPI copy_saves(LPVOID p) {
 
 void start_copy(SnapJob* job) {
     HANDLE t = CreateThread(nullptr, 0, copy_saves, job, 0, nullptr);
-    if (t) CloseHandle(t);
-    else delete job;
+    if (t) {
+        CloseHandle(t);
+        return;
+    }
+    plog("save snapshot: the copy couldn't be started (error " + std::to_string(GetLastError()) + "), for " + job->who);
+    if (job->platform) {   // a copy that never started is one that failed: the MODS tab doesn't say there's one
+        std::scoped_lock lk{g_mu};
+        g_snap_platform = false;
+    }
+    delete job;
 }
 } // namespace
 
@@ -272,14 +286,26 @@ bool platform_save_snapshot(const std::string& why) {
 }
 
 bool platform_save_snapshots_kept() {
+    // The MODS tab asks each time its rows are built, perhaps on the game's UI thread: the folder is listed once a
+    // session, leaving out this session's own copy, which g_snap_platform stands for (cleared if it fails).
+    const std::wstring mine = kPlatformSnapshots + std::wstring(g_id.begin(), g_id.end());
     {
         std::scoped_lock lk{g_mu};
         if (g_snap_platform) return true;   // still being copied, perhaps
+        if (g_snap_earlier >= 0) return g_snap_earlier == 1;
     }
     std::error_code ec;
-    for (const auto& e : fs::directory_iterator(azimuth_dir() / L"fh2-mods" / L"save-snapshots", ec))
-        if (e.is_directory(ec) && e.path().filename().wstring().rfind(kPlatformSnapshots, 0) == 0) return true;
-    return false;
+    bool found = false;
+    for (const auto& e : fs::directory_iterator(azimuth_dir() / L"fh2-mods" / L"save-snapshots", ec)) {
+        const std::wstring name = e.path().filename().wstring();
+        if (e.is_directory(ec) && name.rfind(kPlatformSnapshots, 0) == 0 && name != mine) {
+            found = true;
+            break;
+        }
+    }
+    std::scoped_lock lk{g_mu};
+    if (g_snap_earlier < 0) g_snap_earlier = found ? 1 : 0;
+    return g_snap_platform || g_snap_earlier == 1;
 }
 
 const wchar_t* session_log_path(FH2Mod* m, const wchar_t* folder, uint32_t keep) {

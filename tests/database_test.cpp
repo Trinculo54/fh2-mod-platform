@@ -747,11 +747,11 @@ static void car_pack() {
 }
 
 // Car packs' cars' Ids, next to cars a mod and a pack add with Ids of their own (src/car_ids.cpp). Packs
-// are read in an Azimuth folder with its own layer (data\titles), where the database is built on the
-// game's temp drive.
+// are read in an Azimuth folder with its own layer (data\titles, with the game's tmp\Turn10Temp.scratch),
+// where the database is built on the game's temp drive.
 static void car_ids() {
     Case c{"car-ids"};
-    fs::create_directories(c.dir / "data" / "titles" / "1A96545B");
+    fs::create_directories(c.dir / "data" / "titles" / "1A96545B" / "tmp" / "Turn10Temp.scratch");
     const fs::path layer  = c.dir / "data" / "titles" / "1A96545B" / "tmp" / "fh2-platform" / "media" / "Stripped" / "gamedbRC.slt";
     const fs::path record = c.dir / "fh2-mods" / "platform-car-ids.txt";
     // A pack as make_car_pack.py makes them: its car's Id where its SQL says {car:...}.
@@ -837,6 +837,8 @@ static void car_ids() {
     c.launch();
     CHECK(has(c.log, "TEST_Pack01 (car 3003), which a save may have, isn't in the game database this session") &&
           !has(c.log, "save snapshot:") && has(slurp(title), "Car pack {0}'s cars aren't in the game this time."));
+    // no copy this session: the one from the session before is still there, found in fh2-mods\save-snapshots
+    CHECK(has(slurp(title), "A copy of your saves from before is in fh2-mods\\save-snapshots."));
 
     // That mod gone: the pack is back with the same Id, and nothing is said about it.
     fs::remove(broken);
@@ -901,7 +903,7 @@ static void car_ids() {
 // platform writes the merged one, with a pack's zip, to the layer (which the mod's would otherwise replace).
 static void zip_manifest() {
     Case c{"zip-manifest"};
-    fs::create_directories(c.dir / "data" / "titles" / "1A96545B");
+    fs::create_directories(c.dir / "data" / "titles" / "1A96545B" / "tmp" / "Turn10Temp.scratch");
     const fs::path manifest = c.dir / "data" / "titles" / "1A96545B" / "tmp" / "fh2-platform" / "media" / "zipmanifest.xml";
     std::ofstream{c.dir / "FH2" / "Mount" / "media" / "zipmanifest.xml", std::ios::binary} << "<ZipFiles>\r\n</ZipFiles>\r\n";
     c.mods({"ZipTest"});
@@ -917,15 +919,55 @@ static void zip_manifest() {
     CHECK(has(slurp(manifest), "<Zip version=\"1\" path=\"game:\\media\\cars\\zip_car.zip\""));
 }
 
-// An update from 2.8.0 in an Azimuth folder with its own layer (data\titles\1A96545B), where 2.8.0 wrote its files and
-// string tables to mediaoverride and listed them without a root: the ones it listed are moved to
+// Whether an Azimuth folder gets its own layer, decided as the platform starts (src/car_packs.cpp, instance_layer):
+// the game folder found, data\titles\1A96545B, and the tmp\Turn10Temp.scratch folder the game makes on its T:\ drive
+// there, which shows that T:\ is that folder. The log says which one is missing, and the car packs why they aren't
+// read; without the game folder, only the log (there's no MODS tab then, and nothing is written for the game).
+static void no_layer() {
+    Case c{"no-layer"};
+    const fs::path titles = c.dir / "data" / "titles" / "1A96545B", away = c.dir / "FH2-away";
+    fs::create_directories(c.dir / "fh2-cars" / "test-pack" / "media");
+    std::ofstream{c.dir / "fh2-cars" / "test-pack" / "pack.ini"} << "[pack]\nname = Test pack\nversion = 1\n";
+    c.mods({});
+    c.launch();
+    CHECK(has(c.log, "media overrides: this Azimuth folder has no data\\titles\\1A96545B yet (Azimuth makes it the first time the "
+                     "game starts), so for this whole session the platform's files go to mediaoverride"));
+    CHECK(has(c.log, "car packs: The 1 car pack(s) in fh2-cars aren't read: This Azimuth folder has no data\\titles\\1A96545B folder "
+                     "yet: Azimuth makes it the first time the game starts."));
+    // data\titles\1A96545B\tmp, but not the game's own folder there: as before
+    fs::create_directories(titles / "tmp");
+    c.launch();
+    CHECK(has(c.log, "media overrides: this Azimuth folder has data\\titles\\1A96545B, but no tmp\\Turn10Temp.scratch in it (the game "
+                     "makes that folder on its T:\\ drive the first time it starts), so it can't be told that the game's T:\\ is there; "
+                     "for this whole session the platform's files go to mediaoverride"));
+    CHECK(has(c.log, "car packs: The 1 car pack(s) in fh2-cars aren't read: This Azimuth folder has no "
+                     "data\\titles\\1A96545B\\tmp\\Turn10Temp.scratch folder yet: the game makes it the first time it starts."));
+    CHECK(!present(titles / "tmp" / "fh2-platform"));
+    // the game folder not found: the log says so, and nothing about data\titles to the player
+    fs::create_directories(titles / "tmp" / "Turn10Temp.scratch");
+    fs::rename(c.dir / "FH2", away);
+    c.launch();
+    fs::rename(away, c.dir / "FH2");
+    CHECK(has(c.log, "media overrides: the game's Mount folder wasn't found, so the platform writes nothing for the game this "
+                     "session (to this Azimuth folder's own layer or anywhere else), and car packs aren't read"));
+    CHECK(!has(c.log, "no data\\titles") && !has(c.log, "Turn10Temp.scratch folder yet") && !has(c.log, "car packs: The "));
+    // all there: the layer, and the pack is read
+    c.launch();
+    CHECK(has(c.log, "media overrides: this Azimuth folder has data\\titles\\1A96545B (where Azimuth keeps the game's T:\\ drive), so "
+                     "for this whole session its own files go to "));
+    CHECK(!has(c.log, "car packs: The ") && has(c.log, "car packs: 1 pack(s) in "));
+}
+
+// An update from 2.8.0 in an Azimuth folder with its own layer (data\titles\1A96545B, with the game's
+// tmp\Turn10Temp.scratch), where 2.8.0 wrote its files and string tables to mediaoverride and listed them
+// without a root: the ones it listed are moved to
 // fh2-mods\platform-old-overrides\mediaoverride once, before anything is written, and nothing else in mediaoverride
 // is touched (another mod's file and table, another mod's database). A file that can't be moved is tried again next
 // launch. Then Extra Options, which mounts mediaoverride: what the platform wrote to the layer is moved aside the
 // same way, to platform-old-overrides\layer.
 static void upgrade() {
     Case c{"upgrade-from-2.8.0"};
-    fs::create_directories(c.dir / "data" / "titles" / "1A96545B");
+    fs::create_directories(c.dir / "data" / "titles" / "1A96545B" / "tmp" / "Turn10Temp.scratch");
     const fs::path mo = c.dir / "FH2" / "Mount" / "mediaoverride", old = c.dir / "fh2-mods" / "platform-old-overrides";
     const fs::path layer  = c.dir / "data" / "titles" / "1A96545B" / "tmp" / "fh2-platform" / "media";
     const fs::path files  = c.dir / "fh2-mods" / "platform-files.txt", tables = c.dir / "fh2-mods" / "platform-tables.txt";
@@ -1248,6 +1290,7 @@ int wmain(int argc, wchar_t** argv) {
     run(L"car_pack", car_pack);
     run(L"car_ids", car_ids);
     run(L"zip_manifest", zip_manifest);
+    run(L"no_layer", no_layer);
     run(L"upgrade", upgrade);
     run(L"other_install", other_install);
     run(L"fh2ml", fh2ml);

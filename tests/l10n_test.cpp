@@ -434,6 +434,9 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(date("it", 2026, 10, 24) == "24/10/2026" && date("nl", 2026, 10, 24) == "24-10-2026" && date("ja", 2026, 10, 24) == "2026/10/24");
         CHECK(date("en", 2026, 10, 24) == "2026-10-24" && date("en-GB", 2026, 10, 24) == "2026-10-24");
         CHECK(date("en", 2026, 13, 1) == "<none>" && date("en", 0, 1, 1) == "<none>");
+        CHECK(date("pl", 2026, 2, 30) == "<none>" && date("en", 2026, 2, 29) == "<none>" && date("en", 2026, 4, 31) == "<none>");
+        CHECK(date("en", 2028, 2, 29) == "2028-02-29" && date("en", 2000, 2, 29) == "2000-02-29" && date("en", 1900, 2, 29) == "<none>");
+        CHECK(date("en", 2026, 12, 31) == "2026-12-31" && date("en", 2026, 1, 32) == "<none>" && date("en", 2026, 6, 0) == "<none>");
     }
     // the test language: letters in the fonts, brackets, placeholders kept, padded by the growth
     {

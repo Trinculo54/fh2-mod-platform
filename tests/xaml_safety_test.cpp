@@ -420,24 +420,19 @@ void guard() {
         return false;
     };
 
-    // a crash report newer than Stats's mark (the file's time, as its line has none), older than Quiet's
+    // A crash report soon after the file's last write, which stands for its newest mark (Quiet's and Twice's) on the
+    // clock of the disk the crash reports are on, and for Stats's, as its line has no time of its own: every page
+    // still opening then is left out.
     std::vector<GuardEntry> carried;
     const std::vector<GuardEntry> after =
-        guard_at_start(e, stamp_of, {0x01DD000000000200ull, "crash-2026-11-08-120000.txt"}, 0x01DD000000000150ull, carried, lines);
-    check(after.size() == 3 && after[0].state == "skip" && after[0].page == "Stats" && after[0].date == "2026-11-08" && after[1].state == "skip" &&
-              after[1].dll == "other.DLL" && after[2].state == "skip" && after[2].page == "Twice",
+        guard_at_start(e, stamp_of, {{0x01DD000000000200ull, "crash-2026-11-08-120000.txt"}}, 0x01DD000000000150ull, carried, lines);
+    check(after.size() == 4 && after[0].state == "skip" && after[0].page == "Stats" && after[0].date == "2026-11-08" && after[1].state == "skip" &&
+              after[1].dll == "other.DLL" && after[2].state == "skip" && after[2].page == "Quiet" && after[3].state == "skip" &&
+              after[3].page == "Twice" && carried.empty(),
           "with a crash report newer than its mark, a page still opening is left out; a left-out one stays so while its DLL is the same");
-    check(carried.size() == 1 && carried[0].page == "Quiet" && carried[0].sessions == 1,
-          "a page still opening with no crash report since its mark isn't left out, but is carried for this session's mark");
     check(said("the game crashed while TestMod.dll's page Stats was opening last session (crash report crash-2026-11-08-120000.txt); "
                "the page is left out until TestMod.dll changes (an update or a reinstall)"),
           "the log says which page is left out, the crash report, and until when");
-    check(said("the game stopped while TestMod.dll's page Twice was opening in 2 sessions running, and it was never up for 10 s; the page is "
-               "left out until TestMod.dll changes"),
-          "a page left opening in two sessions running is left out, without a crash report");
-    check(said("the game stopped while TestMod.dll's page Quiet was opening last session, but there's no crash report since, so the page "
-               "stays in"),
-          "a page that stays in says why");
     check(said("other.DLL's page List is still left out: the game stopped while it was opening on 2026-11-03, and other.DLL hasn't changed since"),
           "a page still left out says since when");
     check(said("Changed.dll has changed since Changed.dll's page List was left out, so the page gets another try") &&
@@ -449,12 +444,50 @@ void guard() {
     lines.clear();
     const std::vector<GuardEntry> calm = guard_at_start(e, stamp_of, {}, 0x01DD000000000150ull, carried, lines);
     check(calm.size() == 2 && calm[0].dll == "other.DLL" && calm[1].page == "Twice" && carried.size() == 2 && carried[0].page == "Stats" &&
-              carried[1].page == "Quiet",
-          "with no crash report, a page left opening once stays in (the player may have closed the game)");
-    // a crash report older than the mark: from before, so not this page's
+              carried[1].page == "Quiet" && carried[1].sessions == 1,
+          "with no crash report, a page left opening once stays in (the player may have closed the game), carried for this session's mark");
+    check(said("the game stopped while TestMod.dll's page Twice was opening in 2 sessions running, and it was never up for 10 s; the page is "
+               "left out until TestMod.dll changes"),
+          "a page left opening in two sessions running is left out, without a crash report");
+    check(said("the game stopped while TestMod.dll's page Quiet was opening last session, but there's no crash report since, so the page "
+               "stays in"),
+          "a page that stays in says why");
+    // a crash report older than the file's last write: from before, so not this page's
     lines.clear();
-    const std::vector<GuardEntry> old = guard_at_start(e, stamp_of, {0x01DD000000000100ull, "crash-old.txt"}, 0x01DD000000000150ull, carried, lines);
+    const std::vector<GuardEntry> old = guard_at_start(e, stamp_of, {{0x01DD000000000100ull, "crash-old.txt"}}, 0x01DD000000000150ull, carried, lines);
     check(old.size() == 2 && carried.size() == 2, "a crash report older than the mark doesn't count");
+
+    // The PC's clock and the disk's apart (fh2-mods on a network share): the marks are measured from the file's last
+    // write, on the disk's clock, by how long before the newest each was made.
+    {
+        const std::uint64_t s = 10000000ull, disk = 0x01DD000100000000ull;
+        const std::vector<GuardEntry> two = {{"opening", "TestMod.dll", "Stats", "100-01D9", "2026-11-08", 1, 0},
+                                             {"opening", "TestMod.dll", "Quiet", "100-01D9", "2026-11-08", 1, 0}};
+        for (const std::int64_t ahead : {3600ll, -3600ll}) {   // the PC's clock an hour ahead of the disk's, then behind
+            std::vector<GuardEntry> marks = two;
+            marks[0].marked = disk + static_cast<std::uint64_t>(ahead * static_cast<std::int64_t>(s)) - 120 * s;
+            marks[1].marked = disk + static_cast<std::uint64_t>(ahead * static_cast<std::int64_t>(s));
+            lines.clear();
+            const std::vector<GuardEntry> skew = guard_at_start(marks, stamp_of, {{disk + 5 * s, "crash-skew.txt"}}, disk, carried, lines);
+            check(skew.size() == 1 && skew[0].page == "Quiet" && skew[0].state == "skip" && carried.empty(),
+                  ahead > 0 ? "the PC's clock an hour ahead of the disk's: a crash report 5 s after the newest mark leaves its page out"
+                            : "the PC's clock an hour behind the disk's: the same");
+            check(said("the game crashed 125 s after TestMod.dll's page Stats started opening last session (crash report crash-skew.txt)"),
+                  "a mark two minutes before the newest: that crash wasn't its page's");
+        }
+    }
+    // Every crash report counts, not only the newest: the page's own, then one early in a later session, before the
+    // platform had read the file.
+    {
+        const std::uint64_t s = 10000000ull, disk = 0x01DD000100000000ull;
+        const std::vector<GuardEntry> one = {{"opening", "TestMod.dll", "Stats", "100-01D9", "2026-11-08", 1, disk}};
+        lines.clear();
+        const std::vector<GuardEntry> both = guard_at_start(
+            one, stamp_of, {{disk + 3 * 3600 * s, "crash-later.txt"}, {disk + 4 * s, "crash-page.txt"}, {disk - 60 * s, "crash-before.txt"}},
+            disk, carried, lines);
+        check(both.size() == 1 && both[0].state == "skip" && said("(crash report crash-page.txt)"),
+              "a crash report 4 s after the mark, with a newer one from a later session: the page is left out");
+    }
 
     // only a crash soon after the mark counts (30 s): later, the game had gone on, and the crash was something else's
     {
@@ -462,20 +495,20 @@ void guard() {
         const std::vector<GuardEntry> one = {{"opening", "TestMod.dll", "Stats", "100-01D9", "2026-11-08", 1, mark},
                                              {"opening", "TestMod.dll", "Twice", "100-01D9", "2026-11-08", 2, mark}};
         lines.clear();
-        const std::vector<GuardEntry> soon = guard_at_start(one, stamp_of, {mark + 29 * 10000000ull, "crash-soon.txt"}, 0, carried, lines);
+        const std::vector<GuardEntry> soon = guard_at_start(one, stamp_of, {{mark + 29 * 10000000ull, "crash-soon.txt"}}, 0, carried, lines);
         check(soon.size() == 2 && soon[0].state == "skip" && soon[1].state == "skip" && carried.empty(),
               "a crash report 29 s after the mark: the page is left out");
         check(said("the page is left out until TestMod.dll changes (an update or a reinstall) or the player gives it another try"),
               "the log says the player can give it another try");
         lines.clear();
-        const std::vector<GuardEntry> late = guard_at_start(one, stamp_of, {mark + 31 * 10000000ull, "crash-late.txt"}, 0, carried, lines);
+        const std::vector<GuardEntry> late = guard_at_start(one, stamp_of, {{mark + 31 * 10000000ull, "crash-late.txt"}}, 0, carried, lines);
         check(late.empty() && carried.empty(),
               "a crash report 31 s after the mark: not the page's, so the mark is dropped (not carried), even after two sessions");
         check(said("the game crashed 31 s after TestMod.dll's page Stats started opening last session (crash report crash-late.txt), too long "
                    "after for the page to be the cause, so the page stays in"),
               "the log says how long after, and that the page stays in");
         lines.clear();
-        guard_at_start({{"opening", "TestMod.dll", "Stats", "100-01D9", "2026-11-08"}}, stamp_of, {mark, "crash-old-form.txt"}, mark - 60 * 10000000ull,
+        guard_at_start({{"opening", "TestMod.dll", "Stats", "100-01D9", "2026-11-08"}}, stamp_of, {{mark, "crash-old-form.txt"}}, mark - 60 * 10000000ull,
                        carried, lines);
         check(said("the game crashed 60 s after TestMod.dll's page Stats started opening"),
               "a line in the first form (no time of its own): the file's time stands in, with the same window");
@@ -484,16 +517,17 @@ void guard() {
     // the player gives a left-out page another try (A on the message its tile shows)
     {
         std::vector<GuardEntry> left = after;
-        check(guard_retry(left, "testmod.DLL", "Stats") && left.size() == 2 && left[0].page == "List" && left[1].page == "Twice",
+        check(guard_retry(left, "testmod.DLL", "Stats") && left.size() == 3 && left[0].page == "List" && left[1].page == "Quiet" &&
+                  left[2].page == "Twice",
               "another try: the page's skip goes (the DLL in any case), the others stay");
-        check(!guard_retry(left, "TestMod.dll", "Stats") && !guard_retry(left, "TestMod.dll", "Nope") && left.size() == 2,
+        check(!guard_retry(left, "TestMod.dll", "Stats") && !guard_retry(left, "TestMod.dll", "Nope") && left.size() == 3,
               "nothing to retry: false, and nothing changes");
         std::vector<GuardEntry> marks = {{"opening", "TestMod.dll", "Stats", "1-1", ""}};
         check(!guard_retry(marks, "TestMod.dll", "Stats") && marks.size() == 1, "a page that's only marked as opening isn't touched");
     }
 
     const std::string written = guard_text(after);
-    check(parse_guard(written).size() == 3 && written.find("skip\tTestMod.dll\tStats\t100-01D9\t2026-11-08\t1\t0000000000000000\r\n") != std::string::npos &&
+    check(parse_guard(written).size() == 4 && written.find("skip\tTestMod.dll\tStats\t100-01D9\t2026-11-08\t1\t0000000000000000\r\n") != std::string::npos &&
               written.find("skip\tTestMod.dll\tTwice\t100-01D9\t2026-11-08\t2\t01DD000000000300\r\n") != std::string::npos &&
               written.rfind("# ", 0) == 0,
           "written back with a comment first, one line each, CRLF, and read back the same");

@@ -127,8 +127,12 @@ std::filesystem::path instance_media(); // temp_drive()\fh2-platform\media
 // fh2-mods\platform-engine-synths.txt: the car packs' own engine sounds (car_packs.cpp).
 void write_engine_synths();
 // The platform mounts its own folders (no Extra Options, Azimuth 1.0 or later): what it writes goes
-// to instance_media(), which only this Azimuth folder's game sees.
+// to instance_media(), which only this Azimuth folder's game sees. Decided once, as the platform starts: the game
+// folder found, no Extra Options, and temp_drive()\Turn10Temp.scratch there (the game makes it on its T:\ drive).
 bool instance_layer();
+// Why instance_layer() is false, decided with it: the first of those it didn't find (none when it's true).
+enum class NoLayer { none, no_game, extra_options, no_titles, no_scratch };
+NoLayer instance_layer_missing();
 // Where overrides are written: instance_media(), else the game's mediaoverride.
 std::filesystem::path override_root();
 // The two places the platform writes files for the game (its roots): mediaoverride, and this Azimuth folder's own
@@ -231,9 +235,12 @@ void settings_set_slider(FH2Mod* mod, const char* key, float value);
 // "fh2mod Platform ui set" (Developer=1): the platform's Mod pop-ups or Tips row, or a mod's Pop-ups row (`which`:
 // ModPopups, Tips or the mod's name), changed as the player would. Returns the command's reply.
 std::string settings_player_set(const std::string& which, bool on);
-// A row's text, in the game's language (API 10).
+// A row's text, in the game's language (API 10): settings_set_text for the platform's own calls for a mod's rows,
+// api_set_setting_text for the mod's (set_setting_text), which logs the first change of each row in a session.
 int settings_set_text(FH2Mod* mod, const char* key, const char* label, const char* description, const char* const* choices,
                       uint32_t choice_count);
+int api_set_setting_text(FH2Mod* mod, const char* key, const char* label, const char* description, const char* const* choices,
+                         uint32_t choice_count);
 // Pages of the mods' own (API 8).
 int pages_add(FH2Mod* mod, const FH2Page* page);
 int pages_set_rows(FH2Mod* mod, const char* page_key, const FH2PageRow* rows, uint32_t count);
@@ -335,7 +342,8 @@ int request_save_snapshot(FH2Mod* mod, const char* reason, uint32_t keep);
 void start_save_snapshot();
 // The platform's own copy of the saves, to fh2-mods\save-snapshots\car-packs-<session id>, started now on a thread of
 // its own, once a session; the newest 5 are kept, counted apart from the mods' copies. False when there's no saves
-// folder. And whether one was started this session or is kept from before.
+// folder. And whether one was started this session (and hasn't failed) or is kept from before (save-snapshots is
+// looked in once a session).
 bool platform_save_snapshot(const std::string& why);
 bool platform_save_snapshots_kept();
 

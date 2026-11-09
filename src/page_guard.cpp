@@ -7,7 +7,9 @@
 // way leaves nothing behind. A mark found at the next start leaves the page out only by the HUD layer's crash
 // marker's rule: a crash report in fh2-mods\crashes from within 30 s after the mark, or the page left opening in two
 // sessions running (the player closing Azimuth's window as a page opens leaves a mark too, and that alone isn't a
-// crash). A page left out says so on its tile, where A gives it another try (page_guard_retry).
+// crash). The 30 s are on the clock of the disk fh2-mods is on, which the crash reports' times are: the file's own
+// last-write time is its newest mark (xaml_safety.cpp, guard_at_start). A page left out says so on its tile, where A
+// gives it another try (page_guard_retry).
 #include "page_guard.hpp"
 
 #include "platform.hpp"
@@ -122,21 +124,18 @@ bool g_guard_warned = false;       // the file couldn't be written, said once
 unsigned g_opening  = 0;           // counts the pages opened, so a page's 10 s don't clear a later page's mark
 std::vector<GuardEntry> g_carried; // pages left opening last session with nothing to show a crash: a mark now counts them
 
-// The newest crash-*.txt in fh2-mods\crashes, as the HUD layer's crash marker looks for it.
-CrashReport newest_crash() {
-    CrashReport r;
+// Every crash-*.txt in fh2-mods\crashes, as the HUD layer's crash marker looks for them.
+std::vector<CrashReport> crash_reports() {
+    std::vector<CrashReport> out;
     WIN32_FIND_DATAW fd{};
     HANDLE h = FindFirstFileW((azimuth_dir() / L"fh2-mods" / L"crashes" / L"crash-*.txt").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) return r;
+    if (h == INVALID_HANDLE_VALUE) return out;
     do {
         const std::uint64_t t = (static_cast<std::uint64_t>(fd.ftLastWriteTime.dwHighDateTime) << 32) | fd.ftLastWriteTime.dwLowDateTime;
-        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && t > r.time) {
-            r.time = t;
-            r.name = narrow(fd.cFileName);
-        }
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) out.push_back({t, narrow(fd.cFileName)});
     } while (FindNextFileW(h, &fd));
     FindClose(h);
-    return r;
+    return out;
 }
 
 std::uint64_t file_time(const fs::path& p) {
@@ -216,7 +215,7 @@ void page_guard_start() {
     std::vector<std::string> lines;
     std::vector<GuardEntry> carried;
     const std::vector<GuardEntry> last = parse_guard(text);
-    std::vector<GuardEntry> now        = guard_at_start(last, dll_stamp, newest_crash(), file_time(guard_path()), carried, lines);
+    std::vector<GuardEntry> now        = guard_at_start(last, dll_stamp, crash_reports(), file_time(guard_path()), carried, lines);
     for (const std::string& l : lines) plog("pages: " + l);
     std::scoped_lock lk{g_guard_mu};
     g_guard   = std::move(now);

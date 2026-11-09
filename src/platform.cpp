@@ -1127,10 +1127,16 @@ void finish_online(const std::string& why, const GoingOnline& g) {
 void go_online(const std::string& why) {
     GoingOnline g;
     {
+        // With the hooks' and files' locks held too, as in online_going: a hook of theirs that goes in meanwhile is
+        // either in what begin_online reads (FH2Mod::ran), or refused as theirs is stopped.
         std::scoped_lock lk{g_mu};
         if (g_online) return;
-        online_off(g.stop, g.others);
-        begin_online(g);
+        hooks_locked([&] {
+            return files_locked([&] {
+                online_off(g.stop, g.others);
+                return begin_online(g);
+            });
+        });
     }
     finish_online(why, g);
 }
@@ -1962,7 +1968,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.add_hotkey        = hotkey_add;
                 g_api.add_command       = command_add;
                 g_api.game_language     = api_game_language;
-                g_api.set_setting_text  = settings_set_text;
+                g_api.set_setting_text  = api_set_setting_text;
                 g_api.set_mod_description = api_set_mod_description;
                 g_api.language          = l10n_language;
                 g_api.add_translation   = l10n_add_translation;

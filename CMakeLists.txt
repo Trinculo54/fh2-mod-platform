@@ -23,10 +23,10 @@ if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(FH2MOD_PLATFORM_VERSION_STRING ${PROJECT_VERSION} PARENT_SCOPE)
 endif()
 # The build's own name, in platform.log's first line, crash reports and ProductVersion. Left empty, it's the
-# version above, as a release names itself (scripts/build.sh and the tag build pass nothing). A local or test
-# build can name itself, -DFH2MOD_PLATFORM_BUILD="2.9.0 dev", and platform.log's first line then says it
-# isn't a release. Empty rather than the version itself, so a build folder kept across a version bump names
-# the new version.
+# version above, as a release names itself (scripts/build.sh, which the tag build runs, passes it empty, so a
+# build folder a test build named before can't keep that name). A local or test build can name itself,
+# -DFH2MOD_PLATFORM_BUILD="2.9.0 dev", and platform.log's first line then says it isn't a release. Empty
+# rather than the version itself, so a build folder kept across a version bump names the new version.
 set(FH2MOD_PLATFORM_BUILD "" CACHE STRING "The build's name in platform.log, crash reports and ProductVersion (empty: the version)")
 if(FH2MOD_PLATFORM_BUILD STREQUAL "")
     set(FH2MOD_PLATFORM_BUILD "${PROJECT_VERSION}")

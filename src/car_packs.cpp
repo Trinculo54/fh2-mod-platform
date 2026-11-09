@@ -429,19 +429,26 @@ std::string temp_drive_spelling(const fs::path& folder) {
 
 fs::path instance_media() { return temp_drive() / L"fh2-platform" / L"media"; }
 
-bool instance_layer() {
+NoLayer instance_layer_missing() {
     // Worked out once, so every part of the platform goes by the same answer all session: start_media_overrides
     // asks first, before anything is written, and logs it. data\titles\1A96545B is where Azimuth keeps the game's
     // T:\ drive (its tmp folder); a fresh Azimuth folder only has it once the game has been started, so asking
-    // again later in the session could move later writes away from what was mounted.
-    static const bool layer = [] {
+    // again later in the session could move later writes away from what was mounted. tmp\Turn10Temp.scratch is a
+    // folder the game itself makes on T:\, so it shows that T:\ is that folder (every Azimuth folder here that has
+    // run the game has it, on Azimuth 0.9.10 and 1.0.x alike).
+    static const NoLayer why = [] {
         std::error_code ec;
+        if (game_mount().empty()) return NoLayer::no_game;
         // Extra Options counted as loaded under Wine (extra_options_expected) mounts mediaoverride, not this layer.
-        return !game_mount().empty() && extra_options_dir().empty() && !extra_options_expected() &&
-               fs::is_directory(temp_drive().parent_path(), ec);
+        if (!extra_options_dir().empty() || extra_options_expected()) return NoLayer::extra_options;
+        if (!fs::is_directory(temp_drive().parent_path(), ec)) return NoLayer::no_titles;
+        if (!fs::is_directory(temp_drive() / L"Turn10Temp.scratch", ec)) return NoLayer::no_scratch;
+        return NoLayer::none;
     }();
-    return layer;
+    return why;
 }
+
+bool instance_layer() { return instance_layer_missing() == NoLayer::none; }
 
 fs::path override_root() {
     return instance_layer() ? instance_media() : game_mount() / "mediaoverride";

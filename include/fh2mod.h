@@ -565,7 +565,8 @@ typedef struct FH2ModApi {
        the choices' names. NULL leaves that part as it was; `choices` must
        have as many names as the row has (`choice_count`). Link rows take a
        label and a description. Returns 1, or 0 if you have no row called
-       `key` or the choices don't match (the log says why).
+       `key` or the choices don't match (the log says why). The log notes
+       the first change of each row in a session, not later ones.
 
        set_mod_description: your FH2ModInfo.description, shown on the YOUR
        MODS list and in "What it does" on your mod's page. */
@@ -1163,7 +1164,10 @@ struct FH2MessageBox {
    stay offline, and ask the player to start the game from the FH2MP
    launcher.
    Once the game counts as online (at load, or after a 0), it changes nothing
-   and returns the mods that had run before the platform stopped them.
+   and returns the mods that had run before the platform stopped them. Over 0
+   then still means stay offline, and ask the player to restart the game from
+   the FH2MP launcher: playing_online is already 1, and those mods stay
+   stopped until the restart.
    It never rewrites the string tables or the game database. Call it from
    FH2MP's own thread, as often as you like. */
 #define FH2_ONLINE_INTERFACE "FH2Platform.Online"

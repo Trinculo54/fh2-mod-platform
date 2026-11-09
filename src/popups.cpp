@@ -821,7 +821,15 @@ int popups_show_toast(FH2Mod* m, const FH2Toast* t) {
         undeclared_note(m, "show_toast");
         return 0;
     }
-    return queue().show_toast(mod_ref(m), t, now_ms());
+    const PopupMod ref = mod_ref(m);
+    const int queued   = queue().show_toast(ref, t, now_ms());
+    // Stopped for online play since the check above: stop_online comes before go_online drops what waits
+    // (ui_mod_stopped), so if that drop came before this pop-up was queued, the flag reads true here.
+    if (queued && stopped_online(m)) {
+        queue().mod_stopped(ref);
+        return 0;
+    }
+    return queued;
 }
 
 void popups_clear_toast(FH2Mod* m, const char* key) {
@@ -839,7 +847,13 @@ int popups_show_tip(FH2Mod* m, const FH2Tip* t) {
         return 0;
     }
     want(true);   // tips' controller poll, if no mod asked for tips at start
-    return queue().show_tip(mod_ref(m), t, now_ms());
+    const PopupMod ref = mod_ref(m);
+    const int queued   = queue().show_tip(ref, t, now_ms());
+    if (queued && stopped_online(m)) {   // stopped since the check above (see popups_show_toast)
+        queue().mod_stopped(ref);
+        return 0;
+    }
+    return queued;
 }
 
 int popups_tip_seen(FH2Mod* m, const char* key) { return m ? queue().tip_seen(mod_ref(m), key) : 0; }

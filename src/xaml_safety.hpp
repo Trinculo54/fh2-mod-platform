@@ -99,8 +99,7 @@ struct GuardEntry {
 std::vector<GuardEntry> parse_guard(std::string_view text);
 std::string guard_text(const std::vector<GuardEntry>& entries);
 
-// The newest crash report in fh2-mods\crashes (crash-*.txt): its last-write time as a FILETIME (UTC) and its name, or
-// 0 and "" for none.
+// A crash report in fh2-mods\crashes (crash-*.txt): its last-write time as a FILETIME (UTC) and its name.
 struct CrashReport {
     std::uint64_t time = 0;
     std::string name;
@@ -111,14 +110,18 @@ struct CrashReport {
 inline constexpr std::uint64_t kGuardCrashWindow = 30ull * 10000000ull;
 
 // Last session's entries as this session starts, by the rule the HUD layer's crash marker has. A page still
-// "opening" is left out only with something to show the game went down loading it: a crash report from within
-// kGuardCrashWindow after the mark (`file_time`, the guard file's last-write time, stands in for a line without one),
-// or the same page left opening in two sessions running. A crash report from later than that is another crash: the
-// mark is dropped. With no crash report since, the mark is dropped too, and it goes into `carried`, so a mark this
-// session counts it (page_guard_opening). A page left out stays so until its DLL changes or guard_retry takes it
-// out. `stamp_of` gives a DLL's stamp now ("" if it's gone). `lines` gets a log line for each entry.
+// "opening" is left out only with something to show the game went down loading it: a crash report (any of `reports`,
+// the crash reports there are) from within kGuardCrashWindow after the mark, or the same page left opening in two
+// sessions running. The window is on the clock of the disk the reports are on: `file_time`, the guard file's
+// last-write time there, is its newest mark, and each mark is that less how long before the newest it was made (a
+// line without a time of its own has `file_time`; with `file_time` 0, the marks are taken as they are). The first
+// crash report after the mark counts, so a crash in a later session can't hide it. A crash report from later than the
+// window is another crash: the mark is dropped. With no crash report since, the mark is dropped too, and it goes into
+// `carried`, so a mark this session counts it (page_guard_opening). A page left out stays so until its DLL changes or
+// guard_retry takes it out. `stamp_of` gives a DLL's stamp now ("" if it's gone). `lines` gets a log line for each
+// entry.
 std::vector<GuardEntry> guard_at_start(const std::vector<GuardEntry>& last, const std::function<std::string(const std::string&)>& stamp_of,
-                                       const CrashReport& newest, std::uint64_t file_time, std::vector<GuardEntry>& carried,
+                                       const std::vector<CrashReport>& reports, std::uint64_t file_time, std::vector<GuardEntry>& carried,
                                        std::vector<std::string>& lines);
 
 // The player gives a left-out page another try: its "skip" entry (the DLL in any case) goes. True if there was one.
