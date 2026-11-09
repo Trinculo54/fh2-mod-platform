@@ -79,6 +79,18 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->add_page(g_mod, &other);
     api->add_page(g_mod, &other);                         // refused: already there
     api->set_page_rows(g_mod, "Missing", rows, 1);        // refused: no such page
+    // Pages of its own design that can't be shown (platform 2.9.0): Design's XAML uses a resource key no page has
+    // (refused when the game's UI.zip is there to check it against); Crashy was opening when the game last stopped
+    // (the test writes fh2-mods\platform-pages.txt so), so it's left out this session.
+    FH2Page design{sizeof design};
+    design.key = "Design"; design.title = "Design";
+    api->add_page(g_mod, &design);
+    const int design_set = api->set_page_xaml(g_mod, "Design", nullptr, "<Grid x:Name=\"FirstItem\" Style=\"{StaticResource Test_NoSuchStyle}\" />", nullptr);
+    api->log(g_mod, design_set ? "Design's XAML was taken" : "Design's XAML was refused");
+    FH2Page crashy{sizeof crashy};
+    crashy.key = "Crashy"; crashy.title = "Crashy";
+    api->add_page(g_mod, &crashy);
+    api->set_page_xaml(g_mod, "Crashy", nullptr, "<Grid x:Name=\"FirstItem\" />", nullptr);
     // text on the page's tile; not on a page without one
     if (api->set_page_tile_text(g_mod, "Stats", "12 / 34 G") && !api->set_page_tile_text(g_mod, "Other", "x") &&
         !api->set_page_tile_text(g_mod, "Missing", "x") && api->set_page_tile_colors(g_mod, "Stats", 0xFF3667DB, 0xFFFEFEFE) &&

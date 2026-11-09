@@ -371,6 +371,12 @@ typedef struct FH2ModApi {
        otherwise its row says which tile opens it. Returns 1, or 0 if you
        have no page called `page_key`, `content` has no FirstItem, or a
        fragment's tags don't balance (the page keeps the XAML it had).
+       From platform 2.9.0 it also returns 0 when a resource key the XAML
+       uses isn't one every page has or one of its own, or an image isn't
+       one of the game's textures, which would crash the game as the page
+       opens: the page then shows "This page couldn't be shown" until XAML
+       that passes is set. A page the game crashed opening is left out
+       until the mod's DLL changes. api.md has the rules.
 
        Bindings: slot n (0..15) is an int of the page's, "FH2Mod_Slot_<n>",
        which XAML can bind two-way (a list's SelectedIndex, say), and

@@ -37,6 +37,7 @@
 #include "hud_layer.hpp"
 #include "l10n.hpp"
 #include "lang.hpp"
+#include "page_guard.hpp"
 #include "platform.hpp"
 #include "strings.hpp"
 #include "text.hpp"
@@ -133,6 +134,7 @@ struct ModPage {
     FH2PageButtonFn on_button = nullptr;
     FH2PageSlotFn on_slot     = nullptr;
     bool custom               = false;
+    bool xaml_refused         = false;   // its last XAML failed the check (page_guard.cpp): the page says so instead
     std::string xaml_resources, xaml_content, xaml_help;
     std::string xaml_written;        // the content as last written (what's on screen)
     std::array<std::atomic<int>, FH2_PAGE_SLOTS> slots{};
@@ -1809,6 +1811,19 @@ PageItem info(const std::string& label, const std::string& description) { return
 // ---- the mods' pages (API 8) ------------------------------------------------------------------
 std::vector<int> g_page_view;   // each page's view on Installed mods (0: none), as last written (guarded by g_mu)
 
+// Whether a page of the mod's own design is left out this session (under g_mu): its XAML failed the check, or the
+// game stopped while it was opening last time (page_guard.cpp). page_left_out says why, in the game's language.
+bool left_out(const ModPage& pg) { return pg.custom && (pg.xaml_refused || page_guard_skipped(pg.mod, pg.key)); }
+std::string page_left_out(const ModPage& pg) {
+    if (!left_out(pg)) return "";
+    if (pg.xaml_refused)
+        return trf("This page from {0} has a mistake that would crash the game, so it's left out. fh2-mods\\platform.log has more.", {pg.mod->name});
+    if (page_guard_skipped(pg.mod, pg.key))
+        return trf("The game crashed opening this page last time, so it's left out until {0} is updated. fh2-mods\\platform.log has more.",
+                   {pg.mod->name});
+    return "";
+}
+
 // A page's rows, as its list shows them (under g_mu).
 std::vector<PageItem> page_items(const ModPage& pg) {
     std::vector<PageItem> items;
@@ -2054,6 +2069,10 @@ std::vector<PageItem> mod_page_items(std::size_t i) {
                                                                             : tr("It needs a pause-menu tile to open from, and doesn't have one."));
                 else if (on_tile)
                     it.description = join_sentences(it.description, trf("The pause menu's {0} tile opens it too.", {tr(kTiles[pg.tile].name)}));
+                if (const std::string left_out = page_left_out(pg); !left_out.empty()) {
+                    it.note       = left_out;
+                    it.note_alert = true;
+                }
                 it.open_view = j < g_page_view.size() ? g_page_view[j] : 0;
                 it.name      = "PART_Button_FH2Mod_Page_" + std::to_string(j);
                 items.push_back(it);
@@ -2241,12 +2260,17 @@ bool write_hub_page(int p) {
             const int j = g_tile_page[t];
             if (j < 0) return false;
             const ModPage& pg = g_pages[j];
-            custom = pg.custom;
+            const std::string left_out = page_left_out(pg);
+            custom = pg.custom && left_out.empty();
             if (custom) {   // of the mod's own design
                 res     = pg.xaml_resources;
                 content = pg.xaml_content;
                 help    = pg.xaml_help;
                 g_pages[j].xaml_written = content;
+            } else if (!left_out.empty()) {   // left out: the platform's own row says why, rather than the game crashing
+                items = {info(tr("This page couldn't be shown"), left_out)};
+                title = pg.title;
+                g_pages[j].xaml_written.clear();
             } else {
                 items  = page_items(pg);
                 title  = pg.title;
@@ -2921,6 +2945,14 @@ void open_hub_page(void* page, int which) {
         g_custom_shown = j;
         for (auto& obj : g_tile_page_obj) obj = nullptr;   // the last one is gone
         if (j >= 0) pages_opening(j);
+        // the crash guard (page_guard.cpp): if the game goes down loading the mod's XAML, the next session leaves it out
+        FH2Mod* mod = nullptr;
+        std::string key;
+        {
+            std::scoped_lock lk{g_mu};
+            if (j >= 0 && g_pages[j].custom && !left_out(g_pages[j])) mod = g_pages[j].mod, key = g_pages[j].key;
+        }
+        if (mod) page_guard_opening(mod, key);
     }
     write_hub_page(which);   // up to date (update checks finish after the game starts)
     g_in_hub     = true;
@@ -3136,6 +3168,10 @@ void d_hud_page_loaded(void* page) {
         g_custom_shown = -1;
     }
     o_hud_page_loaded(page);
+    // the crash guard: a page of a mod's own design has loaded (its mark goes once it's been up 10 s), or the player has
+    // gone on to another page
+    if (tile_page) page_guard_loaded();
+    else page_guard_closed();
 }
 
 
@@ -3237,7 +3273,7 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
             {
                 std::scoped_lock lk{g_mu};
                 j      = g_tile_page[t];
-                custom = j >= 0 && g_pages[j].custom;
+                custom = j >= 0 && g_pages[j].custom && !left_out(g_pages[j]);
             }
             if (custom) return custom_page_button(page, j, button, pressed);
         }
@@ -3402,6 +3438,7 @@ bool g_hud_notice = false;   // A_Hud.xaml has the notice
 void d_pause_menu_wire(void* page) {
     g_custom_obj   = nullptr;   // back on the pause menu: no page of a mod's own design is up
     g_custom_shown = -1;
+    page_guard_closed();
     for (auto& obj : g_tile_page_obj) obj = nullptr;
     g_focus_again.clear();
     g_hub_asked  = 0;
@@ -4343,6 +4380,10 @@ int pages_set_xaml(FH2Mod* m, const char* key, const char* resources, const char
             return 0;
         }
     }
+    // every resource key and image the game would look up as the page loads (page_guard.cpp): one it can't find
+    // crashes the game, so the page says it couldn't be shown instead
+    std::string why;
+    const bool fits = page_fragment_ok(resources, content, help, why);
     std::scoped_lock lk{g_mu};
     const int j = page_index(m, key);
     if (j < 0) {
@@ -4351,7 +4392,16 @@ int pages_set_xaml(FH2Mod* m, const char* key, const char* resources, const char
     }
     ModPage& pg = g_pages[j];
     if (!pg.custom && pg.tile < 0) log_line(m->name, std::string("set_page_xaml: ") + key + " has no tile, so nothing opens it");
-    pg.custom         = true;
+    pg.custom       = true;
+    pg.xaml_refused = !fits;
+    if (!fits) {
+        log_line(m->name, std::string("set_page_xaml: ") + key + " was refused: " + why +
+                              ". The page shows \"This page couldn't be shown\" until its XAML is set again");
+        pg.xaml_resources.clear();
+        pg.xaml_content.clear();
+        pg.xaml_help.clear();
+        return 0;
+    }
     pg.xaml_resources = resources ? resources : "";
     pg.xaml_content   = content;
     pg.xaml_help      = help ? help : "";
@@ -4706,6 +4756,7 @@ void settings_start(const FH2ModApi* api) {
         n = g_rows.size();
     }
     add_hub_rows();
+    page_guard_start();   // before the pages are written: last session's crash marks
     g_written = true;
     const char* const files[] = {"UI/Scenes/Anthem/A_PauseOptions.xaml", "UI/Scenes/Anthem/A_ModOptions.xaml",
                                  "UI/Scenes/Anthem/A_PauseMenu.xaml",    "stateflow/pause.xml", "stateflow/ui_screens.xml",

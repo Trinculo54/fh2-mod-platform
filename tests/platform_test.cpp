@@ -307,6 +307,19 @@ int wmain(int argc, wchar_t** argv) {
         SetUnhandledExceptionFilter(after_crash); // Windows' (or Azimuth's) handler, to the platform
     }
     if (phase == L"crash-chained") SetUnhandledExceptionFilter(after_chained_crash);
+    if (phase == L"full") {
+        // The page crash guard (platform 2.9.0): as if the game had stopped while TestMod's page Crashy was opening
+        // (TestMod.dll as it is now), and while Stats was opening in an older TestMod.dll; and a note about a mod
+        // that's gone. The stamp is page_guard.cpp's: the DLL's size, then its last-write time in hex.
+        WIN32_FILE_ATTRIBUTE_DATA a{};
+        GetFileAttributesExW(L"fh2-mods\\TestMod.dll", GetFileExInfoStandard, &a);
+        char stamp[64];
+        std::snprintf(stamp, sizeof stamp, "%llu-%08lX%08lX", (static_cast<unsigned long long>(a.nFileSizeHigh) << 32) | a.nFileSizeLow,
+                      a.ftLastWriteTime.dwHighDateTime, a.ftLastWriteTime.dwLowDateTime);
+        std::ofstream{"fh2-mods\\platform-pages.txt", std::ios::binary}
+            << "# written by the test\r\nopening\tTestMod.dll\tCrashy\t" << stamp << "\t2026-11-07\r\nopening\ttestmod.dll\tStats\t1-0000000000000000\t2026-11-06\r\n"
+            << "skip\tGone.dll\tList\t1-1\t2026-11-01\r\n";
+    }
     if (phase == L"full" && own_layer()) {   // a save, for the snapshot TestMod asks for (platform 2.8.0)
         fs::create_directories(L"data\\titles\\1A96545B\\saves\\1A96545B");
         std::ofstream{"data\\titles\\1A96545B\\saves\\1A96545B\\test.sav", std::ios::binary} << "save data";
@@ -419,6 +432,25 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] page slots ok"));
         CHECK(has(log, "[TestMod] set_page_xaml: Stats's content isn't well-formed (</Grid> doesn't match <Button>)"));
         CHECK(has(log, "[TestMod] set_page_rows: row 1 of Stats isn't the size of the first"));
+        // pages of a mod's own design are checked against the game's UI.zip and textures before they're taken (platform
+        // 2.9.0): without a UI.zip here, nothing to check against (and no page is written either)
+        if (fs::exists(L"FH2\\Mount\\media\\UI.zip")) {
+            CHECK(has(log, "set_page_xaml: pages of a mod's own design are checked against 1096 resource keys from UI.zip's 43 application dictionaries"));
+            CHECK(has(log, "[TestMod] set_page_xaml: Design was refused: the resource key Test_NoSuchStyle, in the content, isn't one of the game's "
+                           "shared resources, the page's own or the fragment's"));
+            CHECK(has(log, "[TestMod] Design's XAML was refused") && !has(log, "[TestMod] set_page_xaml: Stats was refused"));
+        } else {
+            CHECK(has(log, "set_page_xaml: pages of a mod's own design aren't checked this session, because AnthemApp.xaml couldn't be read from UI.zip"));
+            CHECK(has(log, "[TestMod] Design's XAML was taken"));
+        }
+        // the page crash guard: Crashy was opening when the game last stopped, so it's left out; Stats was too, but in a
+        // TestMod.dll that has changed since, so it gets another try
+        CHECK(has(log, "pages: the game stopped while TestMod.dll's page Crashy was opening last session, which most likely means it crashed "
+                       "loading it; the page is left out until TestMod.dll changes (an update or a reinstall)"));
+        CHECK(has(log, "pages: testmod.dll has changed since testmod.dll's page Stats was opening when the game stopped, so the page gets another try"));
+        CHECK(has(log, "pages: Gone.dll isn't in fh2-mods any more, so the note about Gone.dll's page List is dropped"));
+        const std::string guard = slurp("fh2-mods\\platform-pages.txt");
+        CHECK(has(guard, "\r\nskip\tTestMod.dll\tCrashy\t") && has(guard, "\t2026-11-07\r\n") && !has(guard, "Stats") && !has(guard, "Gone.dll"));
         // title-screen entries (API 9)
         CHECK(has(log, "[TestMod] title-screen entry: (Y) DRIVE THE TEST GARAGE") &&
               has(log, "[TestMod] title-screen entry: (X) SECOND ENTRY (a list of 2)"));
@@ -558,6 +590,10 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(installed, "Content=\"TEST STATS\"") && has(installed, "{Binding FH2Mod_ViewIn_") && has(installed, "{Binding FH2Mod_Bar_3"));
             CHECK(has(installed, "The pause menu's Achievements tile opens it too."));
             CHECK(has(installed, "FH2Mod_InfoRow_Heading") && has(installed, "FH2Mod_InfoRow_Dim"));
+            // TestMod's pages that can't be shown say why on its page under Installed mods, in red (the platform's own text
+            // is English until the game has its language)
+            CHECK(has(installed, "Icon=\"This page from TestMod has a mistake that would crash the game, so it's left out. fh2-mods\\platform.log has more.\""));
+            CHECK(has(installed, "Icon=\"The game crashed opening this page last time, so it's left out until TestMod is updated. fh2-mods\\platform.log has more.\""));
             CHECK(has(installed, "Heading=\"Footer &lt;line&gt; &#183; dot\"") && has(installed, "local:BindingProxy.B=\"Alert\""));
             // the tile: the page of TestMod's own design, in the options page's frame
             CHECK(has(tile, "<Grid x:Name=\"TestContent\">") && !has(tile, "BasicOptions") && has(tile, "x:Key=\"FH2Mod_ShowIf\""));
@@ -788,6 +824,9 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "removed the media\\UI\\keep.xml override (TestMod no longer replaces it)"));
         CHECK(!fs::exists(ov / "Stripped" / "gamedbRC.slt"));
         CHECK(has(log, "[AaaMod] TestMod version (none)"));
+        // the page crash guard's note about TestMod's page goes with it, and with nothing left, so does the file
+        CHECK(has(log, "pages: TestMod.dll isn't in fh2-mods any more, so the note about TestMod.dll's page Crashy is dropped") &&
+              !fs::exists("fh2-mods\\platform-pages.txt"));
     }
     std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
     std::fflush(stdout);
