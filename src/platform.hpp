@@ -339,7 +339,8 @@ int request_save_snapshot(FH2Mod* mod, const char* reason, uint32_t keep);
 void start_save_snapshot();
 // The platform's own copy of the saves, to fh2-mods\save-snapshots\car-packs-<session id>, started now on a thread of
 // its own, once a session; the newest 5 are kept, counted apart from the mods' copies. False when there's no saves
-// folder. And whether one was started this session or is kept from before.
+// folder. And whether one was started this session (and hasn't failed) or is kept from before (save-snapshots is
+// looked in once a session).
 bool platform_save_snapshot(const std::string& why);
 bool platform_save_snapshots_kept();
 

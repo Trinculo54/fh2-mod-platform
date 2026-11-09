@@ -837,6 +837,8 @@ static void car_ids() {
     c.launch();
     CHECK(has(c.log, "TEST_Pack01 (car 3003), which a save may have, isn't in the game database this session") &&
           !has(c.log, "save snapshot:") && has(slurp(title), "Car pack {0}'s cars aren't in the game this time."));
+    // no copy this session: the one from the session before is still there, found in fh2-mods\save-snapshots
+    CHECK(has(slurp(title), "A copy of your saves from before is in fh2-mods\\save-snapshots."));
 
     // That mod gone: the pack is back with the same Id, and nothing is said about it.
     fs::remove(broken);
