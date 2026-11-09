@@ -1754,9 +1754,9 @@ bool write_settings_page() {
     std::string tile = xaml_block(read_ui("Resources/Anthem/Shared_TiledMenus.xaml"), "A_ControlTemplate_VerticalIconTile", "<ControlTemplate",
                                   "</ControlTemplate>");
     const std::string heading = "<local:FZTextBlock Name=\"Heading\"";
-    const std::size_t h0 = tile.find(heading), h1 = h0 == std::string::npos ? h0 : tile.find("/>", h0);
-    const bool line = h1 != std::string::npos && tile.find(heading, h1) == std::string::npos &&
-                      swap_all(tile, "x:Key=\"A_ControlTemplate_VerticalIconTile\"", "x:Key=\"FH2Mod_Template_ModsTile\"");
+    const bool keyed = swap_all(tile, "x:Key=\"A_ControlTemplate_VerticalIconTile\"", "x:Key=\"FH2Mod_Template_ModsTile\"");
+    const std::size_t h0 = tile.find(heading), h1 = h0 == std::string::npos ? h0 : tile.find("/>", h0);   // (after the key's swap)
+    const bool line = keyed && h1 != std::string::npos && tile.find(heading, h1) == std::string::npos;
     if (line) {
         const std::string title = tile.substr(h0, h1 + 2 - h0);
         tile.replace(h0, h1 + 2 - h0, "<StackPanel>" + title + "<local:FZTextBlock Text=\"{Binding FH2Mod_HubTile_" + std::to_string(kHubLineSettings) +
@@ -2528,8 +2528,8 @@ std::vector<PageItem> help_items() {
     items.push_back(info(tr("Turning a mod off"), tr("Load this mod, at the bottom of its page. It takes effect the next time you start the game. Outside "
                                                    "the game, move its DLL out of the fh2-mods folder.")));
     items.push_back(info(tr("Installing and updating"), tr("Extract the mod's zip into your Azimuth folder, then start the game again.")));
-    items.push_back(info(tr("If MODS is missing"), tr("The menus come from files the game reads with the mods' own. Update Extra Options if you use it, and "
-                                                    "keep EnableMediaOverrides=1. fh2-mods\\platform.log says why.")));
+    items.push_back(info(tr("If MODS is missing"), tr("The MODS menus come from files the game has to read. If you use Extra Options, update it and keep "
+                                                    "EnableMediaOverrides=1. fh2-mods\\platform.log says why.")));
     if (fh2mp_installed())
         items.push_back(info(tr("Online play"), tr("Each mod's page has Load when playing online: Off leaves it out when you start the game from the FH2MP "
                                                  "launcher.")));
@@ -5347,8 +5347,8 @@ void settings_start(const FH2ModApi* api) {
     // the MODS tab
     g_hub_files = write_pause_menu() && write_pause_flow();
     remove_leftover_file("stateflow/ui_screens.xml");
-    for (int p = kHubInstalled; p <= kHubAbout && g_hub_files; ++p)
-        if (p != kHubGetMods) g_hub_files = write_hub_page(p);
+    for (int p : {kHubInstalled, kHubUpdates, kHubAbout, kHubHelp})
+        if (g_hub_files) g_hub_files = write_hub_page(p);
     // the mods' pages on tiles (written now as well as when they open, as the others are)
     for (std::size_t t = 0; t < kTileCount; ++t) {
         const int p = kHubTilePage + static_cast<int>(t);

@@ -282,7 +282,6 @@ std::vector<std::string> split_lines(const char* s);   // below
 // The platform's own lines on the title screen (settings.cpp: where mod settings are), as fh2-mods\notices\~platform.txt,
 // which sorts after the mods' own. In English there; each language's Main.str gets them in its own words (apply_all).
 const wchar_t* const kPlatformNotice = L"~platform";
-std::vector<std::string> g_platform_notice;   // as last written (guarded by g_mu)
 
 // Rebuilds every dirty table from all mods' edits (later registrations win
 // on the same key), and Main.str's "TO START" from the notices.
@@ -636,12 +635,18 @@ void api_apply_strings(FH2Mod*) { apply_all(); }
 } // namespace
 
 void set_platform_notice(const std::vector<std::string>& english_lines) {
-    std::error_code ec;
     {
         std::scoped_lock lk{g_mu};
-        const bool there = fs::exists(g_azimuth / "fh2-mods" / "notices" / (std::wstring(kPlatformNotice) + L".txt"), ec);
-        if (english_lines == g_platform_notice && there != english_lines.empty()) return;   // as it is already
-        g_platform_notice = english_lines;
+        // The file as the last launch left it: the first write of Main.str this launch already had its lines, so
+        // the same lines again need no second write (line 1 is the DLL, empty for the platform's)
+        std::vector<std::string> there;
+        std::ifstream in{g_azimuth / "fh2-mods" / "notices" / (std::wstring(kPlatformNotice) + L".txt")};
+        for (std::string l; std::getline(in, l);) {
+            while (!l.empty() && (l.back() == '\r' || l.back() == '\n')) l.pop_back();
+            there.push_back(l);
+        }
+        if (!there.empty()) there.erase(there.begin());
+        if (english_lines == there) return;   // as it is already (none: no file)
         write_notice_file(g_azimuth, kPlatformNotice, L"", english_lines);   // no lines: the file goes
         g_dirty.insert("main.str");
         g_table_names.emplace("main.str", "Main.str");
