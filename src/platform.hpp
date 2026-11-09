@@ -200,6 +200,12 @@ int pages_set_slot(FH2Mod* mod, const char* page_key, int slot, int value);
 int pages_focus(FH2Mod* mod, const char* page_key, const char* name);
 int pages_set_tile_text(FH2Mod* mod, const char* page_key, const char* text);
 int pages_set_tile_colors(FH2Mod* mod, const char* page_key, uint32_t background, uint32_t text);
+// The UI templates on the mods' pages (API 10): their help bar and hint line, and the game's message box from their
+// page, setting and title-screen callbacks.
+int pages_set_help(FH2Mod* mod, const char* page_key, const FH2Prompt* prompts, uint32_t count);
+int pages_set_hints(FH2Mod* mod, const char* page_key, const char* const* texts, uint32_t count);
+int pages_show_hint(FH2Mod* mod, const char* page_key, int index, uint32_t kind);
+int settings_show_box(FH2Mod* mod, const FH2MessageBox* box);
 // Title-screen entries (API 9).
 int title_add(FH2Mod* mod, const FH2TitleEntry* entry);
 const char* title_started_by(FH2Mod* mod);
