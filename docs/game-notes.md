@@ -153,7 +153,7 @@ A mod that compares game code in memory switches its feature off when another mo
 | Universal Radio 1.0.0 to 1.7.1 | operator new's prologue `0x3229C0`, the PE headers and the FMOD exports; its two radio call sites (`0x1018A13`, `0x10221F2`) only when it runs without the platform |
 | WheresMyBuddy 1.7.0 | the `ChampionshipDrivatarsState` vtable slot `0x2D44F30` |
 
-So Show's and MakeDisplayString's first 16 bytes must stay unpatched: call them, don't hook them. Achievements checks 15 bytes of each (the 16th of Show is a `push`, which a hook would move too), and FH2MP all 16 of MakeDisplayString. The 2.9.0 platform's sites were checked against every range above offline, with all of them in at once and every released mod's own hooks too, in both orders: none is refused and every check still matches. CommunityGarage 1.2.1, which calls Show and hooks the same three notification sites as Achievements, couldn't be checked that way, since neither its source nor its DLL was at hand.
+So Show's and MakeDisplayString's first 16 bytes must stay unpatched: call them, don't hook them. Achievements checks 15 bytes of each, and FH2MP all 16 of MakeDisplayString; a hook at either function's start would change all of them. The 2.9.0 platform's sites were checked against every range above offline, with all of them in at once and every released mod's own hooks too, in both orders: none is refused and every check still matches. CommunityGarage 1.2.1, which calls Show and hooks the same three notification sites as Achievements, couldn't be checked that way, since neither its source nor its DLL was at hand.
 
 ## Sites the platform hooks
 
