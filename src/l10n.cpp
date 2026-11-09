@@ -592,7 +592,11 @@ int format_number(const std::string& tag, double v, int decimals, char* out, std
 int format_date(const std::string& tag, int y, int m, int d, char* out, std::size_t n) {
     if (!out || !n) return 0;
     out[0] = '\0';
-    if (y < 1 || y > 9999 || m < 1 || m > 12 || d < 1 || d > 31) return 0;
+    if (y < 1 || y > 9999 || m < 1 || m > 12 || d < 1) return 0;
+    // Days in the month, with the Gregorian leap years: 30 February or 31 April isn't a date
+    static const int kDays[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    const bool leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    if (d > kDays[m - 1] + (m == 2 && leap ? 1 : 0)) return 0;
     const std::string lang = primary(tag);
     char buf[32];
     if (tag == "qps" || one_of(lang, {"pl", "de", "ru", "uk", "cs", "sk"})) std::snprintf(buf, sizeof buf, "%02d.%02d.%04d", d, m, y);
