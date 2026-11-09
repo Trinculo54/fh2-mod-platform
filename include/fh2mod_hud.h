@@ -163,33 +163,10 @@ extern "C" {
 #define FH2_HUD_LAPSED        0x100u  /* your lease ran out: the layer was hidden and your hold let go
                                          (until your next show_hud_layer with parts, or hold_game_hud(1)) */
 
-/* Controller pictures (FH2HudPrompt.glyph): the game's own. 1 to 6 are the
+/* Controller pictures (FH2HudPrompt.glyph): the game's own, FH2_GLYPH_NONE
+   to FH2_GLYPH_RS_LEFTRIGHT (0 to 24), defined once in fh2mod.h (API 10),
+   where the UI templates' FH2Prompt uses the same numbers. 1 to 6 are the
    same numbers as FH2_BUTTON_A to FH2_BUTTON_RB. */
-#define FH2_GLYPH_NONE           0
-#define FH2_GLYPH_A              1
-#define FH2_GLYPH_B              2
-#define FH2_GLYPH_X              3
-#define FH2_GLYPH_Y              4
-#define FH2_GLYPH_LB             5
-#define FH2_GLYPH_RB             6
-#define FH2_GLYPH_LT             7
-#define FH2_GLYPH_RT             8
-#define FH2_GLYPH_MENU           9
-#define FH2_GLYPH_VIEW           10
-#define FH2_GLYPH_DPAD_UP        11
-#define FH2_GLYPH_DPAD_DOWN      12
-#define FH2_GLYPH_DPAD_LEFT      13
-#define FH2_GLYPH_DPAD_RIGHT     14
-#define FH2_GLYPH_DPAD_UPDOWN    15
-#define FH2_GLYPH_DPAD_LEFTRIGHT 16
-#define FH2_GLYPH_L3             17
-#define FH2_GLYPH_R3             18
-#define FH2_GLYPH_LS             19   /* the left stick, and its directions below */
-#define FH2_GLYPH_LS_UPDOWN      20
-#define FH2_GLYPH_LS_LEFTRIGHT   21
-#define FH2_GLYPH_RS             22
-#define FH2_GLYPH_RS_UPDOWN      23
-#define FH2_GLYPH_RS_LEFTRIGHT   24
 
 /* Colours and kinds. */
 #define FH2_HUD_TEXT_DIM      0       /* line1_after in light grey */
@@ -206,15 +183,16 @@ extern "C" {
 #define FH2_HUD_MARK_CURRENT  1       /* orange */
 #define FH2_HUD_MARK_DIM      2       /* faded white */
 
-/* Sounds (play_ui_sound): the game's own. 1 to 4 are kept for the menus'
-   own sounds, which this preview doesn't play. */
-#define FH2_SOUND_ERROR    5          /* the menus' "can't do that"; quiet in the world */
-#define FH2_SOUND_NOTIFY   6          /* the game's notification chime; in the world only */
-#define FH2_SOUND_INFO     7          /* a pop-up opening; faint in the world */
-#define FH2_SOUND_TICK     8          /* the race countdown's beep; in the world only */
-#define FH2_SOUND_TICK_LOW 9          /* its lower beep; in the world only */
-#define FH2_SOUND_TICK_END 10         /* its last beep; in the world only */
-#define FH2_SOUND_SHUTTER  11         /* the photo shutter */
+/* Sounds (play_ui_sound): the game's own, FH2_SOUND_ in fh2mod.h (API 10),
+   shared with the UI templates. This preview plays only 5 to 11; 1 to 4
+   are the menus' own sounds, which it doesn't play:
+     FH2_SOUND_ERROR    the menus' "can't do that"; quiet in the world
+     FH2_SOUND_NOTIFY   the game's notification chime; in the world only
+     FH2_SOUND_INFO     a pop-up opening; faint in the world
+     FH2_SOUND_TICK     the race countdown's beep; in the world only
+     FH2_SOUND_TICK_LOW its lower beep; in the world only
+     FH2_SOUND_TICK_END its last beep; in the world only
+     FH2_SOUND_SHUTTER  the photo shutter */
 
 /* Called on the game's UI thread, at the platform's frame, when your
    layer's FH2_HUD_ bits change. Keep it short (store the bits, set a flag)
