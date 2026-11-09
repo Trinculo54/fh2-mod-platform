@@ -1867,7 +1867,7 @@ void add_hub_rows() {
 }
 
 // The rows that wait for a restart, by name, for the panel under YOUR MODS: up to three, then how many more. A
-// mod's Load switch is "Load <Mod>".
+// mod's Load switch is "Load <Mod>", and its Load when playing online "Load <Mod> online".
 std::string pending_restart_names() {
     std::vector<std::string> names;
     {
@@ -1875,8 +1875,11 @@ std::string pending_restart_names() {
         for (std::size_t r = 0; r < g_rows.size(); ++r) {
             if (!row_changed(g_rows[r])) continue;
             std::string name = g_rows[r].label;
-            for (std::size_t i = 0; i < g_entry_row.size(); ++i)
-                if (g_entry_row[i] == static_cast<int>(r)) name = trf("Load {0}", {g_entries[i].name});
+            for (std::size_t i = 0; i < g_entries.size(); ++i) {
+                if (i < g_entry_row.size() && g_entry_row[i] == static_cast<int>(r)) name = trf("Load {0}", {g_entries[i].name});
+                if (i < g_entry_online_row.size() && g_entry_online_row[i] == static_cast<int>(r))
+                    name = trf("Load {0} online", {g_entries[i].name});
+            }
             names.push_back(name);
         }
     }
@@ -2169,10 +2172,16 @@ std::string mods_folder();             // with About, below
 //                     settings are, the MODS tab has a NEW badge, and the freeroam HUD welcomes the player (below).
 //   welcome.sessions  how many sessions the HUD's welcome has played in: three at most.
 //   first             "new" or "upgrade": the first launch of this platform here, and whether an older one had
-//                     run first (platform-mods.txt was there). An upgrade gets "Mod settings have moved" once.
+//                     run first (platform-mods.txt was there and platform-seen.txt wasn't). Set by mod_entries
+//                     (platform.cpp) before platform-mods.txt is written again, so a second start of the game in
+//                     the same launch sees it too. An upgrade gets "Mod settings have moved" until moved.told.
+//   moved.told        the freeroam HUD has been shown in a session whose title screen said mod settings have moved:
+//                     from then on it says where they are.
 // A mod's (its DLL's file name):
-//   mod.new           it appeared in fh2-mods since the launch before: "New" on its row and the NEW badge, until
-//                     its page is opened.
+//   mod.new           it appeared in fh2-mods since the launch before (set by mod_entries, as first is): "New" on
+//                     its row and the NEW badge, until its page is opened.
+//   mod.announced     the HUD's NEW MOD notice (or the welcome naming it) has played for it: it isn't told again,
+//                     until it's new again.
 // Deleting the file brings every hint back, which is also how to test them.
 bool home_seen() { return seen_has(kSeenPlatform, "home"); }
 std::string seen_who(const ModEntry& e) { return narrow(e.dll); }
@@ -2197,31 +2206,46 @@ void mark_home() {
 
 // Mod i's page opened: it isn't new any more.
 void mark_page_opened(std::size_t i) {
-    if (i < g_entries.size() && seen_clear(seen_who(g_entries[i]), "mod.new")) slog(g_entries[i].name + "'s page has been opened: it isn't marked new any more");
+    if (i >= g_entries.size()) return;
+    seen_clear(seen_who(g_entries[i]), "mod.announced");
+    if (seen_clear(seen_who(g_entries[i]), "mod.new")) slog(g_entries[i].name + "'s page has been opened: it isn't marked new any more");
 }
 
 // A line of the platform's own for the title screen, in English: each language's Main.str gets it in its words (tr_in).
 std::string title_line(const char* english) { return english; }
 
-std::vector<std::string> g_fresh_names;   // the mods new in fh2-mods this launch (settings_start)
+// The mods new since the launch before whose NEW MOD notice hasn't played yet (settings_start)
+struct FreshMod {
+    std::string name, who;
+    bool loaded = false;   // running, so the welcome names it too
+};
+std::vector<FreshMod> g_fresh;
+std::vector<std::string> g_fresh_names;
+bool g_title_moved  = false;   // the title line this session says mod settings have moved
+bool g_title_on_tab = false;   // the title line this session points at the MODS tab
 
-// At start, before the pages and the HUD are written: marks the mods new since the launch before, and puts the
-// line about where mod settings are on the title screen until YOUR MODS has been opened.
-void first_run_cues() {
+// At start, before the pages and the HUD are written: the mods to tell about as new, and the line about where mod
+// settings are on the title screen until YOUR MODS has been opened. `tab`: the MODS tab's files were written;
+// `settings_door`: Pause > Settings > MODS is there. Without the tab the line names the Settings door, and
+// without either there's none.
+void first_run_cues(bool tab, bool settings_door) {
     for (const ModEntry& e : g_entries)
-        if (e.fresh && e.enabled) {
-            seen_set(seen_who(e), "mod.new");
+        if (e.enabled && mod_is_new(e) && !seen_has(seen_who(e), "mod.announced")) {
+            g_fresh.push_back({e.name, seen_who(e), e.mod != nullptr});
             g_fresh_names.push_back(e.name);
         }
     std::vector<std::string> lines;
     if (!g_entries.empty() && !home_seen()) {
-        bool moved = false;
-        if (!seen_has(kSeenPlatform, "first")) {   // the first launch of this platform here
-            moved = mods_list_existed();
-            seen_set(kSeenPlatform, "first", moved ? "upgrade" : "new");
+        if (tab) {
+            g_title_moved  = seen_get(kSeenPlatform, "first") == "upgrade" && !seen_has(kSeenPlatform, "moved.told");
+            g_title_on_tab = true;
+            lines.push_back(g_title_moved ? title_line("Mod settings have moved: Pause > MODS") : title_line("Mod settings: Pause > MODS (the last tab)"));
+            slog(g_title_moved ? "title screen: mod settings have moved (after an older platform, until the game has been played once)"
+                               : "title screen: where mod settings are, until YOUR MODS is opened");
+        } else if (settings_door) {
+            lines.push_back(title_line("Mod settings: Pause > Settings > MODS"));
+            slog("title screen: mod settings are under Pause > Settings > MODS, as the MODS tab's files couldn't be written");
         }
-        lines.push_back(moved ? title_line("Mod settings have moved: Pause > MODS") : title_line("Mod settings: Pause > MODS (the last tab)"));
-        slog(moved ? "title screen: mod settings have moved (once, after an older platform)" : "title screen: where mod settings are, until YOUR MODS is opened");
     }
     set_platform_notice(lines);
 }
@@ -3512,7 +3536,7 @@ bool focus_named_inner(void* page, const char* name) {
 // (0x140CBDB20, Button* (String** name, page), called at 0x140D9FA3A): 1 yes, 0 no, -1 it faulted.
 constexpr uintptr_t RVA_FIND_BUTTON      = 0x0CBDB20;
 constexpr uintptr_t RVA_FIND_BUTTON_CALL = 0x0D9FA3A;   // in the pause menu's wire-a-tile (0x140D9F9F0)
-bool g_find_button_ok = false;                          // both look as expected
+std::atomic<bool> g_find_button_ok{false};              // both look as expected (set once the hooks are on)
 bool find_button_inner(void* page, const char* name) {
     alignas(16) uint8_t str[0x80] = {};
     reinterpret_cast<AvuiStringFn>(g_base + RVA_AVUI_STRING)(str, name, -1);
@@ -4053,6 +4077,9 @@ void hook_hub() {
         clear_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseMenu.xaml");
         clear_file(&g_owner_mod, "stateflow/pause.xml");
         clear_file(&g_owner_mod, "stateflow/ui_screens.xml");
+        if (g_title_on_tab)
+            slog("the title screen's line points at the MODS tab, which isn't there this time; Pause > Settings > MODS "
+                 "opens the list that stands in for it");
     };
     if (!g_hub_files) return;
     for (const Check& c : checks)
@@ -4154,6 +4181,13 @@ uint64_t d_hud_shown(void* page, void* b, void* c, void* d) {
         } else {
             slog(g_notice_kind == kNoticeFailed ? "showing the HUD's notice about mods that didn't load" : "showing the HUD's notice about new mods");
         }
+        // the new mods it names are told about now (the welcome names the running ones)
+        if (g_notice_kind == kNoticeWelcome || g_notice_kind == kNoticeNewMods)
+            for (const FreshMod& f : g_fresh)
+                if (g_notice_kind == kNoticeNewMods || f.loaded) seen_set(f.who, "mod.announced");
+        // the game has been played past the title screen that said mod settings have moved: once is enough
+        if (g_title_moved && seen_set(kSeenPlatform, "moved.told"))
+            slog("the title screen has said mod settings have moved; from the next start it says where they are");
     } else if (g_mod_notice_done.exchange(true))
         return r;                                                       // over already
     notify_changed(page, g_mod_notice_desc);
@@ -5381,7 +5415,7 @@ void settings_start(const FH2ModApi* api) {
         clear_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseOptions.xaml");
     }
     if (!mods_page) remove_leftover_file("UI/Scenes/Anthem/A_ModOptions.xaml");
-    first_run_cues();
+    first_run_cues(g_hub_files, g_settings_tile);
     if (!write_hud_notice()) remove_leftover_file("UI/Scenes/Anthem/A_Hud.xaml");
     write_title_page();
     slog(std::to_string(n) + " row(s) from mods, " + std::to_string(g_entries.size()) + " mod(s) on the MODS tab" +

@@ -279,9 +279,28 @@ std::set<std::string> read_manifest() {
 
 std::vector<std::string> split_lines(const char* s);   // below
 
-// The platform's own lines on the title screen (settings.cpp: where mod settings are), as fh2-mods\notices\~platform.txt,
-// which sorts after the mods' own. In English there; each language's Main.str gets them in its own words (apply_all).
-const wchar_t* const kPlatformNotice = L"~platform";
+// The platform's own lines on the title screen (settings.cpp: where mod settings are), after the mods' notices. In
+// English; each language's Main.str gets them in its own words (apply_all). They're kept in
+// fh2-mods\platform-title.txt, not in fh2-mods\notices: older platforms read that folder too, so a mod zip that
+// brings an older platform back would have them shown in English at every start. The file holds the last launch's
+// lines, so this launch's first write of Main.str has them already, and an unchanged line needs no second write.
+std::vector<std::string> g_platform_lines;   // under g_mu
+bool g_platform_lines_read = false;
+fs::path platform_title_path() { return g_azimuth / "fh2-mods" / "platform-title.txt"; }
+const std::vector<std::string>& platform_lines() {   // under g_mu
+    if (!g_platform_lines_read) {
+        g_platform_lines_read = true;
+        std::ifstream in{platform_title_path()};
+        for (std::string l; std::getline(in, l);) {
+            while (!l.empty() && (l.back() == '\r' || l.back() == '\n')) l.pop_back();
+            if (!l.empty() && l[0] != '#') g_platform_lines.push_back(l);
+        }
+        // 2.9.0's test builds kept them in the notices folder, where older platforms would show them
+        std::error_code ec;
+        fs::remove(g_azimuth / "fh2-mods" / "notices" / "~platform.txt", ec);
+    }
+    return g_platform_lines;
+}
 
 // Rebuilds every dirty table from all mods' edits (later registrations win
 // on the same key), and Main.str's "TO START" from the notices.
@@ -328,7 +347,7 @@ void apply_all() {
             // this mutex, from the same notice files.
             mu = CreateMutexW(nullptr, FALSE, L"Local\\FH2ModNotices");
             if (mu) WaitForSingleObject(mu, 10000);
-            notices = any_notices(g_azimuth);
+            notices = any_notices(g_azimuth) || !platform_lines().empty();
         }
         // Car names a pack or mod gave as text, as new keys (database.cpp).
         const auto add    = table == "data_car.str" ? database_strings() : std::map<uint16_t, std::wstring>{};
@@ -342,23 +361,24 @@ void apply_all() {
                 if (auto k = tr_keys.find(key); k != tr_keys.end())
                     s = l10n_table_text(k->second.mod, k->second.key, k->second.english, lang);
                 if (auto x = texts.find(s); x != texts.end()) s = x->second;
-                if (is_main && key == kToStartKey)
+                if (is_main && key == kToStartKey) {
+                    std::vector<std::string> own;   // the platform's own lines, in this table's language
+                    for (const std::string& l : platform_lines()) own.push_back(tr_in(l.c_str(), lang));
                     // a notice a mod got from tr() (API 10) in this table's language, then the platform's own lines
-                    s = title_with_notices(g_azimuth, s, [&](const std::wstring& who, const std::vector<std::string>& lines) {
-                        if (who == kPlatformNotice) {
-                            std::vector<std::string> out;
-                            for (const std::string& l : lines) out.push_back(tr_in(l.c_str(), lang));
-                            return out;
-                        }
-                        for (const auto& m : g_mods) {
-                            std::string text;
-                            if (_wcsicmp(m->wname.c_str(), who.c_str()) || !l10n_text_in(m.get(), "notice", lang, text)) continue;
-                            std::vector<std::string> out = split_lines(text.c_str());
-                            out.insert(out.end(), m->status.begin(), m->status.end());
-                            return out;
-                        }
-                        return lines;
-                    });
+                    s = title_with_notices(
+                        g_azimuth, s,
+                        [&](const std::wstring& who, const std::vector<std::string>& lines) {
+                            for (const auto& m : g_mods) {
+                                std::string text;
+                                if (_wcsicmp(m->wname.c_str(), who.c_str()) || !l10n_text_in(m.get(), "notice", lang, text)) continue;
+                                std::vector<std::string> out = split_lines(text.c_str());
+                                out.insert(out.end(), m->status.begin(), m->status.end());
+                                return out;
+                            }
+                            return lines;
+                        },
+                        own);
+                }
                 return s;
             },
             remove, override_root(), add);
@@ -637,17 +657,18 @@ void api_apply_strings(FH2Mod*) { apply_all(); }
 void set_platform_notice(const std::vector<std::string>& english_lines) {
     {
         std::scoped_lock lk{g_mu};
-        // The file as the last launch left it: the first write of Main.str this launch already had its lines, so
-        // the same lines again need no second write (line 1 is the DLL, empty for the platform's)
-        std::vector<std::string> there;
-        std::ifstream in{g_azimuth / "fh2-mods" / "notices" / (std::wstring(kPlatformNotice) + L".txt")};
-        for (std::string l; std::getline(in, l);) {
-            while (!l.empty() && (l.back() == '\r' || l.back() == '\n')) l.pop_back();
-            there.push_back(l);
+        // The lines as the last launch left them: the first write of Main.str this launch already had them, so the
+        // same lines again need no second write
+        if (english_lines == platform_lines()) return;
+        g_platform_lines = english_lines;
+        std::error_code ec;
+        if (english_lines.empty()) {
+            fs::remove(platform_title_path(), ec);
+        } else {
+            std::ofstream out{platform_title_path(), std::ios::binary | std::ios::trunc};
+            out << "# The FH2 Mod Platform's own lines on the title screen, in English (each language shows them in its own words).\n";
+            for (const std::string& l : english_lines) out << l << "\n";
         }
-        if (!there.empty()) there.erase(there.begin());
-        if (english_lines == there) return;   // as it is already (none: no file)
-        write_notice_file(g_azimuth, kPlatformNotice, L"", english_lines);   // no lines: the file goes
         g_dirty.insert("main.str");
         g_table_names.emplace("main.str", "Main.str");
     }
@@ -1054,6 +1075,8 @@ int call_init(FH2ModInitFn init, const FH2ModApi* api, DWORD* code) {
     }
 }
 
+bool g_seen_existed = false;   // fh2-mods\platform-seen.txt was there when this launch started (load_mods)
+
 DWORD WINAPI load_mods(LPVOID) {
     g_loader_thread = GetCurrentThreadId();
     g_mods_ready    = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -1082,7 +1105,14 @@ DWORD WINAPI load_mods(LPVOID) {
     start_media_overrides();
     l10n_start();
     // What the player has already been shown (tips, the settings' first-run cues), read before any mod starts.
-    seen_open(g_azimuth / "fh2-mods" / "platform-seen.txt", plog);
+    // Whether it and platform-mods.txt were there before anything this launch writes either: an older platform ran
+    // here when only platform-mods.txt was (mod_entries).
+    {
+        const fs::path seen = g_azimuth / "fh2-mods" / "platform-seen.txt";
+        g_seen_existed      = fs::is_regular_file(seen, ec);
+        mods_list_existed();
+        seen_open(seen, plog);
+    }
 
     struct Loaded {
         std::wstring file;
@@ -1521,6 +1551,35 @@ const KnownBefore& known_before() {
 
 bool mods_list_existed() { return known_before().existed; }
 
+// What the first look at the list tells, kept in the seen store (settings.cpp, "being told once") before
+// platform-mods.txt is written again. Azimuth can start the game twice in one launch, and the first copy can be
+// ended before the store's worker writes platform-seen.txt; told only by this copy's snapshot, the second copy would
+// find every DLL in platform-mods.txt already, and nothing new.
+//   first    "upgrade" when an older platform ran here (platform-mods.txt was there, platform-seen.txt wasn't),
+//            else "new"; set once, at the platform's first start here
+//   mod.new  each mod new in fh2-mods since the last start (and its mod.announced cleared, so it's told again)
+// Returns false when they couldn't be written to the file yet.
+bool note_first_start(const std::vector<ModEntry>& entries, bool list_existed) {
+    bool changed = false;
+    if (!seen_has(kSeenPlatform, "first")) {
+        const bool upgrade = list_existed && !g_seen_existed;
+        if (seen_set(kSeenPlatform, "first", upgrade ? "upgrade" : "new")) {
+            changed = true;
+            plog(upgrade ? "this is the platform's first start in this Azimuth folder; an older platform ran here before"
+                         : "this is the platform's first start in this Azimuth folder");
+        }
+    }
+    for (const ModEntry& e : entries)
+        if (e.fresh && e.enabled) {
+            changed = seen_set(narrow(e.dll), "mod.new") || changed;
+            seen_clear(narrow(e.dll), "mod.announced");
+        }
+    if (!changed || seen_flush(2000)) return true;
+    plog("platform-seen.txt couldn't be written yet, so platform-mods.txt is left as it was until it is: the mods new "
+         "since the last start stay new");
+    return false;
+}
+
 std::vector<ModEntry> mod_entries() {
     const KnownBefore& before = known_before();
     // remembered: dll -> name, version, description
@@ -1532,7 +1591,7 @@ std::vector<ModEntry> mod_entries() {
     std::vector<ModEntry> out;
     std::vector<std::wstring> remember;
     const auto choices = online_choices();
-    std::scoped_lock lk{g_mu};
+    std::unique_lock lk{g_mu};
     for (const auto& f : g_found) {
         ModEntry e;
         e.dll          = f.file;
@@ -1590,6 +1649,19 @@ std::vector<ModEntry> mod_entries() {
                                widen(e.repo) + L"\t" + (e.offline_only ? L"1" : L"0"));
         out.push_back(e);
     }
+    lk.unlock();
+    static std::mutex write_mu;   // the seen entries, then the file, one caller at a time
+    std::scoped_lock wl{write_mu};
+    // The first time, the seen store gets what this list tells, and the file is only written once that's in
+    // platform-seen.txt: a second start of the game in the same launch then reads it there.
+    static bool noted = false, held = false;
+    if (!noted) {
+        noted = true;
+        held  = !note_first_start(out, before.existed);
+    } else if (held) {
+        held = !seen_flush(0);
+    }
+    if (held) return out;
     write_lines(known_path(),
                 L"# What the MODS tab remembers about each mod (DLL, name, version, description, GitHub repo, offline only).\n",
                 remember);

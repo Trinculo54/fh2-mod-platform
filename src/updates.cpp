@@ -225,13 +225,16 @@ bool any_notices(const fs::path& azimuth) { return !notice_lines(azimuth).empty(
 
 std::wstring title_with_notices(
     const fs::path& azimuth, const std::wstring& to_start,
-    const std::function<std::vector<std::string>(const std::wstring&, const std::vector<std::string>&)>& lines_for) {
+    const std::function<std::vector<std::string>(const std::wstring&, const std::vector<std::string>&)>& lines_for,
+    const std::vector<std::string>& last) {
     // "TO START" is its own text box beside "PRESS (A)", centred vertically
     // on it. Blank lines above balance the notice lines below so it stays
     // level with the button and the notices stack underneath; one extra
     // blank line evens out the box sitting a little high (checked in game).
     std::wstring above, below;
-    for (const auto& l : notice_lines(azimuth, lines_for)) {
+    std::vector<std::string> lines = notice_lines(azimuth, lines_for);
+    lines.insert(lines.end(), last.begin(), last.end());
+    for (const auto& l : lines) {
         above += L"\n";
         below += L"\n" + widen(l);
     }
