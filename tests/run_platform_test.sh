@@ -95,6 +95,15 @@ run_layout() {   # run_layout mediaoverride|own
     wine azimuth.exe online-chosen
     printf 'fh2mp.dll\n' > fh2-mods/platform-disabled.txt
     wine azimuth.exe fh2mp-off
+    # FH2MP's own rules for its session (platform 2.9.0): only where FH2MP looks (data\bin when there is one), and
+    # not once it's older than FH2MP's limit (30 minutes, or FH2MP_SESSION_MAX_AGE_S). A fresh one left next to
+    # azimuth.exe and a three-hour-old one in data\bin: offline. With the limit off, the old one counts.
+    rm fh2-mods/platform-disabled.txt fh2-mods/platform-online.txt
+    printf 'xuid=1\ntoken=test\n' > fh2mp-session.txt
+    touch -d '3 hours ago' data/bin/fh2mp-session.txt
+    wine azimuth.exe online-stale
+    FH2MP_SESSION_MAX_AGE_S=0 wine azimuth.exe online-nolimit
+    rm fh2mp-session.txt
     # Online play found where 2.8.0 missed it (platform 2.9.0, issue #22): the session next to azimuth.exe in a
     # folder without data\bin; then a stand-in FH2MP under another name (FakeFH2MP.dll as ZzFH2MP.dll, after
     # OfflineMod) that writes the session while the mods start, and the same again once it's known as FH2MP.

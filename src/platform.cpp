@@ -826,15 +826,15 @@ int api_playing_online() { return g_online ? 1 : 0; }
 //
 // FH2MP's launcher hands the game a session in fh2mp-session.txt before starting it, and removes
 // the file when the game ends (FH2MP's own DLL reads it and never deletes it, as Azimuth can start
-// the game twice in one launch). It's in data\bin, or next to azimuth.exe in a folder without
-// data\bin, wherever FH2MP looks. It holds the player's token, so the platform only looks for it and
-// never reads it. FH2MP_TOKEN in the environment does the same for FH2MP's tests. Either only counts
-// while FH2MP is in fh2-mods and turned on: FH2MP then plays online with it.
+// the game twice in one launch). It's where FH2MP looks: in data\bin when there's one, else next to
+// azimuth.exe. It holds the player's token, so the platform only looks at the file and never reads
+// it. FH2MP_TOKEN in the environment does the same for FH2MP's tests. Either only counts while FH2MP
+// is in fh2-mods and turned on: FH2MP then plays online with it.
 //
-// Mods load before FH2MP connects and can't be unloaded, so the platform decides conservatively
-// (issue #22): a session that's there at all counts, even one FH2MP will find too old and ignore,
-// or one left behind by a launcher that crashed; a file it can't check counts as there. Offline
-// needs FH2MP turned off or missing, or no session anywhere. Then it looks again:
+// Mods load before FH2MP connects and can't be unloaded, so the platform decides by FH2MP's own
+// rules for its session (fh2mp_session), and on the safe side (issue #22): a file it can't check
+// counts as there. Offline needs FH2MP turned off or missing, or no session FH2MP would use. Then it
+// looks again:
 // - when a mod registers as FH2MP: a DLL renamed from FH2MP.dll, which the loader didn't know;
 // - when FH2MP's fh2mod_init has returned: FH2MP reads its session there, and the launcher may have
 //   written it after the loader looked (Play pressed while the game was starting);
@@ -846,30 +846,64 @@ int api_playing_online() { return g_online ? 1 : 0; }
 // The other way round (online at load, and FH2MP then finds its session too old) only leaves those
 // mods out for that one start.
 
-// Whether FH2MP may have a session to play online with: why, for the log.
+// How old FH2MP lets its session file be, in 100 ns ticks (0: no limit), and the limit for the log:
+// FH2MP's session_age.inc, 30 minutes, or FH2MP_SESSION_MAX_AGE_S in seconds, read as FH2MP reads it
+// (its leading digits: 0, or a value that starts with no digit, is no limit).
+uint64_t fh2mp_session_max_age(std::string* shown) {
+    uint64_t max_age = 30ull * 60 * 10000000;
+    *shown           = "FH2MP's limit of 30 minutes";
+    wchar_t limit[16];
+    const DWORD len = GetEnvironmentVariableW(L"FH2MP_SESSION_MAX_AGE_S", limit, 16);
+    if (len && len < 16) {
+        uint64_t secs = 0;
+        for (DWORD k = 0; limit[k] >= L'0' && limit[k] <= L'9'; ++k) secs = secs * 10 + static_cast<unsigned>(limit[k] - L'0');
+        max_age = secs * 10000000ull;
+        *shown  = "FH2MP's limit of " + std::to_string(secs) + " s (FH2MP_SESSION_MAX_AGE_S)";
+    }
+    return max_age;
+}
+
+// Whether FH2MP may have a session to play online with: why, for the log. By FH2MP's own rules (its
+// session_load): only where FH2MP looks, data\bin when anything of that name is there, else next to
+// azimuth.exe; and not once it was last written longer ago than FH2MP's limit, or dated that far
+// ahead (FH2MP ignores and removes such a file, and plays offline). A file that can't be checked
+// counts as there, and one whose date reads as 0 isn't too old (FH2MP's rules too).
 bool fh2mp_session(std::string* why) {
     wchar_t env[8];
     if (GetEnvironmentVariableW(L"FH2MP_TOKEN", env, 8) > 0) {
         *why = "FH2MP_TOKEN is set";
         return true;
     }
-    const std::pair<fs::path, const char*> places[] = {
-        {g_azimuth / "data" / "bin" / "fh2mp-session.txt", "data\\bin\\fh2mp-session.txt"},
-        {g_azimuth / "fh2mp-session.txt", "fh2mp-session.txt next to azimuth.exe"}};
-    for (const auto& [path, name] : places) {
-        const DWORD a = GetFileAttributesW(path.c_str());
-        if (a != INVALID_FILE_ATTRIBUTES) {
-            if (a & FILE_ATTRIBUTE_DIRECTORY) continue;
-            *why = std::string("FH2MP's session file is there (") + name + ")";
-            return true;
-        }
+    const bool bin      = GetFileAttributesW((g_azimuth / "data" / "bin").c_str()) != INVALID_FILE_ATTRIBUTES;
+    const fs::path path = bin ? g_azimuth / "data" / "bin" / "fh2mp-session.txt" : g_azimuth / "fh2mp-session.txt";
+    const char* name    = bin ? "data\\bin\\fh2mp-session.txt" : "fh2mp-session.txt next to azimuth.exe";
+    WIN32_FILE_ATTRIBUTE_DATA a{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &a)) {
         const DWORD err = GetLastError();
-        if (err != ERROR_FILE_NOT_FOUND && err != ERROR_PATH_NOT_FOUND) {
-            *why = std::string("FH2MP's session file can't be checked (") + name + ", error " + std::to_string(err) + ")";
-            return true;
+        if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND) return false;
+        *why = std::string("FH2MP's session file can't be checked (") + name + ", error " + std::to_string(err) + ")";
+        return true;
+    }
+    if (a.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return false;
+    std::string limit;
+    const uint64_t max_age = fh2mp_session_max_age(&limit);
+    const uint64_t written = (static_cast<uint64_t>(a.ftLastWriteTime.dwHighDateTime) << 32) | a.ftLastWriteTime.dwLowDateTime;
+    FILETIME now_ft;
+    GetSystemTimeAsFileTime(&now_ft);
+    const uint64_t now = (static_cast<uint64_t>(now_ft.dwHighDateTime) << 32) | now_ft.dwLowDateTime;
+    if (max_age && written && now) {
+        const uint64_t age = now >= written ? now - written : written - now;
+        if (age > max_age) {
+            static std::atomic<bool> told{false};
+            if (!told.exchange(true))
+                plog(std::string("FH2MP's session file (") + name + ") was written " + std::to_string(age / 600000000ull) +
+                     (now >= written ? " minutes ago" : " minutes ahead of the clock") + ", outside " + limit +
+                     ", so FH2MP won't use it; it doesn't make this game online");
+            return false;
         }
     }
-    return false;
+    *why = std::string("FH2MP's session file is there (") + name + ")";
+    return true;
 }
 
 // The DLLs that registered as FH2MP at earlier launches (platform-mods.txt), lower case.

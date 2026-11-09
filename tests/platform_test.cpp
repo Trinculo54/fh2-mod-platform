@@ -16,8 +16,10 @@
 // online are stopped, the ones after it aren't started), "online-ready" (no session; FH2MP's
 // going_online, once every mod has started, finds OfflineMod and HelloMod have run, so nothing
 // changes) and "online-clean" (OfflineMod only registered: going_online stops it and the game goes
-// online). Last, "hud": HudTestMod.dll adds a HUD layer (the HUD layer preview,
-// include/fh2mod_hud.h).
+// online). "online-stale" and "online-nolimit" (between "fh2mp-off" and "online-root") follow FH2MP's
+// own rules for its session: a three-hour-old one in data\bin and a fresh one next to azimuth.exe
+// don't count, and the old one does with FH2MP_SESSION_MAX_AGE_S=0. Last, "hud": HudTestMod.dll adds
+// a HUD layer (the HUD layer preview, include/fh2mod_hud.h).
 // Given the game exe, "full" and "hud" map all of it after loading the platform (Azimuth's "Play"), and the
 // runner has it in FH2\Mount as well: the code checks pass and the hooks go in (but not the MODS menus', which
 // would run game code this copy can't: see map_game). Without it, there's no game, and the parts that wait for
@@ -1120,6 +1122,18 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(log, "[OfflineMod] after start: online=1, the original ran, enable_hooks gave 0, set_file gave 0"));
             // no table or database written again for it, on FH2MP's thread or any other
             CHECK(at == std::string::npos || (log.find(" wrote ", at) == std::string::npos && log.find("database: ", at) == std::string::npos));
+        } else if (phase == L"online-stale") {
+            // FH2MP's rules for its session: data\bin's is three hours old, and the fresh one next to azimuth.exe isn't where
+            // FH2MP looks with a data\bin there. Offline.
+            CHECK(!has(log, "counts as online play") && !has(log, "started from the FH2MP launcher"));
+            CHECK(has(log, "FH2MP's session file (data\\bin\\fh2mp-session.txt) was written 1") &&
+                  has(log, " minutes ago, outside FH2MP's limit of 30 minutes, so FH2MP won't use it; it doesn't make this game online"));
+            CHECK(has(log, "[OfflineMod] running offline"));
+        } else if (phase == L"online-nolimit") {
+            // FH2MP_SESSION_MAX_AGE_S=0: no limit, so the old one counts
+            CHECK(has(log, "FH2MP.dll (FH2MP) is turned on and FH2MP's session file is there (data\\bin\\fh2mp-session.txt), "
+                           "so this game counts as online play"));
+            CHECK(has(log, "OfflineMod.dll is set to stay off when playing online; not loaded") && !has(log, "won't use it"));
         } else {
             // fh2mp-off: FH2MP turned off on the MODS tab, so a session file doesn't make it online
             CHECK(!has(log, "started from the FH2MP launcher") && has(log, "FH2MP.dll is turned off on the MODS tab"));
