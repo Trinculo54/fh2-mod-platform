@@ -166,7 +166,7 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->log(g_mod, (std::string("fuzzy: ") + FH2_TR(api, g_mod, "row.Fuzzy.label", "Not sure yet")).c_str());
     char date[32];
     api->format_date(2026, 11, 8, date, sizeof date);
-    api->log(g_mod, ("number: " + fh2_number(api, 1234.5, 1) + ", date: " + date).c_str());
+    api->log(g_mod, ("number: " + fh2_number(api, 12345.5, 1) + ", date: " + date).c_str());
     // each language's string table with its own text
     api->set_string_tr(g_mod, "LoadingMessages.str", 0x5507, "loading.tip", L"A loading tip from TestMod");
 

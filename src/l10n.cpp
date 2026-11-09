@@ -426,9 +426,12 @@ int format_number(const std::string& tag, double v, int decimals, char* out, std
     const char *group = ",", *dec = ".";
     if (tag == "qps" || one_of(lang, {"pl", "ru", "uk", "cs", "sk", "fr", "hu"})) group = "\xC2\xA0", dec = ",";
     else if (tag != "es-MX" && one_of(lang, {"pt", "de", "it", "nl", "es", "da", "tr"})) group = ".", dec = ",";
+    // Polish and Spain's Spanish group only from five digits, as CLDR has them: 1234, but 12 345 / 12.345.
+    const bool from_five = lang == "pl" || (lang == "es" && tag != "es-MX");
+    const bool grouped   = !(from_five && whole.size() <= 4);
     std::string s = v < 0 && !zero ? "-" : "";
     for (std::size_t i = 0; i < whole.size(); ++i) {
-        if (i && (whole.size() - i) % 3 == 0) s += group;
+        if (grouped && i && (whole.size() - i) % 3 == 0) s += group;
         s += whole[i];
     }
     if (!part.empty()) s += dec + part;
@@ -463,6 +466,25 @@ std::string language_name(const std::string& tag) {
     if (tag == "zh") return "Chinese";
     if (tag == "qps") return "the test language";
     return tag;
+}
+
+std::string guess_from_windows(std::wstring_view locale) {
+    std::string name;
+    for (wchar_t c : locale) name += c < 128 ? static_cast<char>(std::tolower(static_cast<int>(c))) : '?';
+    const std::string lang   = name.substr(0, name.find('-'));
+    const std::string region = name.size() > lang.size() + 1 ? name.substr(lang.size() + 1) : "";
+    // The game's table (game+0x141245CF0) maps a regional format to one of its locales, which picks its text.
+    if (lang == "pl") return "pl";
+    if (lang == "pt") return "pt-BR";   // pt-PT too: the game has only the Brazilian text
+    if (lang == "de") return "de";
+    if (lang == "fr") return "fr";      // fr-CA too: the same French text
+    if (lang == "it") return "it";
+    if (lang == "ja") return "ja";
+    if (lang == "ru") return "ru";
+    if (lang == "es") return region.empty() || region == "es" ? "es-ES" : "es-MX";
+    if (lang == "zh") return region == "hk" || region == "tw" || region.rfind("hant", 0) == 0 ? "zh-Hant" : "en";
+    if (lang == "en") return region.empty() || region == "us" || region == "au" || region == "ca" ? "en" : "en-GB";
+    return "en";   // Korean, Czech, Hungarian, Dutch and the rest: not in the game's table, so its English
 }
 
 } // namespace l10n
@@ -524,7 +546,8 @@ constexpr std::size_t kManyTexts = 20000;
 // fh2-mods\platform-language.ini, read once.
 std::once_flag g_state_once;
 std::string g_last;         // the game's language last time ("" if never seen)
-std::string g_start_tag;    // the language before the game has one: g_last, or "en"
+std::string g_start_tag;    // the language before the game has one: g_last, or a guess from Windows
+std::wstring g_windows;     // Windows' regional format, for that guess ("pl-PL"; "" if not asked or unknown)
 bool g_test = false;        // the test language
 fs::path state_path() { return azimuth_dir() / L"fh2-mods" / L"platform-language.ini"; }
 
@@ -543,7 +566,12 @@ void read_state() {
             if (key == "last") g_last = normal_tag(value);
             if (key == "test") g_test = value == "1" || value == "on" || value == "yes" || value == "true";
         }
-        g_start_tag = g_last.empty() ? "en" : g_last;
+        g_start_tag = g_last;
+        if (g_start_tag.empty()) {   // a first launch: guess as the game will pick, from Windows' regional format
+            wchar_t name[LOCALE_NAME_MAX_LENGTH] = {};
+            if (GetUserDefaultLocaleName(name, LOCALE_NAME_MAX_LENGTH) > 0) g_windows = name;
+            g_start_tag = l10n::guess_from_windows(g_windows);
+        }
     });
 }
 
@@ -752,7 +780,9 @@ void l10n_start() {
         plog("Language: mods' text starts in " + language_name(g_last) + " (" + g_last +
              "), the game's language last time, and follows the game's own once it has picked it");
     else
-        plog("Language: mods' text starts in English (en), and follows the game's language once it has picked it");
+        plog("Language: mods' text starts in " + language_name(g_start_tag) + " (" + g_start_tag + "), the game's choice for " +
+             (g_windows.empty() ? std::string("an unknown Windows regional format") : "Windows' regional format " + utf8(g_windows)) +
+             ", and follows the game's language once it has picked it");
     std::thread([] {
         for (;;) {
             if (const char* t = game_tag()) {
@@ -763,8 +793,8 @@ void l10n_start() {
                 if (tag == g_start_tag)
                     plog("Language: the game's text is in " + now + ", as expected; mods' text is in it too" + test);
                 else if (g_last.empty())   // no platform-language.ini yet: there was no last time
-                    plog("Language: the game's text is in " + now + "; mods' text started in English this first time, and " + follows +
-                         test);
+                    plog("Language: the game's text is in " + now + "; mods' text started in " + language_name(g_start_tag) +
+                         " this first time (from Windows' regional format), and " + follows + test);
                 else
                     plog("Language: the game's text is in " + now + ", not " + language_name(g_start_tag) + " as last time; mods' text " +
                          follows + test);

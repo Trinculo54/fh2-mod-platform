@@ -65,6 +65,12 @@ int format_number(const std::string& tag, double v, int decimals, char* out, std
 int format_date(const std::string& tag, int y, int m, int d, char* out, std::size_t n);
 // "Polish" for "pl", for log lines; the tag itself for one the platform doesn't know.
 std::string language_name(const std::string& tag);
+// The language the game picks for a Windows regional format (GetUserDefaultLocaleName: "pl-PL", "pt-PT",
+// "en-IE"), from the game's own 46-entry table (game+0x141245CF0): pl -> pl, every pt -> pt-BR, es and
+// es-ES -> es-ES, other es -> es-MX, most en -> en-GB but en-US, en-AU and en-CA -> en, de, fr, it, ja,
+// ru, zh-HK and zh-TW -> zh-Hant. Anything else, Korean, Czech, Hungarian and Dutch included, is "en", as
+// the game gives them its English text.
+std::string guess_from_windows(std::wstring_view locale);
 
 } // namespace l10n
 

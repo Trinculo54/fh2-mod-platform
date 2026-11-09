@@ -171,13 +171,22 @@ static int qps_phase() {
     return fails;
 }
 
-// The first launch: no platform-language.ini, so mods' text starts in English, and the game is in Polish.
+// The first launch: no platform-language.ini, so mods' text starts in the language the game will pick for
+// this PC's Windows regional format, and the game is in Polish.
 static int first_phase() {
+    wchar_t windows[LOCALE_NAME_MAX_LENGTH] = {};
+    GetUserDefaultLocaleName(windows, LOCALE_NAME_MAX_LENGTH);
+    const std::string guess = l10n::guess_from_windows(windows);
     l10n_start();
-    CHECK(logged("Language: mods' text starts in English (en), and follows the game's language once it has picked it"));
+    CHECK(logged("Language: mods' text starts in " + l10n::language_name(guess) + " (" + guess + "), the game's choice for "));
+    CHECK(std::string(l10n_language()) == guess);
     g_game = "PL";
     for (int i = 0; i < 50 && !logged("Language: the game's text is in"); ++i) Sleep(100);
-    CHECK(logged("Language: the game's text is in Polish (pl); mods' text started in English this first time, and follows it on every page"));
+    if (guess == "pl")
+        CHECK(logged("Language: the game's text is in Polish (pl), as expected"));
+    else
+        CHECK(logged("Language: the game's text is in Polish (pl); mods' text started in " + l10n::language_name(guess) +
+                     " this first time (from Windows' regional format), and follows it on every page"));
     CHECK(!logged("as last time"));
     std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
     return fails;
@@ -302,11 +311,27 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(forms("de", {0, 1, 2}) == "101" && forms("ja", {0, 1, 2, 100}) == "0000");
         CHECK(forms("pl", {-1, -2, -5}) == "012");
     }
+    // the first launch's guess, from the game's own table of Windows regional formats
+    CHECK(l10n::guess_from_windows(L"pl-PL") == "pl" && l10n::guess_from_windows(L"pl") == "pl");
+    CHECK(l10n::guess_from_windows(L"pt-PT") == "pt-BR" && l10n::guess_from_windows(L"pt-BR") == "pt-BR");
+    CHECK(l10n::guess_from_windows(L"es-ES") == "es-ES" && l10n::guess_from_windows(L"es") == "es-ES" &&
+          l10n::guess_from_windows(L"es-AR") == "es-MX" && l10n::guess_from_windows(L"es-MX") == "es-MX");
+    CHECK(l10n::guess_from_windows(L"en-US") == "en" && l10n::guess_from_windows(L"en-CA") == "en" &&
+          l10n::guess_from_windows(L"en-GB") == "en-GB" && l10n::guess_from_windows(L"en-IE") == "en-GB");
+    CHECK(l10n::guess_from_windows(L"fr-CA") == "fr" && l10n::guess_from_windows(L"de-AT") == "de" &&
+          l10n::guess_from_windows(L"ja-JP") == "ja" && l10n::guess_from_windows(L"ru-RU") == "ru");
+    CHECK(l10n::guess_from_windows(L"zh-TW") == "zh-Hant" && l10n::guess_from_windows(L"zh-Hant-HK") == "zh-Hant" &&
+          l10n::guess_from_windows(L"zh-CN") == "en");
+    CHECK(l10n::guess_from_windows(L"ko-KR") == "en" && l10n::guess_from_windows(L"nl-NL") == "en" &&
+          l10n::guess_from_windows(L"cs-CZ") == "en" && l10n::guess_from_windows(L"") == "en");
     // numbers and dates
     {
         CHECK(num("en", 1234.5, 1) == "1,234.5" && num("en", 1234567, 0) == "1,234,567" && num("en", 999, 2) == "999.00");
-        CHECK(num("pl", 1234.5, 1) == "1\xC2\xA0" "234,5" && num("pl", 1234567.891, 2) == "1\xC2\xA0" "234\xC2\xA0" "567,89");
-        CHECK(num("pt-BR", 1234.5, 1) == "1.234,5" && num("de", 1234567, 0) == "1.234.567" && num("es-ES", 1234.5, 1) == "1.234,5");
+        // Polish and Spain's Spanish group only from five digits (CLDR): 1234,5 but 12 345
+        CHECK(num("pl", 1234.5, 1) == "1234,5" && num("pl", 12345, 0) == "12\xC2\xA0" "345" &&
+              num("pl", 1234567.891, 2) == "1\xC2\xA0" "234\xC2\xA0" "567,89" && num("pl", -1234, 0) == "-1234");
+        CHECK(num("pt-BR", 1234.5, 1) == "1.234,5" && num("de", 1234567, 0) == "1.234.567" && num("es-ES", 1234.5, 1) == "1234,5" &&
+              num("es-ES", 12345.5, 1) == "12.345,5" && num("es", 1234, 0) == "1234");
         CHECK(num("es-MX", 1234.5, 1) == "1,234.5" && num("fr", 1234.5, 1) == "1\xC2\xA0" "234,5" && num("ru", 12345, 0) == "12\xC2\xA0" "345");
         CHECK(num("en", -1234.5, 1) == "-1,234.5" && num("pl", -0.04, 1) == "0,0" && num("en", 0.125, 7) == "0.125000");
         CHECK(num("en", INFINITY, 1) == "<none>" && num("en", NAN, 1) == "<none>");
@@ -362,7 +387,8 @@ int wmain(int argc, wchar_t** argv) {
     CHECK(std::string(l10n_tr_plural(&mod, "count.trees", "One tree broken", "{n} trees changed", 25)) == "{n} trees changed");
     CHECK(std::string(l10n_tr(nullptr, "x", "No mod")) == "No mod" && std::string(l10n_tr(&mod, "x", nullptr)).empty());
     char b[32];
-    CHECK(l10n_format_number(1234.5, 1, b, sizeof b) == 8 && std::string(b) == "1\xC2\xA0" "234,5");
+    CHECK(l10n_format_number(1234.5, 1, b, sizeof b) == 6 && std::string(b) == "1234,5");
+    CHECK(l10n_format_number(12345.5, 1, b, sizeof b) == 9 && std::string(b) == "12\xC2\xA0" "345,5");
     CHECK(l10n_format_date(2026, 11, 8, b, sizeof b) == 10 && std::string(b) == "08.11.2026");
     // Brazilian Portuguese, with a Portuguese catalogue and a Brazilian one; English for the rest
     CHECK(add(&mod, "pt", "msgctxt \"row.Trees.label\"\nmsgid \"Breakable trees\"\nmsgstr \"Árvores quebráveis\"\n\n"

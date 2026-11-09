@@ -451,7 +451,7 @@ int wmain(int argc, wchar_t** argv) {
                        "translated again") &&
               has(log, "[TestMod] stale: New English"));
         CHECK(has(log, "[TestMod] fuzzy: Not sure yet"));
-        CHECK(has(log, "[TestMod] number: 1\u00a0" "234,5, date: 08.11.2026"));
+        CHECK(has(log, "[TestMod] number: 12\u00a0" "345,5, date: 08.11.2026"));   // Polish groups from five digits
         // set_string_tr: each language's table in its own words
         CHECK(str("LoadingMessages.str", 0x5507) == L"A loading tip from TestMod");
         CHECK(str_in(L"PL", "LoadingMessages.str", 0x5507) == L"Wskaz\u00f3wka z TestMod");
