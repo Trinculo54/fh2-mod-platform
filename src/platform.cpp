@@ -27,6 +27,7 @@
 #include "seen.hpp"
 #include "strings.hpp"
 #include "text.hpp"
+#include "ui_templates.hpp"
 #include "updates.hpp"
 
 #ifdef _MSC_VER
@@ -1633,6 +1634,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.set_string_tr     = api_set_string_tr;
                 g_api.format_number     = l10n_format_number;
                 g_api.format_date       = l10n_format_date;
+                fill_ui_api(g_api);
                 return load_mods(nullptr);
             },
             nullptr, 0, nullptr))
