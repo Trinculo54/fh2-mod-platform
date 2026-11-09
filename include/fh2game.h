@@ -23,7 +23,7 @@
  * the exe on disk), and the mod that uses it. Names follow the game's own class and function
  * names, from its RTTI and strings, where there are some.
  *
- * The platform's own hook sites are at the end. Don't hook those.
+ * The platform's own sites are at the end. Don't hook those.
  */
 #ifndef FH2GAME_H
 #define FH2GAME_H
@@ -329,18 +329,30 @@
 
 /* ---- The platform's own ----------------------------------------------------------------------- */
 
-/* Hooked by the platform for the Mods page, its own pages, the MODS tab and the title-screen
- * entries: AVUI::Type::FindProperty game+0x157FF60; the pause and settings menus' tiles
- * 0xD9FC10, 0xDC8A60, 0xDC6C40, 0xDC6E30 and 0xD9F9F0; the HUD options page 0xB3A3E0 and
- * 0xB0B990; the Marketplace handlers 0xDBD720, 0xDBDD00, 0xDBDD60 and 0xDBFE40; the
- * Achievements tile's calls 0xDBD635 and 0xDBF185; and the title screen's buttons (Splash vtable
- * +0x578, game+0x2E53940); the HUD options page's vtable slots game+0x2DF06C0 and 0x2DF07B0; the
- * Marketplace tab's five byte patches; the media resolver's slot game+0x2E6EF28 (without Extra
- * Options); the pad layer's game+0x10768D0; for the HUD layer (preview) and for pop-ups and tips
- * (API 10, every session), the free-roam HUD's vtable slots +0x488, +0x4F8 and 0 (game+0x2DEFE50,
- * 0x2DEFEC0, 0x2DEF9C8); and for pop-ups and tips, the three calls of the minor-notification gate
- * game+0x754920 at game+0x75542C, 0x7555A5 and 0x750FB1; and the database guard (2.9.0, when the game reads a
- * database a car pack or mod changed), DriveTrainConverter's two type checks at game+0xB99CA0 and 0xB99D74. Don't
- * hook them: use the platform's settings, pages, title-screen entries and pop-ups instead. */
+/* Hooked, patched or called by the platform. Don't hook these, patch them or check their bytes in
+ * memory: use the platform's settings, pages, title-screen entries, pop-ups and HUD and pad layers
+ * instead. docs/game-notes.md ("Sites the platform hooks") says when each goes in.
+ *
+ * The menus, every session their code matches: AVUI::Type::FindProperty game+0x157FF60; the Settings
+ * page's tile wiring 0xDC8A60 (which calls 0xD9FC10, and its HUD tile 0xDC6C40); the HUD options
+ * page's scene record 0xB3A3E0 (its factory 0xB0B990 makes the page from it) and its vtable slots
+ * game+0x2DF06C0 (+0x488) and 0x2DF07B0 (+0x578); the pause menu's tile wiring 0xDC6E30 (which calls
+ * 0xD9F9F0); the Marketplace handlers 0xDBD720, 0xDBDD00, 0xDBDD60 and 0xDBFE40; and the Marketplace
+ * tab's five byte patches at 0xDDACAD, 0xDDAE1F, 0xDDB2F5, 0xDDB910 and 0xDDBB3E.
+ *
+ * When something needs them: the Achievements tile's calls 0xDBD635 and 0xDBF185 (a mod's page takes
+ * the tile); the title screen's buttons, Splash vtable +0x578 at game+0x2E53940 (a mod added an
+ * entry); the free-roam HUD's +0x488 slot game+0x2DEFE50 (the platform's notices on the HUD); and the
+ * media resolver's slot game+0x2E6EF28 (without Extra Options).
+ *
+ * New in 2.9.0, each only in a session that needs it: for pop-ups and tips (API 10, when a mod
+ * declared them with ui_uses, or with Developer=1), FH2_GAME_ACHIEVEMENTSMODULE_TICK_AT,
+ * FH2_GAME_HUD_NOTIFICATION_CTOR_AT and _DTOR_AT (shared with Achievements: instruction hooks there
+ * chain), the three calls of the minor-notification gate game+0x754920 at game+0x75542C, 0x7555A5 and
+ * 0x750FB1, and the free-roam HUD's vtable slots +0x488, +0x4F8 and 0 (game+0x2DEFE50, 0x2DEFEC0 and
+ * 0x2DEF9C8); for play_ui_sound from outside a mod's callbacks, the tick; for the HUD layer (preview,
+ * when a mod adds a layer), the tick and the same three HUD slots; for the pad layer (preview, when a
+ * mod adds one), game+0x10768D0; and for the database guard (when the game reads a database a car
+ * pack or mod changed), DriveTrainConverter's two type checks at game+0xB99CA0 and 0xB99D74. */
 
 #endif /* FH2GAME_H */

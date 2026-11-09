@@ -149,11 +149,37 @@ A mod that compares game code in memory switches its feature off when another mo
 | Achievements 1.0.x | Show `0x755330` and MakeDisplayString `0x323310`, 15 bytes each, once, at its first pop-up, with no fallback to the exe on disk |
 | FH2MP 1.2.0 | MakeDisplayString `0x323310`, 16 bytes, and about 85 other places, none near the platform's |
 | WreckingBall 1.0.0 to 1.3.0 | the code it hooks (`0x12CC730`, `0x1377B50`, `0x384C00` among them) and six vtable slots; 1.3.3 falls back to the exe on disk |
-| CCBR 1.0.0 | car code and seven `lea rdx` sites in `0x6A2AF7`-`0x6B992A` |
-| Universal Radio 1.0.0 to 1.7.1 | operator new's prologue `0x3229C0`, the PE headers and the FMOD exports |
+| CCBR 1.0.0 | car code (`0x289320`, `0x28C590`, `0x28D930`, `0xF5B420`-`0xF73080`, `0x190BF90`, `0x190BFD0`) and six `lea rdx` sites, 7 bytes each, from `0x6A2AF7` to `0x6B992A` |
+| Universal Radio 1.0.0 to 1.7.1 | operator new's prologue `0x3229C0`, the PE headers and the FMOD exports; its two radio call sites (`0x1018A13`, `0x10221F2`) only when it runs without the platform |
 | WheresMyBuddy 1.7.0 | the `ChampionshipDrivatarsState` vtable slot `0x2D44F30` |
 
-So Show's and MakeDisplayString's first 16 bytes must stay unpatched: call them, don't hook them.
+So Show's and MakeDisplayString's first 16 bytes must stay unpatched: call them, don't hook them. Achievements checks 15 bytes of each (the 16th of Show is a `push`, which a hook would move too), and FH2MP all 16 of MakeDisplayString. The 2.9.0 platform's sites were checked against every range above offline, with all of them in at once and every released mod's own hooks too, in both orders: none is refused and every check still matches. CommunityGarage 1.2.1, which calls Show and hooks the same three notification sites as Achievements, couldn't be checked that way, since neither its source nor its DLL was at hand.
+
+## Sites the platform hooks
+
+Every site below is the platform's own: don't hook it, patch it or check its bytes in memory, and use the API instead (settings, pages, title-screen entries, pop-ups, the HUD and pad layers). `include/fh2game.h` has the same list. Each one is checked against the exe on disk before it goes in, and turned off with a log line when it doesn't match. Instruction hooks at the same address chain, so the three sites Achievements also hooks (the tick and the notification's constructor and destructor) are shared rather than refused.
+
+| Site | What | Kind | In when | Since |
+|---|---|---|---|---|
+| `0x157FF60` | `AVUI::Type::FindProperty` | function | every session the menus' code matches | 2.3.0 |
+| `0xDC8A60` | the Settings page wiring its tiles (calls `0xD9FC10`, and the HUD tile `0xDC6C40`) | function | the same | 2.3.0 |
+| `0xB3A3E0` | the HUD options page's scene record (its factory `0xB0B990` makes the page from it) | function | the same | 2.3.0 |
+| `0x2DF06C0`, `0x2DF07B0` | the HUD options page's vtable `+0x488` (loaded) and `+0x578` (buttons) | pointer | the MODS tab | 2.5.0 |
+| `0xDC6E30` | the pause menu wiring its tiles (calls `0xD9F9F0`) | function | the MODS tab | 2.5.0 |
+| `0xDBD720`, `0xDBDD00`, `0xDBDD60`, `0xDBFE40` | the Marketplace tab's tile handlers | function | the MODS tab | 2.5.0 |
+| `0xDDACAD`, `0xDDAE1F`, `0xDDB2F5`, `0xDDB910`, `0xDDBB3E` | the code that hides the Marketplace tab | byte patch | the MODS tab | 2.5.0 |
+| `0xDBD635`, `0xDBF185` | the Achievements tiles' calls | call | a mod's page takes the tile | 2.7.0 |
+| `0x2E53940` | the title screen's buttons (`Splash` vtable `+0x578`) | pointer | a mod added a title-screen entry | 2.8.0 |
+| `0x2DEFE50` | the free-roam HUD shown (`Hud` vtable `+0x488`) | pointer | the platform's notices on the HUD (the mods loaded, NEW MOD, a mod that didn't load) | 2.5.0 |
+| `0x2E6EF28` | the file system's resolver slot, written directly | slot | Extra Options isn't loaded | 2.7.3 |
+| `0x3FCD84` | the AchievementsModule's tick | instruction (shared) | a mod declared pop-ups or tips, or `Developer=1`; or a mod plays a UI sound from outside its callbacks; or a mod has a HUD layer | 2.9.0 |
+| `0x73E0B1`, `0x73F046` | the HUD notification component's constructor and destructor | instruction (shared) | a mod declared pop-ups or tips, or `Developer=1` | 2.9.0 |
+| `0x75542C`, `0x7555A5`, `0x750FB1` | the three calls of the minor-notification gate `0x754920`, in Show, its sibling and the reflected Show | call | the same | 2.9.0 |
+| `0x2DEFE50`, `0x2DEFEC0`, `0x2DEF9C8` | the free-roam HUD's vtable `+0x488` (shown), `+0x4F8` (hidden) and slot 0 (its destructor) | pointer | the same, or a mod has a HUD layer | 2.9.0 |
+| `0x10768D0` | the controller manager's "release taken controls", right after each frame's reading | function | a mod added a pad layer | 2.9.0 |
+| `0xB99CA0`, `0xB99D74` | `DriveTrainConverter`'s two type checks (the database guard) | instruction | the game reads a database a car pack or mod changed | 2.9.0 |
+
+"Since" is the release that first hooked the site. A 2.9.0 session without a mod that declares pop-ups or tips, plays UI sounds from outside its callbacks, or adds a HUD or pad layer, and without a database changed by a car pack or mod, hooks only what 2.8.0 hooked.
 
 ## Finding more
 
