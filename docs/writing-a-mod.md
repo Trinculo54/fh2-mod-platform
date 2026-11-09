@@ -81,7 +81,7 @@ If two mods set the same key, the one loaded later wins, in alphabetical order o
 
 `set_notice(mod, "line one\nline two")` puts lines under "PRESS (A) TO START" on the title screen, together with every other mod's. Players see it each time the game starts, so use it for things they need to know, not for status chatter. There's room for about 40 characters per line, and empty lines are dropped. `set_notice(mod, nullptr)` clears yours.
 
-You don't need it for updates: register with `github_repo` and the platform checks your latest GitHub release (at most every six hours, remembered between launches, and again straight away when a different version of your mod is installed) and adds "MyMod 1.1.0 is available" itself when it's newer than your `version`. It compares `x.y.z` numbers, with or without a leading `v`, so tag releases to match your version. It also adds "Old FH2 Mod Platform: reinstall MyMod" when the installed platform is older than your `platform_version`.
+You don't need it for updates: register with `github_repo` and the platform checks your latest GitHub release (at most every six hours, remembered between launches, and again straight away when a different version of your mod is installed) and adds "MyMod 1.1.0 is out: Pause > MODS > UPDATES" itself when it's newer than your `version` ("MyMod 1.1.0 is available" up to platform 2.8.0). It compares `x.y.z` numbers, with or without a leading `v`, so tag releases to match your version. It also adds "Old FH2 Mod Platform: reinstall MyMod" when the installed platform is older than your `platform_version`.
 
 From platform 2.8.0 (API 9), `add_title_entry` adds a line there with a button of its own, like "(Y) START ON STORM ISLAND", and calls your code when the player presses it. Your code can have the platform start the game straight after, and `title_started_by` then tells your mod that this start was its entry's. There are four buttons for every mod together, so add one entry at most. [`api.md`](api.md#title-screen-entries-api-9) has the details.
 
@@ -136,9 +136,13 @@ If players will want to turn parts of your mod on and off, or tune a number, giv
 
 For your README, a sentence players can follow: "In game: Pause > MODS > YOUR MODS > MyMod (Pause > Settings > MODS opens the same list)."
 
+## Text in the player's language
+
+From platform 2.9.0 (API 10), your rows, pages, title-screen lines and pop-ups can be in the language the game shows. Write the English with a key for each text (`FH2_TR(api, g_mod, "row.Trees.label", "Breakable trees")`, from [`include/fh2mod_l10n.h`](../include/fh2mod_l10n.h), which gives the English on an older platform), list them for translators with `tools/l10n/extract.py`, and build their PO files into your DLL with `tools/l10n/po2inc.py`. Text you pass on as `FH2_TR` gave it follows the game's language by itself, even though the game picks it after `fh2mod_init`. [`translating.md`](translating.md) has the whole workflow, for you and for your translators. To find text that's cut off or never translated, put `test=1` in `fh2-mods\platform-language.ini`: every translatable text then shows padded and in brackets.
+
 ## Showing things to the player
 
-From platform 2.9.0 (API 10) a mod never needs XAML to tell the player something: the UI templates are pieces of the game's own UI that you fill with text, and the platform draws them in the game's look, decides when they show and logs what they showed. [`api.md`](api.md#ui-templates-api-10) has every call in full, and marks the ones still being built in this test build.
+From platform 2.9.0 (API 10) a mod never needs XAML to tell the player something: the UI templates are pieces of the game's own UI that you fill with text, and the platform draws them in the game's look, decides when they show and logs what they showed. [`api.md`](api.md#ui-templates-api-10) has every call in full. The rows marked 2.9.1 and 2.9.x below are planned, not in 2.9.0.
 
 | You want to | Use | Since |
 |---|---|---|
@@ -153,7 +157,7 @@ From platform 2.9.0 (API 10) a mod never needs XAML to tell the player something
 | Show a state that lasts while driving (a ghost, a score) | a card or status line | 2.9.1 |
 | Acknowledge a press within a tenth of a second | a chip or status line | 2.9.1 |
 | Count down to something | `show_countdown` | 2.9.x |
-| Run a mode with its own controls | the HUD layer | 2.9.x |
+| Run a mode with its own controls | the HUD layer and pad layer previews (below); an API for them later | 2.9.0 (preview) |
 | Watch numbers while testing | `set_overlay_text` | 2.9.x |
 
 Use [`include/fh2mod_ui.h`](../include/fh2mod_ui.h): each call there is the API member without `api` and `mod`, and does nothing (returning 0) on a platform older than 2.9.0, so your mod needs no version checks. [`include/fh2mod_l10n.h`](../include/fh2mod_l10n.h)'s `FH2_TR` gives the text in the player's language. Set both up once in `fh2mod_init`, and say what you'll use there too: the platform only hooks the game's notification in a session where a mod has declared pop-ups or tips.
@@ -265,7 +269,7 @@ fh2ui_set_page_hints("Main", hints, 2);           // in fh2mod_init or the page'
 
 ## A HUD of your own (preview)
 
-A test build of the platform, "2.8.0 + HUD layer preview 3", lets a mod show a bar, labels and button prompts of its own in the game's free-roam HUD, drawn by the game's UI in its own look. It's only in that build, for the testers of a mod that needs it, and it will change before it joins the API. [`hud-layer-preview.md`](hud-layer-preview.md) has how to use it, and how to carry on without it everywhere else.
+From platform 2.9.0, the `FH2Platform.HudLayer` interface lets a mod show a bar, labels, button prompts and a feed of its own in the game's free-roam HUD, drawn by the game's UI in its own look, and `FH2Platform.PadLayer` lets it have some controller buttons to itself while the player holds a modifier. Both are previews: they aren't part of the API yet, they'll change before they join it, and platform 2.8.0 and older don't have them, so your mod has to carry on without them. [`hud-layer-preview.md`](hud-layer-preview.md) and [`pad-layer-preview.md`](pad-layer-preview.md) have how to use them. One layer is on screen at a time, so if your mod could use the HUD layer, ask first.
 
 ## Your own files
 
