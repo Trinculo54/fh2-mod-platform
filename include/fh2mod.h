@@ -565,7 +565,8 @@ typedef struct FH2ModApi {
        language: the language text is looked up in, as a BCP-47 tag: "en",
        "en-GB", "pl", "pt-BR", "de", "fr", "es-ES", "es-MX", "it", "ja", "ko",
        "zh-Hant", "cs", "hu", "ru", "nl" (the game's language once it has one;
-       before that, the one it had last time; else "en"), or "qps" for the
+       before that, the one it had last time; the first time, the one the
+       game picks for Windows' regional format), or "qps" for the
        test language (padded text in [brackets], turned on by test=1 in
        fh2-mods\platform-language.ini). Any thread, fh2mod_init included.
 
@@ -601,8 +602,9 @@ typedef struct FH2ModApi {
        set_string.
 
        format_number: `v` with `decimals` digits after the point (0 to 6),
-       the way the language writes numbers: 1,234.5 in English, 1 234,5 in
-       Polish (a no-break space), 1.234,5 in Brazilian Portuguese and German.
+       the way the language writes numbers: 1,234.5 in English, 12 345,5 in
+       Polish (a no-break space; 1234,5 with four digits, as CLDR has it),
+       1.234,5 in Brazilian Portuguese and German.
        format_date: a date, 24.10.2026 in Polish and German, 24/10/2026 in
        Portuguese, French, Spanish and Italian, and 2026-10-24 in English.
        Both write UTF-8 to `out` and return its length, or 0 (with "" in
