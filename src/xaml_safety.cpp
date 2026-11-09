@@ -9,6 +9,9 @@
 // Resources\*ResourceDictionary.xaml, which no page merges.
 #include "xaml_safety.hpp"
 
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 
@@ -318,6 +321,15 @@ std::vector<TextureSpot> texture_spots(std::string_view path) {
     return {};
 }
 
+std::string loose_texture_path(const TextureSpot& s) {
+    std::string zip = s.zip;
+    if (ends_ci(zip, ".zip")) zip.resize(zip.size() - 4);
+    std::string p = "ui\\textures\\" + zip + "\\" + s.entry;
+    for (char& c : p)
+        if (c == '/') c = '\\';
+    return p;
+}
+
 bool check_page_fragment(const AppKeys& app, std::string_view resources, std::string_view content, std::string_view help,
                          const TextureLookup& textures, FragmentCheck& out, std::string& why) {
     out = FragmentCheck{};
@@ -384,17 +396,21 @@ bool check_page_fragment(const AppKeys& app, std::string_view resources, std::st
                          ", isn't one of the game's texture paths (\"/ForzaUI;component/Textures/<folder>/<name>.png\")",
                    false;
         int found = -1;
+        std::string missing;   // the zips that were read and don't have it, for the reason
         for (const TextureSpot& s : spots) {
             const int r = textures ? textures(s) : -1;
             if (r == 1) {
                 found = 1;
                 break;
             }
-            if (r == 0) found = 0;
+            if (r == 0) {
+                found = 0;
+                missing += (missing.empty() ? "media\\ui\\textures\\" : ", nor media\\ui\\textures\\") + s.zip + " has no " + s.entry;
+            }
         }
         if (found == 0)
-            return why = "the image \"" + u.what + "\", in the " + u.part + ", isn't one of the game's textures (media\\ui\\textures\\" +
-                         spots.front().zip + " has no " + spots.front().entry + ")",
+            return why = "the image \"" + u.what + "\", in the " + u.part + ", isn't one of the game's textures (" + missing +
+                         ", and no media folder has it as " + loose_texture_path(spots.back()) + ")",
                    false;
         seen[u.what] = found;
         ++out.images;
@@ -424,6 +440,8 @@ std::vector<GuardEntry> parse_guard(std::string_view text) {
         }
         if (f.size() < 4 || (f[0] != "opening" && f[0] != "skip") || f[1].empty() || f[2].empty()) continue;
         GuardEntry e{f[0], f[1], f[2], f[3], f.size() > 4 ? f[4] : ""};
+        if (f.size() > 5) e.sessions = std::max(1, std::atoi(f[5].c_str()));
+        if (f.size() > 6) e.marked = std::strtoull(f[6].c_str(), nullptr, 16);
         bool dup = false;
         for (GuardEntry& o : out)
             if (lowered(o.dll) == lowered(e.dll) && o.page == e.page) o = e, dup = true;   // the last one counts
@@ -435,13 +453,19 @@ std::vector<GuardEntry> parse_guard(std::string_view text) {
 std::string guard_text(const std::vector<GuardEntry>& entries) {
     std::string s = "# FH2 Mod Platform: pages of the mods' own design that were opening when the game stopped, and ones left out\r\n"
                     "# since, until their mod's DLL changes (platform.log says why). Delete a line to try that page again.\r\n";
-    for (const GuardEntry& e : entries) s += e.state + "\t" + e.dll + "\t" + e.page + "\t" + e.stamp + "\t" + e.date + "\r\n";
+    for (const GuardEntry& e : entries) {
+        char tail[48];
+        std::snprintf(tail, sizeof tail, "\t%d\t%016llX\r\n", e.sessions, static_cast<unsigned long long>(e.marked));
+        s += e.state + "\t" + e.dll + "\t" + e.page + "\t" + e.stamp + "\t" + e.date + tail;
+    }
     return s;
 }
 
 std::vector<GuardEntry> guard_at_start(const std::vector<GuardEntry>& last, const std::function<std::string(const std::string&)>& stamp_of,
+                                       const CrashReport& newest, std::uint64_t file_time, std::vector<GuardEntry>& carried,
                                        std::vector<std::string>& lines) {
     std::vector<GuardEntry> out;
+    carried.clear();
     for (GuardEntry e : last) {
         const std::string now = stamp_of ? stamp_of(e.dll) : std::string();
         const std::string page = e.dll + "'s page " + e.page;
@@ -455,9 +479,23 @@ std::vector<GuardEntry> guard_at_start(const std::vector<GuardEntry>& last, cons
             continue;
         }
         if (e.state == "opening") {
-            e.state = "skip";
-            lines.push_back("the game stopped while " + page + " was opening last session, which most likely means it crashed loading it; "
-                            "the page is left out until " + e.dll + " changes (an update or a reinstall)");
+            // as the HUD layer's crash marker: a crash report since the mark, or two sessions running
+            const std::uint64_t marked = e.marked ? e.marked : file_time;
+            if (!newest.name.empty() && newest.time > marked) {
+                e.state = "skip";
+                lines.push_back("the game crashed while " + page + " was opening last session (crash report " + newest.name +
+                                "); the page is left out until " + e.dll + " changes (an update or a reinstall)");
+            } else if (e.sessions >= 2) {
+                e.state = "skip";
+                lines.push_back("the game stopped while " + page + " was opening in " + std::to_string(e.sessions) +
+                                " sessions running, and it was never up for 10 s; the page is left out until " + e.dll +
+                                " changes (an update or a reinstall)");
+            } else {
+                carried.push_back(e);
+                lines.push_back("the game stopped while " + page + " was opening last session, but there's no crash report since, so the "
+                                "page stays in (it's left out if the game crashes opening it, or stops while it's opening again this session)");
+                continue;
+            }
         } else {
             lines.push_back(page + " is still left out: the game stopped while it was opening" + (e.date.empty() ? "" : " on " + e.date) +
                             ", and " + e.dll + " hasn't changed since");

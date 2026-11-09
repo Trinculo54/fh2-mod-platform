@@ -18,7 +18,8 @@ namespace fh2platform {
 bool page_fragment_ok(const char* resources, const char* content, const char* help, std::string& why);
 
 // The crash guard. page_guard_start reads last session's fh2-mods\platform-pages.txt as the menus are written: a
-// page that was opening when the game stopped is left out from now on, until its mod's DLL changes.
+// page that was opening when the game stopped is left out from now on, until its mod's DLL changes, if there's a
+// crash report since (fh2-mods\crashes) or it was left opening in two sessions running; otherwise it stays in.
 void page_guard_start();
 // Whether `page` of `mod` is left out this session.
 bool page_guard_skipped(const FH2Mod* mod, const std::string& page);

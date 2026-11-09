@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <set>
 #include <string>
@@ -55,9 +56,13 @@ struct TextureSpot {
 // The places, in the order the game tries them (Data_Bound has its own zips and one of its own); empty if `path`
 // isn't one of the game's texture paths.
 std::vector<TextureSpot> texture_spots(std::string_view path);
-// Whether a zip holds an entry: 1 it does, 0 it doesn't, -1 the zip can't be read. Entries compare in any case,
-// with / and \ the same.
+// Whether the game has a texture at a spot: 1 it does, 0 it doesn't, -1 the zip can't be read. Entries compare in any
+// case, with / and \ the same. The game also reads a texture as a loose file, in any media folder it reads
+// (page_guard.cpp looks in each): loose_texture_path gives the spot's path under such a folder.
 using TextureLookup = std::function<int(const TextureSpot&)>;
+// "ui\textures\<the zip's path without .zip>\<entry>", with \ throughout: "ui\textures\data_bound\ControllerIcons\
+// Medium\A.swatchbin" for data_bound\ControllerIcons.zip's Medium/A.swatchbin.
+std::string loose_texture_path(const TextureSpot& s);
 
 struct FragmentCheck {
     std::size_t keys_used    = 0;   // distinct resource keys the fragment uses
@@ -78,18 +83,33 @@ bool check_page_fragment(const AppKeys& app, std::string_view resources, std::st
 
 // fh2-mods\platform-pages.txt: a page of a mod's own design that was opening when the game stopped, or one that's
 // left out because of that. One a line, tab-separated: state, the mod's DLL file name, the page's key, the DLL's
-// stamp (its size and time, so an update or reinstall shows) and the date.
+// stamp (its size and time, so an update or reinstall shows), the date, then (from 2.9.0's second form) how many
+// sessions running the page was left opening and when the mark was made (UTC, a FILETIME in hex). Lines without the
+// last two count as one session, marked when the file was last written.
 struct GuardEntry {
     std::string state;   // "opening" or "skip"
     std::string dll, page, stamp, date;
+    int sessions        = 1;   // sessions running that ended while the page was opening, this one's mark included
+    std::uint64_t marked = 0;  // when the "opening" mark was made: a FILETIME (UTC), 0 if the line doesn't say
 };
 std::vector<GuardEntry> parse_guard(std::string_view text);
 std::string guard_text(const std::vector<GuardEntry>& entries);
 
-// Last session's entries as this session starts: a page still "opening" (the game stopped while loading it: a crash,
-// most likely) is skipped from now on, and a skip lasts until its DLL changes. `stamp_of` gives a DLL's stamp now
+// The newest crash report in fh2-mods\crashes (crash-*.txt): its last-write time as a FILETIME (UTC) and its name, or
+// 0 and "" for none.
+struct CrashReport {
+    std::uint64_t time = 0;
+    std::string name;
+};
+
+// Last session's entries as this session starts, by the rule the HUD layer's crash marker has. A page still
+// "opening" is left out only with something to show the game went down loading it: a crash report newer than the
+// mark (`file_time`, the guard file's last-write time, stands in for a line without one), or the same page left
+// opening in two sessions running. Otherwise the mark is dropped, and it goes into `carried`, so a mark this session
+// counts it (page_guard_opening). A page left out stays so until its DLL changes. `stamp_of` gives a DLL's stamp now
 // ("" if it's gone). `lines` gets a log line for each entry.
 std::vector<GuardEntry> guard_at_start(const std::vector<GuardEntry>& last, const std::function<std::string(const std::string&)>& stamp_of,
+                                       const CrashReport& newest, std::uint64_t file_time, std::vector<GuardEntry>& carried,
                                        std::vector<std::string>& lines);
 
 } // namespace fh2platform

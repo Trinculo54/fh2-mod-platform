@@ -308,18 +308,24 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (phase == L"crash-chained") SetUnhandledExceptionFilter(after_chained_crash);
     if (phase == L"full") {
-        // The page crash guard (platform 2.9.0): as if the game had stopped while TestMod's page Crashy was opening
-        // (TestMod.dll as it is now), and while Stats was opening in an older TestMod.dll; and a note about a mod
-        // that's gone. The stamp is page_guard.cpp's: the DLL's size, then its last-write time in hex.
+        // The page crash guard (platform 2.9.0): as if the game had crashed while TestMod's page Crashy was opening
+        // (TestMod.dll as it is now: a crash report newer than the mark, made in 2015), had stopped while Other was
+        // opening with no crash report since (marked in 2286), and while Stats was opening in an older TestMod.dll; and
+        // a note about a mod that's gone. The stamp is page_guard.cpp's: the DLL's size, then its last-write time in
+        // hex. The "removed" phase takes the crash report away again.
         WIN32_FILE_ATTRIBUTE_DATA a{};
         GetFileAttributesExW(L"fh2-mods\\TestMod.dll", GetFileExInfoStandard, &a);
         char stamp[64];
         std::snprintf(stamp, sizeof stamp, "%llu-%08lX%08lX", (static_cast<unsigned long long>(a.nFileSizeHigh) << 32) | a.nFileSizeLow,
                       a.ftLastWriteTime.dwHighDateTime, a.ftLastWriteTime.dwLowDateTime);
         std::ofstream{"fh2-mods\\platform-pages.txt", std::ios::binary}
-            << "# written by the test\r\nopening\tTestMod.dll\tCrashy\t" << stamp << "\t2026-11-07\r\nopening\ttestmod.dll\tStats\t1-0000000000000000\t2026-11-06\r\n"
-            << "skip\tGone.dll\tList\t1-1\t2026-11-01\r\n";
+            << "# written by the test\r\nopening\tTestMod.dll\tCrashy\t" << stamp << "\t2026-11-07\t1\t01D0000000000000\r\n"
+            << "opening\tTestMod.dll\tOther\t" << stamp << "\t2026-11-07\t1\t0300000000000000\r\n"
+            << "opening\ttestmod.dll\tStats\t1-0000000000000000\t2026-11-06\r\nskip\tGone.dll\tList\t1-1\t2026-11-01\r\n";
+        fs::create_directories("fh2-mods\\crashes");
+        std::ofstream{"fh2-mods\\crashes\\crash-page-guard-test.txt"} << "a crash report, as far as the page crash guard can tell\n";
     }
+    if (phase == L"removed") fs::remove("fh2-mods\\crashes\\crash-page-guard-test.txt");
     if (phase == L"full" && own_layer()) {   // a save, for the snapshot TestMod asks for (platform 2.8.0)
         fs::create_directories(L"data\\titles\\1A96545B\\saves\\1A96545B");
         std::ofstream{"data\\titles\\1A96545B\\saves\\1A96545B\\test.sav", std::ios::binary} << "save data";
@@ -443,14 +449,18 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(log, "set_page_xaml: pages of a mod's own design aren't checked this session, because AnthemApp.xaml couldn't be read from UI.zip"));
             CHECK(has(log, "[TestMod] Design's XAML was taken"));
         }
-        // the page crash guard: Crashy was opening when the game last stopped, so it's left out; Stats was too, but in a
-        // TestMod.dll that has changed since, so it gets another try
-        CHECK(has(log, "pages: the game stopped while TestMod.dll's page Crashy was opening last session, which most likely means it crashed "
-                       "loading it; the page is left out until TestMod.dll changes (an update or a reinstall)"));
+        // the page crash guard: the game crashed while Crashy was opening, so it's left out; it stopped while Other was
+        // opening, with no crash report since, so that stays in; Stats was opening too, but in a TestMod.dll that has
+        // changed since, so it gets another try
+        CHECK(has(log, "pages: the game crashed while TestMod.dll's page Crashy was opening last session (crash report crash-page-guard-test.txt); "
+                       "the page is left out until TestMod.dll changes (an update or a reinstall)"));
+        CHECK(has(log, "pages: the game stopped while TestMod.dll's page Other was opening last session, but there's no crash report since, so "
+                       "the page stays in"));
         CHECK(has(log, "pages: testmod.dll has changed since testmod.dll's page Stats was opening when the game stopped, so the page gets another try"));
         CHECK(has(log, "pages: Gone.dll isn't in fh2-mods any more, so the note about Gone.dll's page List is dropped"));
         const std::string guard = slurp("fh2-mods\\platform-pages.txt");
-        CHECK(has(guard, "\r\nskip\tTestMod.dll\tCrashy\t") && has(guard, "\t2026-11-07\r\n") && !has(guard, "Stats") && !has(guard, "Gone.dll"));
+        CHECK(has(guard, "\r\nskip\tTestMod.dll\tCrashy\t") && has(guard, "\t2026-11-07\t1\t01D0000000000000\r\n") && !has(guard, "Stats") &&
+              !has(guard, "Gone.dll") && !has(guard, "\tOther\t"));
         // title-screen entries (API 9)
         CHECK(has(log, "[TestMod] title-screen entry: (Y) DRIVE THE TEST GARAGE") &&
               has(log, "[TestMod] title-screen entry: (X) SECOND ENTRY (a list of 2)"));

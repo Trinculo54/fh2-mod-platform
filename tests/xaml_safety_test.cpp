@@ -72,13 +72,22 @@ std::string lower_slash(std::string s) {
     return s;
 }
 
-// What page_guard.cpp does with the game folder: each texture zip's directory, read once.
+// What page_guard.cpp does with the game folder: each texture zip's directory, read once, then a loose file in each
+// media folder.
 struct Media {
     fs::path root;   // the media folder
+    std::vector<fs::path> loose = {};   // the media folders a loose texture is looked for in
     std::vector<char> ui;
     std::map<std::string, std::pair<bool, std::set<std::string>>> zips;
     int reads = 0;   // texture zips read
     int texture(const TextureSpot& s) {
+        const int z = in_zip(s);
+        if (z == 1) return 1;
+        for (const fs::path& l : loose)
+            if (fs::is_regular_file(l / loose_texture_path(s))) return 1;
+        return z;
+    }
+    int in_zip(const TextureSpot& s) {
         auto it = zips.find(lower_slash(s.zip));
         if (it == zips.end()) {
             std::vector<std::string> names;
@@ -178,6 +187,13 @@ void fake_media(const fs::path& root) {
     write_zip(root / "ui" / "textures" / "Anthem.zip", {{"Icons\\Trophy_Icon_Medium.swatchbin", "burG"}, {"Icons/PauseMenu/Lock_Large.swatchbin", "burG"}});
     write_zip(root / "ui" / "textures" / "data_bound" / "ControllerIcons.zip", {{"Medium/A.swatchbin", "burG"}});
     write_zip(root / "ui" / "textures" / "Data_Bound.zip", {{"Logo_FM.swatchbin", "burG"}});
+    // loose textures: one the game ships loose in media (a Data_Bound folder with no zip of its own), and one a mod
+    // set_file'd into mediaoverride
+    fs::create_directories(root / "ui" / "textures" / "data_bound" / "ContentOffers");
+    std::ofstream{root / "ui" / "textures" / "data_bound" / "ContentOffers" / "Feature.swatchbin", std::ios::binary} << "burG";
+    const fs::path over = root.parent_path() / "fake-mediaoverride" / "UI" / "textures" / "Anthem" / "Icons";
+    fs::create_directories(over);
+    std::ofstream{over / "Mod_Icon.swatchbin", std::ios::binary} << "burG";
 }
 
 void zips_and_keys(Media& m, AppKeys& app) {
@@ -220,6 +236,10 @@ void spots() {
     check(db.size() == 2 && db[0].zip == "data_bound\\ControllerIcons.zip" && db[0].entry == "Medium/A.swatchbin" && db[1].zip == "Data_Bound.zip" &&
               db[1].entry == "ControllerIcons/Medium/A.swatchbin",
           "Data_Bound: its folder's own zip first, then Data_Bound.zip");
+    check(loose_texture_path(db[0]) == "ui\\textures\\data_bound\\ControllerIcons\\Medium\\A.swatchbin" &&
+              loose_texture_path(db[1]) == "ui\\textures\\Data_Bound\\ControllerIcons\\Medium\\A.swatchbin" &&
+              loose_texture_path({"Anthem.zip", "Icons/X.swatchbin"}) == "ui\\textures\\Anthem\\Icons\\X.swatchbin",
+          "a spot as a loose file: ui\\textures\\<the zip's path without .zip>\\<entry>, with \\ throughout");
     bool none = true;
     for (const char* p : {"Images/x.png", "/Textures/Anthem/x.jpg", "pack://siteoforigin:,,,/Textures/Anthem/x.png", "/Textures/Backgrounds/x.png",
                           "/Textures/Anthem/../x.png", "/Textures/Anthem//x.png", "/Textures/x.png", "C:\\Users\\me\\x.png", "/Textures/Anthem/.png"})
@@ -285,8 +305,15 @@ void fragments(Media& m, const AppKeys& app) {
           "a key from inside a game Style's own resources: refused");
     check(refused("", "<Image Source=\"/ForzaUI;component/Textures/Anthem/Icons/Nope.png\" />", "",
                   "the image \"/ForzaUI;component/Textures/Anthem/Icons/Nope.png\", in the content, isn't one of the game's textures "
-                  "(media\\ui\\textures\\Anthem.zip has no Icons/Nope.swatchbin)"),
-          "an image that isn't in its zip: refused, naming the path, the zip and the entry");
+                  "(media\\ui\\textures\\Anthem.zip has no Icons/Nope.swatchbin, and no media folder has it as "
+                  "ui\\textures\\Anthem\\Icons\\Nope.swatchbin)"),
+          "an image that isn't in its zip or loose: refused, naming the path, the zip, the entry and the loose file");
+    check(check_page_fragment(app, "", "<local:FZMaterial ImageSource=\"/ForzaUI;component/Textures/Anthem/Icons/Mod_Icon.png\" />", "", tex, c, why) &&
+              c.images == 1 && c.images_unchecked == 0,
+          "a texture that's a loose file in another media folder (a mod's set_file in mediaoverride) is found");
+    check(check_page_fragment(app, "", "<Image Source=\"/Textures/Data_Bound/contentoffers/Feature.png\" />", "", tex, c, why) && c.images == 1 &&
+              c.images_unchecked == 0,
+          "a texture the game has loose in media (a Data_Bound folder with no zip), in another case, is found");
     check(refused("<Setter Property=\"ImageSource\" Value=\"Images/mine.png\" />", "", "",
                   "the image \"Images/mine.png\", in the resources, isn't one of the game's texture paths"),
           "an image path in another form: refused");
@@ -297,8 +324,17 @@ void fragments(Media& m, const AppKeys& app) {
     check(refused("<ImageSource x:Key=\"Mod_Glyph\">/ForzaUI;component/Textures/Anthem/Icons/Gone.png</ImageSource>", "", "",
                   "the image \"/ForzaUI;component/Textures/Anthem/Icons/Gone.png\", in the resources,"),
           "a path as an element's text (<ImageSource x:Key=...>path</ImageSource>) is checked too");
-    check(refused("", "<Image Source=\"/Textures/Data_Bound/Nowhere/x.png\" />", "", "data_bound\\Nowhere.zip has no x.swatchbin"),
-          "a Data_Bound folder without a zip, and not in Data_Bound.zip either: refused");
+    {
+        std::string w;
+        FragmentCheck cc;
+        const bool ok = !check_page_fragment(app, "", "<Image Source=\"/Textures/Data_Bound/Nowhere/x.png\" />", "", tex, cc, w) &&
+                        w.find("(media\\ui\\textures\\Data_Bound.zip has no Nowhere/x.swatchbin, and no media folder has it as "
+                               "ui\\textures\\Data_Bound\\Nowhere\\x.swatchbin)") != std::string::npos &&
+                        w.find("Nowhere.zip") == std::string::npos;
+        if (!ok) std::printf("     why: %s\n", w.c_str());
+        check(ok, "a Data_Bound folder without a zip, and not in Data_Bound.zip or loose either: refused, naming Data_Bound.zip (the zip "
+                  "that was read), not the folder's zip that isn't there");
+    }
     check(refused("", "<Grid><Button></Grid>", "", "the tags in the content don't balance: </Grid> closes <Button>"), "tags that don't balance: refused");
 
     // a zip that can't be read: the image is let through, and counted as unchecked
@@ -322,41 +358,69 @@ void guard() {
         "nonsense line\r\n"
         "skip\t\tNoDll\t1-1\t\r\n"
         "maybe\tX.dll\tP\t1-1\t\r\n"
-        "skip\tother.DLL\tList\t200-02\t2026-11-03\r\n";
+        "skip\tother.DLL\tList\t200-02\t2026-11-03\r\n"
+        "opening\tTestMod.dll\tQuiet\t100-01D9\t2026-11-08\t1\t01DD000000000300\r\n"
+        "opening\tTestMod.dll\tTwice\t100-01D9\t2026-11-08\t2\t01DD000000000300\r\n";
     const std::vector<GuardEntry> e = parse_guard(text);
-    check(e.size() == 4 && e[0].state == "opening" && e[0].dll == "TestMod.dll" && e[0].page == "Stats" && e[0].stamp == "100-01D9" &&
+    check(e.size() == 6 && e[0].state == "opening" && e[0].dll == "TestMod.dll" && e[0].page == "Stats" && e[0].stamp == "100-01D9" &&
               e[0].date == "2026-11-08",
-          "the guard's file is read: four usable lines, the others left out");
+          "the guard's file is read: six usable lines, the others left out");
     check(e[1].dll == "other.DLL" && e[1].date == "2026-11-03", "the same DLL (in any case) and page twice: the last line counts");
+    check(e[0].sessions == 1 && e[0].marked == 0 && e[4].page == "Quiet" && e[4].sessions == 1 && e[4].marked == 0x01DD000000000300ull &&
+              e[5].sessions == 2,
+          "a line in the first form counts as one session with no time; the second form's count and time are read");
     const std::map<std::string, std::string> now = {{"TestMod.dll", "100-01D9"}, {"other.dll", "200-02"}, {"Changed.dll", "300-99"}};
+    const auto stamp_of = [&](const std::string& dll) {
+        for (const auto& [k, v] : now)
+            if (lower_slash(k) == lower_slash(dll)) return v;
+        return std::string();
+    };
     std::vector<std::string> lines;
-    const std::vector<GuardEntry> after = guard_at_start(
-        e,
-        [&](const std::string& dll) {
-            for (const auto& [k, v] : now)
-                if (lower_slash(k) == lower_slash(dll)) return v;
-            return std::string();
-        },
-        lines);
-    check(after.size() == 2 && after[0].state == "skip" && after[0].dll == "TestMod.dll" && after[0].date == "2026-11-08" && after[1].state == "skip" &&
-              after[1].dll == "other.DLL",
-          "a page still opening is left out from now on, and a left-out one stays so while its DLL is the same");
     auto said = [&](const std::string& part) {
         for (const auto& l : lines)
             if (l.find(part) != std::string::npos) return true;
         return false;
     };
-    check(said("the game stopped while TestMod.dll's page Stats was opening last session, which most likely means it crashed loading it; "
+
+    // a crash report newer than Stats's mark (the file's time, as its line has none), older than Quiet's
+    std::vector<GuardEntry> carried;
+    const std::vector<GuardEntry> after =
+        guard_at_start(e, stamp_of, {0x01DD000000000200ull, "crash-2026-11-08-120000.txt"}, 0x01DD000000000150ull, carried, lines);
+    check(after.size() == 3 && after[0].state == "skip" && after[0].page == "Stats" && after[0].date == "2026-11-08" && after[1].state == "skip" &&
+              after[1].dll == "other.DLL" && after[2].state == "skip" && after[2].page == "Twice",
+          "with a crash report newer than its mark, a page still opening is left out; a left-out one stays so while its DLL is the same");
+    check(carried.size() == 1 && carried[0].page == "Quiet" && carried[0].sessions == 1,
+          "a page still opening with no crash report since its mark isn't left out, but is carried for this session's mark");
+    check(said("the game crashed while TestMod.dll's page Stats was opening last session (crash report crash-2026-11-08-120000.txt); "
                "the page is left out until TestMod.dll changes (an update or a reinstall)"),
-          "the log says which page is left out, and until when");
+          "the log says which page is left out, the crash report, and until when");
+    check(said("the game stopped while TestMod.dll's page Twice was opening in 2 sessions running, and it was never up for 10 s; the page is "
+               "left out until TestMod.dll changes"),
+          "a page left opening in two sessions running is left out, without a crash report");
+    check(said("the game stopped while TestMod.dll's page Quiet was opening last session, but there's no crash report since, so the page "
+               "stays in"),
+          "a page that stays in says why");
     check(said("other.DLL's page List is still left out: the game stopped while it was opening on 2026-11-03, and other.DLL hasn't changed since"),
           "a page still left out says since when");
     check(said("Changed.dll has changed since Changed.dll's page List was left out, so the page gets another try") &&
               said("Gone.dll isn't in fh2-mods any more, so the note about Gone.dll's page Page is dropped"),
           "a changed DLL's page gets another try; a removed DLL's note goes");
-    check(lines.size() == 4, "one log line per entry");
+    check(lines.size() == 6, "one log line per entry");
+
+    // no crash report at all: only the page left opening twice is left out
+    lines.clear();
+    const std::vector<GuardEntry> calm = guard_at_start(e, stamp_of, {}, 0x01DD000000000150ull, carried, lines);
+    check(calm.size() == 2 && calm[0].dll == "other.DLL" && calm[1].page == "Twice" && carried.size() == 2 && carried[0].page == "Stats" &&
+              carried[1].page == "Quiet",
+          "with no crash report, a page left opening once stays in (the player may have closed the game)");
+    // a crash report older than the mark: from before, so not this page's
+    lines.clear();
+    const std::vector<GuardEntry> old = guard_at_start(e, stamp_of, {0x01DD000000000100ull, "crash-old.txt"}, 0x01DD000000000150ull, carried, lines);
+    check(old.size() == 2 && carried.size() == 2, "a crash report older than the mark doesn't count");
+
     const std::string written = guard_text(after);
-    check(parse_guard(written).size() == 2 && written.find("skip\tTestMod.dll\tStats\t100-01D9\t2026-11-08\r\n") != std::string::npos &&
+    check(parse_guard(written).size() == 3 && written.find("skip\tTestMod.dll\tStats\t100-01D9\t2026-11-08\t1\t0000000000000000\r\n") != std::string::npos &&
+              written.find("skip\tTestMod.dll\tTwice\t100-01D9\t2026-11-08\t2\t01DD000000000300\r\n") != std::string::npos &&
               written.rfind("# ", 0) == 0,
           "written back with a comment first, one line each, CRLF, and read back the same");
     check(parse_guard("").empty() && guard_text({}).find('\t') == std::string::npos, "an empty file: nothing left out");
@@ -364,7 +428,7 @@ void guard() {
 
 // With an install's media folder: its UI.zip's keys, and the fragment check against its textures.
 void real_media(const fs::path& media, int argc, char** argv) {
-    Media m{media};
+    Media m{media, {media.parent_path() / "mediaoverride", media.parent_path() / "mediapc", media}};
     AppKeys app;
     std::string why;
     if (!load_media(m, app, why)) {
@@ -386,6 +450,11 @@ void real_media(const fs::path& media, int argc, char** argv) {
           "the install's textures: the trophy icon and a controller glyph are found");
     check(!check_page_fragment(app, "", "<Image Source=\"/ForzaUI;component/Textures/Anthem/Icons/No_Such_Icon.png\" />", "", tex, c, why),
           "the install's textures: an icon that isn't there is refused");
+    // a texture the game ships loose (media\ui\textures\data_bound\contentoffers has no zip of its own)
+    if (fs::is_regular_file(media / "ui" / "textures" / "data_bound" / "contentoffers" / "TheIslandFeature.swatchbin"))
+        check(check_page_fragment(app, "", "<Image Source=\"/ForzaUI;component/Textures/Data_Bound/contentoffers/TheIslandFeature.png\" />", "", tex,
+                                  c, why),
+              "the install's textures: one the game has as a loose file is found");
     for (int i = 1; i < argc; ++i) {
         const std::string page = slurp(argv[i]);
         const bool ok          = !page.empty() && check_page_fragment(app, "", page, "", tex, c, why);
@@ -402,7 +471,7 @@ void real_media(const fs::path& media, int argc, char** argv) {
 
 int main(int argc, char** argv) {
     platform_files();
-    Media m{fs::current_path() / "fake-media"};
+    Media m{fs::current_path() / "fake-media", {fs::current_path() / "fake-mediaoverride", fs::current_path() / "fake-media"}};
     fake_media(m.root);
     AppKeys app;
     zips_and_keys(m, app);
