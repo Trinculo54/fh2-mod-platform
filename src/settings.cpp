@@ -38,6 +38,7 @@
 #include "l10n.hpp"
 #include "lang.hpp"
 #include "platform.hpp"
+#include "popups.hpp"
 #include "strings.hpp"
 #include "text.hpp"
 #include "ui_templates.hpp"
@@ -3577,14 +3578,14 @@ uint64_t d_hud_shown(void* page, void* b, void* c, void* d) {
     notify_changed(page, g_mod_notice_desc);
     return r;
 }
-// The HUD layer hooks this slot too (its page tracking), and its hook can go in first: the slot then
-// holds a platform stub, and hook_pointer joins that hook's site. So, only when a mod has a layer, the
-// slot is checked in the exe on disk as well; a change made outside the platform is still refused by
-// hook_pointer's own check. Without a layer the check is 2.8.0's.
+// The HUD layer and the pop-ups (their page tracking, API 10) hook this slot too, and their hooks can go
+// in first: the slot then holds a platform stub, and hook_pointer joins that hook's site. So, when a mod
+// has a layer or the pop-ups track the page, the slot is checked in the exe on disk as well; a change made
+// outside the platform is still refused by hook_pointer's own check. Without either the check is 2.8.0's.
 bool hud_shown_slot_ok(void** slot) {
     const uint64_t original = 0x140000000ull + RVA_HUD_SHOWN;
     const bool as_built     = readable(slot, 8) && *slot == reinterpret_cast<void*>(g_base + RVA_HUD_SHOWN);
-    if (!hud_layer_active()) return as_built;
+    if (!hud_layer_active() && !popups_track_page()) return as_built;
     return as_built || (readable(slot, 8) && disk_bytes_equal(slot, &original, 8));
 }
 void hook_hud_shown(FH2Mod* m) {
