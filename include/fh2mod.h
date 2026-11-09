@@ -595,13 +595,18 @@ typedef struct FH2ModApi {
 
        add_translation: one language's PO file, held in memory (`size`
        bytes of UTF-8; your DLL's copy can be freed after the call). `lang` is
-       its tag ("pl", "pt-BR"; "pt_BR" is read the same). Call it once per
+       its tag ("pl", "pt-BR"; "pt_BR" is read the same; "pl_PL", "ja_JP"
+       and the like as the language alone, "zh_TW" as "zh-Hant"; one none
+       of the game's languages looks for, such as "es_AR", adds nothing).
+       Call it once per
        language, from fh2mod_init right after register_mod. If
        fh2-mods\lang\<your mod's name>\<lang>.po exists, that file is used
        instead (the log says so), so translators can try theirs without a
        build. Entries marked fuzzy are skipped, and one whose {placeholders}
-       don't match the English is left out with a line in the log (a plural
-       form `lang` uses for 1 alone may leave the number out). Returns how
+       don't match the English, or whose text has a control character other
+       than \n and \t, is left out with a line in the log (a plural
+       form `lang` uses for 1 alone may leave the number out). A file that
+       isn't UTF-8 isn't read at all. Returns how
        many entries it took (0: none; the log says why).
 
        tr: `english` in the language now, or `english` when there's no

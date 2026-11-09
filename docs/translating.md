@@ -31,6 +31,8 @@ The game's languages, and the names the PO files go by:
 | Czech | `cs` | `cs.po` | The game itself shows English |
 | Hungarian | `hu` | `hu.po` | The game itself shows English |
 
+A file named with the region translation tools often add is read as the game's language: `pl_PL.po` as `pl.po`, `de_DE.po`, `ja_JP.po` and the like as the language alone, and `zh_TW.po`, `zh_HK.po` and `zh_Hant_TW.po` as `zh_Hant.po`. Other names that none of the game's languages looks for (`es_AR.po`, `pt_PT.po`, `zh_CN.po`, `de_AT.po`) aren't used, and `po2inc.py` and `platform.log` say which name to use instead.
+
 ## For mod makers
 
 ### Write the text with keys
@@ -114,5 +116,6 @@ You'll get the mod's `.pot` file (or a link to it on Weblate), and you give back
 - **Only letters the game's font has** show; others come out as boxes. The letters of the languages the game itself is in (Polish, Portuguese, German, French, Spanish, Italian, Dutch, Russian) are fine. The game's Czech and Hungarian are English, so check letters such as ř, ů and ő in game first. In Japanese, Korean and Chinese the font only has the characters the game's own text uses.
 - **Don't use `"`, `<` or `&`** in text that goes on the mod's page or the MODS tab; use `''` for quotes.
 - **Fuzzy means unchecked**: an entry marked fuzzy (Poedit: "Needs work") isn't shown. Clear it once you're happy with the text.
+- **Save it as UTF-8.** Poedit and Weblate always do. If you edit the file in Notepad, pick UTF-8 when you save it: a file saved as "ANSI" or "Unicode" (UTF-16) isn't read at all, and `platform.log` says so.
 
 To see your work in game, put your file in `fh2-mods\lang\<the mod's name>\` next to `azimuth.exe`, named for your language (`pl.po`, `pt_BR.po`; the table above has the rest), and start the game in your language. `fh2-mods\platform.log` says that it read your file, and names any entry it left out and why. When it looks right, send the file back to the mod's author (or commit it on Weblate).

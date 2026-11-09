@@ -248,6 +248,63 @@ int wmain(int argc, wchar_t** argv) {
         refused.clear();
         CHECK(l10n::parse_po("msgctxt \"a\"\nmsgid \"A\"\nmsgstr \"\\u0041x\"", "pl", d, refused) == 1 && d.by_key["a"].msgstr[0] == "u0041x");
     }
+    // control characters: a msgstr with one other than \n and \t is left out, so the English shows
+    {
+        l10n::Catalogue c;
+        std::vector<std::string> refused;
+        const char* po = "msgctxt \"nul\"\nmsgid \"A\"\nmsgstr \"A\\x01B\\0C\"\n\n"
+                         "msgctxt \"bell\"\nmsgid \"Ring\"\nmsgstr \"Dzwo\\a\"\n\n"
+                         "msgctxt \"cr\"\nmsgid \"Line\"\nmsgstr \"Linia\\r\"\n\n"
+                         "msgctxt \"plural\"\nmsgid \"One\"\nmsgid_plural \"{n}\"\nmsgstr[0] \"Jeden\"\nmsgstr[1] \"{n}\\b\"\nmsgstr[2] \"{n}\"\n\n"
+                         "msgctxt \"latin1\"\nmsgid \"Cafe\"\nmsgstr \"Caf\\xE9\"\n\n"
+                         "msgctxt \"ok\"\nmsgid \"Tab\\tand line\\n\"\nmsgstr \"Tab\\ti linia\\n\"\n";
+        CHECK(l10n::parse_po(po, "pl", c, refused) == 1 && c.by_key.count("ok") && c.by_key["ok"].msgstr[0] == "Tab\ti linia\n");
+        CHECK(!c.by_key.count("nul") && !c.by_key.count("bell") && !c.by_key.count("cr") && !c.by_key.count("plural") && !c.by_key.count("latin1"));
+        CHECK(refused.size() == 5);
+        CHECK(refused.size() == 5 && refused[0] == "line 2, \"nul\": its text has a control character (U+0001), which the game can't show, so it's "
+                                                  "left out and English shows there");
+        CHECK(refused.size() == 5 && refused[1].find("\"bell\": its text has a control character (U+0007)") != std::string::npos);
+        CHECK(refused.size() == 5 && refused[2].find("\"cr\": its text has a control character (U+000D)") != std::string::npos);
+        CHECK(refused.size() == 5 && refused[3].find("\"plural\": its text has a control character (U+0008)") != std::string::npos);
+        CHECK(refused.size() == 5 && refused[4].find("\"latin1\": its text has an escape that isn't UTF-8 (such as \\xE9), so it's left out") !=
+                                         std::string::npos);
+    }
+    // a file that isn't UTF-8 isn't read at all, with one sentence; nor one saved as UTF-16 (Notepad's "Unicode")
+    {
+        l10n::Catalogue c;
+        std::vector<std::string> refused;
+        const char* ansi = "msgctxt \"a\"\nmsgid \"Trees\"\nmsgstr \"Drzewa\"\n\nmsgctxt \"b\"\nmsgid \"Breakable\"\nmsgstr \"\xA3" "amliwe\"\n";
+        CHECK(l10n::parse_po(ansi, "pl", c, refused) == 0 && c.by_key.empty());
+        CHECK(refused.size() == 1 && refused[0] == "line 7 isn't UTF-8, so nothing in the file is read: save it as UTF-8");
+        refused.clear();
+        const std::string utf16("\xFF\xFEm\0s\0g\0i\0d\0 \0\"\0\"\0\n\0", 22);
+        CHECK(l10n::parse_po(utf16, "pl", c, refused) == 0 && refused.size() == 1 &&
+              refused[0] == "it's saved as UTF-16 (Notepad's \"Unicode\"), so nothing in it is read: save it as UTF-8");
+        refused.clear();
+        CHECK(l10n::parse_po(std::string("\xFE\xFF\0m", 4), "pl", c, refused) == 0 && refused.size() == 1 && refused[0].find("UTF-16") != std::string::npos);
+        refused.clear();
+        CHECK(l10n::parse_po("msgid \"\"\nmsgstr \"\"\n\"Language: pl\\n\"\n\nmsgctxt \"x\"\nmsgid \"\xF0\x9F\x8F\x81 Go\"\nmsgstr \"\xC5\x81" "ap\"\n", "pl", c,
+                             refused) == 1 && refused.empty());   // UTF-8, 4 bytes too
+    }
+    // the header's nplurals against the platform's rule for the language
+    {
+        CHECK(l10n::plural_forms("pl") == 3 && l10n::plural_forms("ru") == 3 && l10n::plural_forms("cs") == 3 && l10n::plural_forms("en") == 2 &&
+              l10n::plural_forms("pt-BR") == 2 && l10n::plural_forms("ja") == 1 && l10n::plural_forms("zh-Hant") == 1);
+        const std::string cldr = "msgid \"\"\nmsgstr \"\"\n\"Language: cs\\n\"\n\"Plural-Forms: nplurals=4; plural=(n==1 ? 0 : n>=2 && n<=4 ? 1 : n%1!=0 ? 2: 3);\\n\"\n\n"
+                                 "msgctxt \"k\"\nmsgid \"{n} tree\"\nmsgid_plural \"{n} trees\"\n"
+                                 "msgstr[0] \"{n} strom\"\nmsgstr[1] \"{n} stromy\"\nmsgstr[2] \"{n} stromu\"\nmsgstr[3] \"{n} strom\xC5\xAF\"\n";
+        l10n::Catalogue c;
+        std::vector<std::string> refused;
+        CHECK(l10n::parse_po(cldr, "cs", c, refused) == 1 && refused.size() == 1);
+        CHECK(refused.size() == 1 && refused[0] == "its header says nplurals=4, but the platform reads 3 plural forms for Czech (msgstr[0] to "
+                                                   "msgstr[2], in gettext's usual order for it), so a count may show the wrong form: check its plural texts");
+        refused.clear();
+        CHECK(l10n::parse_po("#, fuzzy\nmsgid \"\"\nmsgstr \"Plural-Forms: nplurals = 1; plural=0;\\n\"\n", "ja", c, refused) == 0 && refused.empty());
+        CHECK(l10n::parse_po("msgid \"\"\nmsgstr \"Plural-Forms: nplurals=2; plural=(n != 1);\\n\"\n", "ja", c, refused) == 0 && refused.size() == 1 &&
+              refused[0].find("reads 1 plural form for Japanese (msgstr[0] alone,") != std::string::npos);
+        refused.clear();
+        CHECK(l10n::parse_po(kPolish, "pl", c, refused) == 6 && refused.size() == 2);   // nplurals=3, as the platform's
+    }
     // placeholders
     {
         CHECK((l10n::placeholders("{a} and {b}, {a} {not one} {} {x{y}") == std::vector<std::string>{"{a}", "{b}", "{y}"}));
@@ -295,6 +352,25 @@ int wmain(int argc, wchar_t** argv) {
         CHECK((l10n::fallbacks("es-MX") == std::vector<std::string>{"es-MX", "es-ES", "es"}));
         CHECK((l10n::fallbacks("pl") == std::vector<std::string>{"pl"}));
         CHECK(l10n::language_name("pt-BR") == "Brazilian Portuguese" && l10n::language_name("xx") == "xx");
+        // a catalogue named with the region translation tools add is kept under the game's tag
+        for (const char* t : {"pl-PL", "de-DE", "fr-FR", "it-IT", "ja-JP", "ko-KR", "cs-CZ", "hu-HU", "ru-RU", "nl-NL", "en-US"})
+            CHECK(l10n::catalogue_tag(l10n::normal_tag(t)) == std::string(t, 2));
+        CHECK(l10n::catalogue_tag("zh-TW") == "zh-Hant" && l10n::catalogue_tag("zh-HK") == "zh-Hant" && l10n::catalogue_tag("zh-MO") == "zh-Hant" &&
+              l10n::catalogue_tag(l10n::normal_tag("zh_Hant_TW")) == "zh-Hant" && l10n::catalogue_tag("zh-Hant") == "zh-Hant");
+        // the tags the game uses stay as they are, and so do others
+        for (const char* t : {"pl", "pt-BR", "pt", "es-ES", "es-MX", "es", "en-GB", "en", "zh", "de-AT", "pt-PT", "zh-CN", "es-419", "sv"})
+            CHECK(l10n::catalogue_tag(t) == t);
+        // which the game's languages look for, and the name to use for those they don't
+        for (const char* t : {"en", "en-GB", "pl", "pt-BR", "pt", "de", "fr", "es-ES", "es-MX", "es", "it", "ja", "ko", "zh-Hant", "zh", "cs", "hu",
+                              "ru", "nl"})
+            CHECK(l10n::never_shown(t).empty());
+        CHECK(l10n::never_shown("de-AT") == "none of the game's languages looks for de-AT text (its German is de), so name the file de.po");
+        CHECK(l10n::never_shown("es-419").find("so name the file es_ES.po, es_MX.po or es.po") != std::string::npos);
+        CHECK(l10n::never_shown("pt-PT").find("so name the file pt_BR.po or pt.po") != std::string::npos);
+        CHECK(l10n::never_shown("en-AU").find("so name the file en.po or en_GB.po") != std::string::npos);
+        CHECK(l10n::never_shown("zh-CN").find("it has no Simplified Chinese), so name a Traditional Chinese file zh_Hant.po") != std::string::npos);
+        CHECK(l10n::never_shown("sv") == "none of the game's languages looks for sv text, as the game has no such language");
+        CHECK(!l10n::never_shown("qps").empty() && !l10n::never_shown("pl-PL").empty());   // pl-PL only after catalogue_tag
     }
     // plural forms (CLDR, numbered as gettext's Plural-Forms)
     {
@@ -493,6 +569,41 @@ int wmain(int argc, wchar_t** argv) {
     CHECK(std::string(l10n_tr(&file_mod, "greeting", "Hello, {name}!")) == "E aí, {name}!");
     g_game = "DE";
     CHECK(std::string(l10n_tr(&file_mod, "greeting", "Hello, {name}!")) == "Hallo, {name}!");
+
+    // ---- tags the game doesn't use: pl_PL is Polish, ja-JP Japanese, zh_TW Traditional Chinese; es_AR and de_AT are
+    // never looked for, so they're refused with the name to use
+    write(g_dir / "fh2-mods" / "lang" / "FoldMod" / "zh_TW.po", "msgctxt \"greeting\"\nmsgid \"Hello, {name}!\"\nmsgstr \"你好，{name}！\"\n");
+    write(g_dir / "fh2-mods" / "lang" / "FoldMod" / "de_AT.po", "msgctxt \"greeting\"\nmsgid \"Hello, {name}!\"\nmsgstr \"Servus, {name}!\"\n");
+    FH2Mod fold_mod;
+    fold_mod.name = "FoldMod";
+    CHECK(add(&fold_mod, "pl_PL", "msgctxt \"greeting\"\nmsgid \"Hello, {name}!\"\nmsgstr \"Cześć, {name}!\"\n") == 1);
+    CHECK(logged("[FoldMod] translation: Polish (pl), 1 string"));
+    CHECK(logged("[FoldMod] translation: Traditional Chinese (zh-Hant) from fh2-mods\\lang\\FoldMod\\zh_TW.po, 1 string"));
+    CHECK(logged("[FoldMod] fh2-mods\\lang\\FoldMod\\de_AT.po isn't read: none of the game's languages looks for de-AT text (its German is de), "
+                 "so name the file de.po"));
+    CHECK(add(&fold_mod, "ja-JP", "msgctxt \"greeting\"\nmsgid \"Hello, {name}!\"\nmsgstr \"こんにちは、{name}！\"\n") == 1);
+    CHECK(add(&fold_mod, "es_AR", "msgctxt \"greeting\"\nmsgid \"Hello, {name}!\"\nmsgstr \"¡Hola, {name}!\"\n") == 0);
+    CHECK(logged("[FoldMod] add_translation: nothing was added for es-AR: none of the game's languages looks for es-AR text (its Spanish is es-ES, "
+                 "for Spain, or es-MX, for Latin America), so name the file es_ES.po, es_MX.po or es.po"));
+    g_game = "PL";
+    CHECK(std::string(l10n_tr(&fold_mod, "greeting", "Hello, {name}!")) == "Cześć, {name}!");
+    g_game = "JP";
+    CHECK(std::string(l10n_tr(&fold_mod, "greeting", "Hello, {name}!")) == "こんにちは、{name}！");
+    g_game = "CHT";
+    CHECK(std::string(l10n_tr(&fold_mod, "greeting", "Hello, {name}!")) == "你好，{name}！");
+    g_game = "MX";
+    CHECK(std::string(l10n_tr(&fold_mod, "greeting", "Hello, {name}!")) == "Hello, {name}!");
+    // two files for one language: the one named for the language itself is read, whichever the folder lists first
+    static FH2Mod two_mods[2];   // each its own: the platform knows mods by their address
+    for (int k = 0; k < 2; ++k) {
+        const std::string other_name = k ? "pl_PL.po" : "pl-PL.po", who = "TwoMod" + std::to_string(k);
+        write(g_dir / "fh2-mods" / "lang" / who / "pl.po", "msgctxt \"greeting\"\nmsgid \"Hello, {name}!\"\nmsgstr \"Cześć, {name}!\"\n");
+        write(g_dir / "fh2-mods" / "lang" / who / other_name, "msgctxt \"greeting\"\nmsgid \"Hello, {name}!\"\nmsgstr \"Hej, {name}!\"\n");
+        two_mods[k].name = who;
+        g_game           = "PL";
+        CHECK(std::string(l10n_tr(&two_mods[k], "greeting", "Hello, {name}!")) == "Cześć, {name}!");
+        CHECK(logged("[" + who + "] fh2-mods\\lang\\" + who + "\\" + other_name + " is Polish (pl) too, and pl.po is the one used, so it isn't read"));
+    }
 
     // ---- the test language, and a first launch, each in a session of its own
     CHECK(run_phase(L"qps") == 0);

@@ -4,10 +4,14 @@
     python3 platform/tools/l10n/po2inc.py <out.inc> <array name> l10n/pl.po l10n/pt_BR.po ...
     python3 platform/tools/l10n/po2inc.py --check <out.inc> <array name> l10n/*.po
 
-Each file's language comes from its name (pl.po, pt_BR.po or pt-BR.po). The .inc holds an array of
+Each file's language comes from its name (pl.po, pt_BR.po or pt-BR.po; pl_PL.po is read as pl and
+zh_TW.po as zh-Hant, as the platform reads them). The .inc holds an array of
 FH2Translation, one per file, with a copy of the PO file cut down to what the platform reads: the
 entries that are translated and not fuzzy, without comments. An entry whose {placeholders} don't match
-its English is left out, with a warning naming its file and line (the platform would refuse it too).
+its English, or whose text has a control character other than \\n and \\t, is left out, with a warning
+naming its file and line (the platform would refuse it too). So is a file for a language none of the
+game's languages looks for (es_AR.po), with the name to use. A header whose nplurals isn't the
+platform's for the language gets a warning, and a file that isn't UTF-8 stops it.
 Then, in the mod:
 
     #include "fh2mod_l10n.h"
@@ -43,16 +47,94 @@ def tag_of(path):
             out.append(p)
         else:
             raise SystemExit("%s: the file's name isn't a language (pl.po, pt_BR.po...)" % path)
-    return '-'.join(out)
+    return catalogue_tag('-'.join(out))
+
+
+# The game's languages' tags, and the catalogues each looks in (as the platform's fallbacks()).
+GAME_TAGS = ['en', 'en-GB', 'pl', 'pt-BR', 'de', 'fr', 'es-ES', 'es-MX', 'it', 'ja', 'ko', 'zh-Hant', 'cs', 'hu', 'ru', 'nl']
+ONE_FORM = {'pl': 'Polish', 'de': 'German', 'fr': 'French', 'it': 'Italian', 'ja': 'Japanese', 'ko': 'Korean', 'cs': 'Czech',
+            'hu': 'Hungarian', 'ru': 'Russian', 'nl': 'Dutch'}
+
+
+def language_name(tag):
+    names = dict(ONE_FORM, **{'en': 'English', 'en-GB': 'British English', 'pt-BR': 'Brazilian Portuguese', 'pt': 'Portuguese',
+                              'es-ES': 'Spanish (Spain)', 'es-MX': 'Spanish (Mexico)', 'es': 'Spanish',
+                              'zh-Hant': 'Traditional Chinese', 'zh': 'Chinese'})
+    return names.get(tag, tag)
+
+
+def fallbacks(tag):
+    out = [tag]
+    if tag == 'es-MX':
+        out.append('es-ES')
+    if '-' in tag:
+        out.append(tag.split('-')[0])
+    return out
+
+
+def catalogue_tag(tag):
+    """As the platform keeps it: pl-PL, de-DE, ja-JP, en-US and the like as the language alone, and zh-TW, zh-HK,
+    zh-MO and zh-Hant-* as zh-Hant, the game's Traditional Chinese. Others as they are (pt-BR, de-AT)."""
+    if tag in ('zh-TW', 'zh-HK', 'zh-MO') or tag.startswith('zh-Hant-'):
+        return 'zh-Hant'
+    if tag in ('pl-PL', 'de-DE', 'fr-FR', 'it-IT', 'ja-JP', 'ko-KR', 'cs-CZ', 'hu-HU', 'ru-RU', 'nl-NL', 'en-US'):
+        return tag.split('-')[0]
+    return tag
+
+
+def never_shown(tag):
+    """'' when one of the game's languages looks for `tag`'s text; else why not, and the name to use (as the platform says)."""
+    if any(tag in fallbacks(t) for t in GAME_TAGS):
+        return ''
+    lang = tag.split('-')[0]
+    head = "none of the game's languages looks for %s text" % tag
+    if lang == 'en':
+        return head + ' (its English is en, American, or en-GB, British), so name the file en.po or en_GB.po'
+    if lang == 'pt':
+        return head + ' (its Portuguese is pt-BR, Brazilian), so name the file pt_BR.po or pt.po'
+    if lang == 'es':
+        return head + ' (its Spanish is es-ES, for Spain, or es-MX, for Latin America), so name the file es_ES.po, es_MX.po or es.po'
+    if lang == 'zh':
+        return head + ' (its Chinese is zh-Hant, Traditional; it has no Simplified Chinese), so name a Traditional Chinese file zh_Hant.po'
+    if lang in ONE_FORM:
+        return head + ' (its %s is %s), so name the file %s.po' % (ONE_FORM[lang], lang, lang)
+    return head + ', as the game has no such language'
+
+
+def read_po(path):
+    """The file's text, as UTF-8; a file in another encoding stops the build with one sentence, as the platform reads
+    none of it."""
+    with open(path, 'rb') as f:
+        raw = f.read()
+    if raw[:2] in (b'\xff\xfe', b'\xfe\xff'):
+        raise SystemExit('%s is saved as UTF-16 (Notepad\'s "Unicode"): save it as UTF-8' % path)
+    try:
+        text = raw.decode('utf-8-sig')
+    except UnicodeDecodeError as e:
+        raise SystemExit("%s:%d isn't UTF-8: save it as UTF-8" % (path, raw[:e.start].count(b'\n') + 1))
+    return text.replace('\r\n', '\n').replace('\r', '\n')   # as open() in text mode reads it
 
 
 def compact(path, tag, warnings):
-    with open(path, encoding='utf-8-sig') as f:
-        entries = pofile.parse(f.read(), os.path.basename(path))
+    entries = pofile.parse(read_po(path), os.path.basename(path))
     out = []
     kept = 0
+    forms = max(pofile.plural_form(tag, n) for n in range(200)) + 1
     for e in entries:
-        if e.is_header() or 'fuzzy' in e.flags or not e.translated():
+        if e.is_header():
+            m = re.search(r'nplurals\s*=\s*(\d+)', e.msgstr.get(0, ''))
+            if m and int(m.group(1)) != forms:
+                warnings.append('%s: its header says nplurals=%s, but the platform reads %d plural %s for %s (%s, in gettext\'s usual '
+                                'order for it), so a count may show the wrong form: check its plural texts' %
+                                (path, m.group(1), forms, 'form' if forms == 1 else 'forms', language_name(tag),
+                                 'msgstr[0] alone' if forms == 1 else 'msgstr[0] to msgstr[%d]' % (forms - 1)))
+            continue
+        if 'fuzzy' in e.flags or not e.translated():
+            continue
+        control = [c for t in e.forms() for c in t if ord(c) < 0x20 and c not in '\n\t']
+        if control:
+            warnings.append('%s:%d: "%s": its text has a control character (U+%04X), which the game can\'t show; left out' %
+                            (path, e.line, e.ctxt if e.ctxt is not None else e.msgid, ord(control[0])))
             continue
         bad = [t for i, t in enumerate(e.forms())
                if t and not pofile.placeholders_fit(e, t, e.plural is not None and pofile.form_only_for_one(tag, i))]
@@ -99,6 +181,10 @@ def build(name, files):
     rel = [f.replace('\\', '/') for f in files]
     for path, shown in zip(files, rel):
         tag = tag_of(path)
+        why = never_shown(tag)
+        if why:
+            warnings.append('%s: %s; left out' % (path, why))
+            continue
         text, kept = compact(path, tag, warnings)
         data = text.encode('utf-8')
         blocks.append('    /* %s: %d %s */\n    {"%s",\n%s,\n     %d},' %
