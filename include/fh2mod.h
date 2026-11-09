@@ -45,7 +45,7 @@ extern "C" {
 typedef struct FH2Mod FH2Mod;
 /* Opaque handle for one hook (API 3). */
 typedef struct FH2Hook FH2Hook;
-/* One row on the Mods page (API 4), defined below FH2ModApi. */
+/* One row on your mod's page (API 4), defined below FH2ModApi. */
 typedef struct FH2Setting FH2Setting;
 /* A page of your own, and one of its rows (API 8), defined below FH2ModApi. */
 typedef struct FH2Page FH2Page;
@@ -92,15 +92,15 @@ typedef struct FH2ModInfo {
     const char* github_repo;      /* "Owner/Repo" to check for new releases, or NULL */
     const char* platform_version; /* the platform version this mod ships with, e.g. FH2MOD_PLATFORM_VERSION */
     int check_updates;            /* 0 = never go online for this mod */
-    /* API 6 (platform 2.5.0): what your mod adds, in a sentence or two, for the MODS tab's
-       Installed mods page. May be NULL. Leave it out (an older FH2ModInfo) on older platforms. */
+    /* API 6 (platform 2.5.0): what your mod adds, in a sentence or two, for your row on
+       Pause > MODS > YOUR MODS and your page there. May be NULL. Leave it out (an older FH2ModInfo) on older platforms. */
     const char* description;
     /* API 9 (platform 2.8.0): nonzero for a mod that shouldn't run in online play, because it
        changes driving or what other players see (a nitro boost, say). When the game is started
        from the FH2MP launcher, register_mod then returns NULL, so return from fh2mod_init
        straight away (call register_mod first, before you do anything else); from the next
        launch the platform doesn't load the DLL at all online. Players can still choose for
-       themselves on MODS > Installed mods ("Load when playing online"). Older platforms
+       themselves on MODS > YOUR MODS ("Load when playing online"). Older platforms
        ignore it. */
     int offline_only;
 } FH2ModInfo;
@@ -266,9 +266,10 @@ typedef struct FH2ModApi {
     /* ==== API version 4 (platform 2.3.0): check api_version >= 4 ======== */
 
     /* ---- In-game settings --------------------------------------------------
-       On/Off rows on the game's own Mods page (Pause > Settings > MODS),
-       next to every other mod's. The tile and the page only appear when at
-       least one mod adds a row. Add your rows from fh2mod_init: the page is
+       On/Off rows in the game's own menus, on your mod's page under Pause >
+       MODS > YOUR MODS (Pause > Settings > MODS opens the same list; up to
+       2.8.0 it was a page shared by every mod), in the order you add them,
+       so put your main switch first. Add your rows from fh2mod_init: the page is
        written when every mod's fh2mod_init has returned, and rows added
        after that only show from the next launch. (Their text can change
        later, in the game's language: see set_setting_text, API 10.)
@@ -276,9 +277,9 @@ typedef struct FH2ModApi {
        Your mod keeps owning the value: pass the current one in, and when the
        player changes it, on_change tells you the new one, so you can save it
        wherever you keep your settings (your ini) and use it. The platform
-       doesn't store values. Rows marked needs_restart get a note in their
-       description, and changing one brings up the game's own message box
-       when the player leaves the Mods page, offering to restart the game.
+       doesn't store values. Rows marked needs_restart end in " *" and get a
+       note in their description, and changing one brings up the game's own
+       message box when the player leaves, offering to restart the game.
        Returns 1 if the row was added, 0 if not (the log says why). */
     int (*add_setting)(FH2Mod* mod, const FH2Setting* setting);
     /* The row's current value, or -1 if you have no row called `key`. */
@@ -289,7 +290,7 @@ typedef struct FH2ModApi {
 
     /* ==== API version 5 (platform 2.4.0): check api_version >= 5 ======== */
 
-    /* Sliders on the Mods page: an FH2Setting with kind = FH2_SETTING_SLIDER
+    /* Sliders on your mod's page: an FH2Setting with kind = FH2_SETTING_SLIDER
        (see FH2Setting below). On an older platform a slider would come out as
        an On/Off row, so only add one when api_version >= 5. */
     /* A slider's current value, or 0 if you have no slider called `key`. */
@@ -334,10 +335,10 @@ typedef struct FH2ModApi {
     /* ==== API version 8 (platform 2.7.0): check api_version >= 8 ======== */
 
     /* ---- Pages -------------------------------------------------------------
-       A page of your own in the game's menus, laid out like the Mods page: a
+       A page of your own in the game's menus, laid out like your mod's page: a
        list of rows, each with a label on the left and a value on the right,
        and the selected row's description beside the list. Your mod's page
-       under MODS > Installed mods gets a row that opens it. A page can also
+       under MODS > YOUR MODS gets a row that opens it. A page can also
        take over a pause-menu tile that does nothing on PC: FH2Page.tile.
 
        Add pages from fh2mod_init (one added later only shows from the next
@@ -363,8 +364,8 @@ typedef struct FH2ModApi {
        UTF-8 XAML fragments, using the page's xmlns (local: is ForzaUI).
        Like rows, the XAML is copied, and the page is written from the last
        you set each time it opens. A page with XAML shows it on its tile;
-       under MODS > Installed mods it shows its rows if it has any, and
-       otherwise its row says which tile opens it. Returns 1, or 0 if you
+       on your mod's page under MODS > YOUR MODS it shows its rows if it has
+       any, and otherwise its row says which tile opens it. Returns 1, or 0 if you
        have no page called `page_key`, `content` has no FirstItem, or a
        fragment's tags don't balance (the page keeps the XAML it had).
 
@@ -493,7 +494,7 @@ typedef struct FH2ModApi {
        testing. Keys are only watched while the game's window is in front, and
        the game still gets every key and button: pick ones that do nothing
        harmful in game (F-keys; LB+RB with a face button). Each hotkey gets two
-       rows on the Mods page, under your mod's: its key (Off, F1 to F12,
+       rows on your mod's page, under "Keys and buttons": its key (Off, F1 to F12,
        Ctrl+F1 to F12, or yours if it's none of those) and its controller chord
        (Off, or LB+RB with Y, X, B, A or a d-pad direction). A change there
        takes effect straight away and calls on_rebind, so you can save it:
@@ -523,8 +524,8 @@ typedef struct FH2ModApi {
        it starts, from its own option, well after fh2mod_init: rows added
        there can only be in a language you guess. game_language tells you
        the language once the game has it, and set_setting_text and
-       set_mod_description change your text then. The Mods page, the MODS
-       tab and your mod's page are written each time they're opened, so new
+       set_mod_description change your text then. The MODS tab's pages
+       (your mod's page among them) are written each time they're opened, so new
        text shows the next time the player opens them. Call them any time,
        from any thread.
 
@@ -749,7 +750,7 @@ typedef void (*FH2SliderChangedFn)(void* user, const char* key, float value);
 #define FH2_SETTING_CHOICE 3   /* API 9 */
 #define FH2_SETTING_MAX_CHOICES 32
 
-/* One row on the Mods page (API 4; sliders API 5). */
+/* One row on your mod's page (API 4; sliders API 5). */
 struct FH2Setting {
     uint32_t size;                 /* sizeof(FH2Setting) */
     const char* key;               /* unique within your mod: letters, digits and '_', like "Trees" */
@@ -773,7 +774,7 @@ struct FH2Setting {
     /* ---- API 6 (platform 2.5.0): links. With kind = FH2_SETTING_LINK the row
        opens a web page in the player's browser when they press A on it: your
        dashboard, your docs. It shows on your mod's own page under MODS >
-       Installed mods (not on Settings > Mods), with the address under its
+       YOUR MODS, with the value "Browser" and the address under its
        description. value, needs_restart, on_change and the slider fields are
        ignored. On an older platform it would come out as an On/Off row, so
        only add one when api_version >= 6. ---- */
@@ -793,7 +794,7 @@ struct FH2Setting {
 /* Pages (API 8). Every page callback runs on the game's UI thread: keep them
    short, and don't call into the game from them. */
 /* The page is about to be written to be shown: set its rows now if you
-   haven't kept them up to date. Opening MODS > Installed mods writes every
+   haven't kept them up to date. Opening MODS > YOUR MODS writes every
    mod's pages, so it's called then too. */
 typedef void (*FH2PageOpenFn)(void* user, const char* page_key);
 /* The player pressed A on a row that has a key. */
@@ -825,8 +826,8 @@ struct FH2Page {
     const char* label;             /* the row on your mod's page that opens it; NULL = the title */
     const char* description;       /* that row's description; may be NULL */
     /* A pause-menu tile that opens this page instead of what it did on Xbox:
-       "Achievements" (the tile on the pause menu and on its Storm Island
-       tab). One mod per tile. NULL for none. */
+       "Achievements" (the tile on the pause menu's PROGRESS tab and on its
+       PORSCHE tab). One mod per tile. NULL for none. */
     const char* tile;
     FH2PageOpenFn on_open;         /* may be NULL */
     FH2PageSelectFn on_select;     /* may be NULL: A then does nothing on the page */
@@ -893,7 +894,7 @@ struct FH2TitleEntry {
 /* Called on a platform thread (not the game's) when the key or chord is
    pressed, once per press. Keep it short, and hand game work to a hook. */
 typedef void (*FH2HotkeyFn)(void* user, const char* key);
-/* The player picked another binding on the Mods page: save it, and pass it
+/* The player picked another binding on your mod's page: save it, and pass it
    in next time (`vk` 0 = no key, `pad_chord` 0 = no chord). On the UI
    thread. */
 typedef void (*FH2HotkeyRebindFn)(void* user, const char* key, uint32_t vk, uint32_t modifiers, uint32_t pad_chord);
@@ -902,7 +903,7 @@ typedef void (*FH2HotkeyRebindFn)(void* user, const char* key, uint32_t vk, uint
 struct FH2Hotkey {
     uint32_t size;                 /* sizeof(FH2Hotkey) */
     const char* key;               /* unique within your mod: letters, digits and '_', like "Mark" */
-    const char* label;             /* UTF-8, for its rows on the Mods page: "Mark this spot" */
+    const char* label;             /* UTF-8, for its rows on your mod's page: "Mark this spot" */
     uint32_t vk;                   /* the key, a Windows virtual-key code (VK_F9, 'M'); 0 = none */
     uint32_t modifiers;            /* FH2_KEY_CTRL | FH2_KEY_SHIFT | FH2_KEY_ALT, held with it */
     uint32_t pad_chord;            /* FH2_PAD_ bits, held together; 0 = none */

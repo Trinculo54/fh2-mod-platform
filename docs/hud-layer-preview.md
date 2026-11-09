@@ -55,7 +55,7 @@ typedef struct FH2HudLayer {
 - **One layer per mod, four from every mod together.** `parts` says which parts you'll show; unknown bits are dropped with a log line, and a layer with none is refused. A `size` smaller than `sizeof(FH2HudLayer)` is refused too.
 - **The page gets one copy of the layer,** with the parts of every mod's layer together. You can only show the parts you asked for here, even if another mod asked for more.
 - **`lease_ms`:** every layer has a lease (see [the lease](#the-lease)). 0 means 5000 ms; a value outside 250 to 60000 is brought into that range, with a log line.
-- **The first mod to add a layer also gets the "Button prompts" row** in its part of the Mods page (see [Button prompts](#button-prompts-and-the-device)). A second layer mod doesn't get another.
+- **The first mod to add a layer also gets the "Button prompts" row** on its page under MODS > YOUR MODS (see [Button prompts](#button-prompts-and-the-device)). A second layer mod doesn't get another.
 - It returns 1 if the layer was added (`[<mod>] HUD layer added: BAR, CHIPS; lease 2000 ms` in the log), 0 if not. Even then, wait for `FH2_HUD_AVAILABLE`: the platform leaves the layer out for the session when the game's code or UI files aren't as expected, for one session after the last one crashed between start-up and the HUD page's first 10 s on screen (whatever the crash was; see [the crash marker](#when-something-goes-wrong)), or when the game didn't read the platform's HUD page, and the log says which.
 
 ## The parts
@@ -281,7 +281,7 @@ Letting go brings the speedometer and map back in one frame.
 Prompts follow the device the player used last: the game's own controller pictures, or key names on key caps.
 
 - **Automatic** (the default): the newest input wins. A key going down, a mouse button or the mouse moving (in two readings running and by 3 px or more, so the window placing the pointer doesn't count) picks key caps; a button, a trigger or a stick on an Xbox-style (XInput) pad picks pad pictures. The modifiers, the Windows keys, any key while a Windows key is down (Win+Alt+R starts a recording, say) and the platform's hotkeys' own keys don't count. It switches at most every 150 ms, and only watches while the game is in front. At start-up it shows pad pictures if an XInput pad is connected, otherwise key caps; until it knows, key caps.
-- **The "Button prompts" row:** Automatic, Controller or Keyboard and mouse, in the first layer mod's part of Pause > Settings > MODS (and its settings on the MODS tab's Installed mods). A change applies straight away and is kept in `fh2-mods\platform-hudlayer.ini`. The row's description also names the build.
+- **The "Button prompts" row:** Automatic, Controller or Keyboard and mouse, on the first layer mod's page under Pause > MODS > YOUR MODS (Pause > Settings > MODS opens the same list). A change applies straight away and is kept in `fh2-mods\platform-hudlayer.ini`. The row's description also names the build.
 - **Pads that aren't XInput** (a DualSense without Steam Input, or a keyboard that Azimuth reads as a controller) aren't seen: choose Controller.
 - `FH2_HUD_KEYBOARD` and `FH2_HUD_DEVICE_FORCED` say what the prompts show and whether the player chose.
 

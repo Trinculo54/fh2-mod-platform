@@ -127,7 +127,14 @@ If you can't use the platform's hooks for something (a patch in the middle of a 
 
 ## Switches in the game
 
-If players will want to turn parts of your mod on and off, or tune a number, give them rows on the Mods page (API 4; sliders API 5): Pause > Settings > MODS, shared by every mod. You pass the current value and get told when the player changes it; you keep saving it in your own settings file, as before. Rows that only work after a restart are marked so, and the game then offers to restart for the player. From platform 2.8.0 (API 9) a row can also offer named choices, like a button or a mode, instead of a number standing for one. [`api.md`](api.md#the-mods-page-api-4-sliders-api-5) has the details and an example. Keep it to the main switches; fine-tuning still belongs in your ini.
+If players will want to turn parts of your mod on and off, or tune a number, give them rows (API 4; sliders API 5) on your mod's own page under Pause > MODS > YOUR MODS (Pause > Settings > MODS opens the same list). You pass the current value and get told when the player changes it; you keep saving it in your own settings file, as before. Rows that only work after a restart are marked so, and the game then offers to restart for the player. From platform 2.8.0 (API 9) a row can also offer named choices, like a button or a mode, instead of a number standing for one. [`api.md`](api.md#your-mods-page-api-4-sliders-api-5) has the details and an example. Keep it to the main switches; fine-tuning still belongs in your ini. A few rules make your page easy to use:
+
+- **Put your main switch first.** The page opens with the focus on your first row.
+- **Keep labels to about 24 characters, and leave your mod's name out of them.** They have half the list's width, and the page's title is already your mod's name.
+- **Write `FH2ModInfo.description` for players.** It's the first thing they read about your mod, on the YOUR MODS list.
+- **Link rows and pages show on the same page**, after your settings, so one place has everything.
+
+For your README, a sentence players can follow: "In game: Pause > MODS > YOUR MODS > MyMod (Pause > Settings > MODS opens the same list)."
 
 ## A HUD of your own (preview)
 

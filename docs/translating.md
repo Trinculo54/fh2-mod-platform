@@ -1,6 +1,6 @@
 # Translating mods
 
-From platform 2.9.0 (API 10), a mod can show its text in the player's language: on the Mods page, the MODS tab, its own pages, the title screen and in the game's string tables. This page is for mod makers who want that, and for the translators who help them. The API itself is in [`api.md`](api.md#translations-api-10).
+From platform 2.9.0 (API 10), a mod can show its text in the player's language: on its page under MODS > YOUR MODS, the MODS tab, its own pages, the title screen and in the game's string tables. This page is for mod makers who want that, and for the translators who help them. The API itself is in [`api.md`](api.md#translations-api-10).
 
 How it works, in short:
 
@@ -40,7 +40,7 @@ Use the helpers in `include/fh2mod_l10n.h` (in your `platform/` submodule). They
 ```cpp
 #include "fh2mod_l10n.h"
 
-// L10N: the switch for breakable trees, on the Mods page
+// L10N: the switch for breakable trees, on the mod's page
 s.label = FH2_TR(api, g_mod, "row.Trees.label", "Breakable trees");
 // L10N(description): what the switch does, beside the list
 s.description = FH2_TR(api, g_mod, "row.Trees.description", "Trees break when you hit them.");
@@ -106,13 +106,13 @@ When you change the English, run `extract.py` again. Translation tools (Weblate,
 
 You'll get the mod's `.pot` file (or a link to it on Weblate), and you give back a `.po` file for your language. Poedit (poedit.net) is a free editor for them: open the `.pot`, and it makes a new translation from it.
 
-- **Each text has a context** (`msgctxt`): its key, which says where it shows (`row.Trees.label` is a row's label on the Mods page). Read the note (`#.`) above it too.
+- **Each text has a context** (`msgctxt`): its key, which says where it shows (`row.Trees.label` is a row's label on the mod's page). Read the note (`#.`) above it too.
 - **Keep every `{placeholder}`** exactly as it is: `{count}`, `{name}`. You can move them, but not translate or drop them, or the platform leaves your translation out. One exception: a plural form your language uses for 1 alone may leave out the number ("Jedno drzewo" for "{n} tree broken"). That's the first form in Polish, Czech, German and most others; not in Russian, whose first form is also for 21, 31 and so on, nor in Brazilian Portuguese and French, which use it for 0 as well.
 - **Plurals** have one box per form in your language: Polish has three (1 drzewo; 2, 3, 4, 22 drzewa; 5, 11, 25 drzew). Fill in all of them.
 - **Mind `max-length`**: more characters than that won't fit on screen. Shorten rather than overflow.
 - **Use the game's own words** for its things (Barn Finds, Bucket List, Showcase): look at how the game says them in your language. Address the player the way the game does (in Polish "ty", in Brazilian Portuguese "você").
 - **Only letters the game's font has** show; others come out as boxes. The letters of the languages the game itself is in (Polish, Portuguese, German, French, Spanish, Italian, Dutch, Russian) are fine. The game's Czech and Hungarian are English, so check letters such as ř, ů and ő in game first. In Japanese, Korean and Chinese the font only has the characters the game's own text uses.
-- **Don't use `"`, `<` or `&`** in text that goes on the Mods page or the MODS tab; use `''` for quotes.
+- **Don't use `"`, `<` or `&`** in text that goes on the mod's page or the MODS tab; use `''` for quotes.
 - **Fuzzy means unchecked**: an entry marked fuzzy (Poedit: "Needs work") isn't shown. Clear it once you're happy with the text.
 
 To see your work in game, put your file in `fh2-mods\lang\<the mod's name>\` next to `azimuth.exe`, named for your language (`pl.po`, `pt_BR.po`; the table above has the rest), and start the game in your language. `fh2-mods\platform.log` says that it read your file, and names any entry it left out and why. When it looks right, send the file back to the mod's author (or commit it on Weblate).
