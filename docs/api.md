@@ -1,6 +1,6 @@
 # API reference
 
-Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5, 7 with 2.6, 8 with 2.7, 9 with 2.8 and 10 with 2.9. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 the Mods page, version 5 its sliders, version 6 mod descriptions and link rows for the MODS tab, version 7 byte patches and instruction hooks, version 8 pages of your own, version 9 title-screen entries, choice rows and online play (FH2MP), and version 10 text in the game's language and translations; the sections for those say so.
+Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5, 7 with 2.6, 8 with 2.7, 9 with 2.8 and 10 with 2.9. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 the Mods page, version 5 its sliders, version 6 mod descriptions and link rows for the MODS tab, version 7 byte patches and instruction hooks, version 8 pages of your own, version 9 title-screen entries, choice rows and online play (FH2MP), and version 10 text in the game's language, translations and the UI templates (pop-ups, tips, message boxes, UI sounds and page help); the sections for those say so.
 
 ## Rules that apply everywhere
 
@@ -842,6 +842,243 @@ api->add_setting(g_mod, &s);
 ; fh2-mods\platform-language.ini (the platform writes "last" itself)
 last=pl
 test=1
+```
+
+## UI templates (API 10)
+
+```c
+uint32_t ui_status(FH2Mod* mod);
+int ui_uses(FH2Mod* mod, uint32_t uses);
+int play_ui_sound(FH2Mod* mod, uint32_t sound);
+int show_toast(FH2Mod* mod, const FH2Toast* toast);
+void clear_toast(FH2Mod* mod, const char* key);
+int show_tip(FH2Mod* mod, const FH2Tip* tip);
+int tip_seen(FH2Mod* mod, const char* key);
+void set_tip_seen(FH2Mod* mod, const char* key, int seen);
+int show_message_box(FH2Mod* mod, const FH2MessageBox* box);
+int set_page_help(FH2Mod* mod, const char* page_key, const FH2Prompt* prompts, uint32_t count);
+int set_page_hints(FH2Mod* mod, const char* page_key, const char* const* texts, uint32_t count);
+int show_page_hint(FH2Mod* mod, const char* page_key, int index, uint32_t kind);
+```
+
+Ready-made pieces of the game's own UI that you fill with text: pop-ups on the game's own HUD notification, tips that show once, the game's message box, UI sounds, and the help bar and hint line of your pages. The platform draws them in the game's look, decides when they show, and never takes XAML from you, so nothing you pass can break the game's screens.
+
+> **Being built.** Platform 2.9.0 is still being written. Every member below is in `FH2ModApi` already, so you can build against it, but the ones marked **(being built)** don't work yet: they return 0 (`ui_status` returns no bits, which says that nothing works) and the first call of each says in `platform.log` that it "isn't in this build yet". `ui_uses` works. This section describes them as they're designed, and loses each mark as its member is done.
+
+**Which one for what:**
+
+| You want to | Use |
+|---|---|
+| Tell the player something happened (an unlock, a file written) | `show_toast` (or `fh2ui_notify`) |
+| Answer the player's own key press | `show_toast` with `FH2_TOAST_FLAG_REPLY`; `play_ui_sound` if it returns 0 |
+| Report a fault the player must act on | `show_toast` with `FH2_TOAST_FLAG_URGENT`, saying what to do |
+| Teach a control once | `show_tip` |
+| Ask for a confirmation or a choice | `show_message_box`, from your page |
+| Say what the buttons do on your page | `set_page_help` |
+| Show a short status on your page ("Saved.") | `set_page_hints` and `show_page_hint` |
+| Say something before the game starts | `set_notice` and `add_title_entry` (API 9) |
+
+**Rules for all of them:**
+
+- **Threads.** Every call is quick and can be made from any thread, `fh2mod_init` included, unless it says otherwise. Each copies every string and struct you pass before it returns, so `tr()` results and buffers on your stack are fine; only callbacks and their `user` pointers are kept.
+- **Text** is UTF-8. Pass `tr()` and `tr_plural()` results ([Translations](#translations-api-10)), in sentence case: titles are shown in capitals that the platform makes in the player's language ("Osiągnięcia" becomes "OSIĄGNIĘCIA"). Limits are in characters, not bytes, and longer text is cut with an ellipsis. Where a button goes inside a sentence, write `{button}` in the text, so each language can put it where its word order needs it.
+- **When they show.** Pop-ups and tips wait while the player is in the pause menu, photo mode, a replay, loading or a cutscene, and show once the driving view is back. Time spent waiting there doesn't count toward a pop-up's `expire_s`.
+- **Everything shown is logged**, its text included, because testers attach `platform.log` to bug reports. Flag text that can name people (a gamertag, an account name) `FH2_TOAST_FLAG_PRIVATE`.
+- **Faults.** When the platform catches a crash in one of your callbacks, it drops your waiting pop-ups and tip. A message box of yours that's open stays until the player answers it, and your `on_choose` isn't called.
+- **Nothing works by itself on an older platform**: use [`include/fh2mod_ui.h`](../include/fh2mod_ui.h) (below), and it does nothing there instead of crashing.
+- **Don't hook the game's notification code yourself** (`Show`, `MakeDisplayString`, the notification component's constructor and destructor, the achievements tick): the platform chains them with the mods that already do, and Achievements 1.0.x checks `Show`'s first bytes in memory.
+
+### ui_status and ui_uses
+
+- **`ui_status`** **(being built)** says what works now, as `FH2_UI_` bits. It's cheap, so ask it whenever it matters:
+
+  | Bit | Means |
+  |---|---|
+  | `FH2_UI_TOASTS` | Pop-ups and tips can show this session: the game's notification code is as expected, and the platform's hooks for them are in. |
+  | `FH2_UI_TOASTS_OFF` | The player turned mod pop-ups off: the platform's "Mod pop-ups" row, your mod's "Pop-ups" row, or the game's Minor notifications option, which the platform follows. |
+  | `FH2_UI_TIPS_OFF` | The player turned tips off. |
+  | `FH2_UI_ON_SCREEN` | The free-roam HUD page is on screen now. |
+  | `FH2_UI_GAME_HUD_HIDDEN` | The game has suspended its HUD (a car meet, a Rivals event). |
+  | `FH2_UI_KEYBOARD` | The keyboard or mouse was used last, so buttons are written as keys. |
+
+- **`ui_uses`** says what you'll use, as `FH2_UI_USES_` bits, from `fh2mod_init` only (later, or from a thread of your own, it returns 0 and the log says so). Several calls add up. It returns 1.
+  - `FH2_UI_USES_TOASTS`: you show pop-ups. The platform adds a "Pop-ups" row (On/Off) to your mod's page, so a player can quieten your mod without turning every mod's pop-ups off.
+  - `FH2_UI_USES_OWN_SWITCH`: you have a pop-ups row of your own, so the platform adds none.
+  - `FH2_UI_USES_TIPS`: you show tips. The platform then watches the controller as well as the keyboard, to know which the player used last.
+
+  A mod that shows pop-ups without saying so still has them shown, but gets no row, and the log asks it to declare them.
+
+### play_ui_sound (being built)
+
+Plays one of the game's own UI sounds, wherever the player is. From a page, title-screen or message box callback it plays at once; from anywhere else, at the game's next tick, or not at all if none comes within half a second. The same sound plays at most once per 100 ms from your mod. Never make a sound the only cue: some players have the sound off. It returns 1, or 0 for an unknown sound, one not yet tested on this platform, a repeat within 100 ms, or before the game's sound is up.
+
+| Sound | What it is | |
+|---|---|---|
+| `FH2_SOUND_SELECT` | the menus' select | plays everywhere |
+| `FH2_SOUND_BACK` | the menus' back | plays everywhere |
+| `FH2_SOUND_OPEN` | a menu opening | plays everywhere |
+| `FH2_SOUND_CLOSE` | a menu closing | plays everywhere |
+| `FH2_SOUND_ERROR` | the menus' "can't do that" | returns 0 until tested |
+| `FH2_SOUND_NOTIFY` | the game's notification chime, for a milestone | returns 0 until tested |
+| `FH2_SOUND_INFO` | a pop-up opening | returns 0 until tested |
+| `FH2_SOUND_TICK`, `_TICK_LOW`, `_TICK_END` | the race countdown's beeps | return 0 until tested |
+| `FH2_SOUND_SHUTTER` | the photo shutter | returns 0 until tested |
+
+The release notes say which of the others have been tested and play. The same numbers are the HUD layer preview's sounds ([hud-layer-preview.md](hud-layer-preview.md)).
+
+### show_toast and clear_toast (being built)
+
+```c
+typedef struct FH2Toast {
+    uint32_t size;                 /* sizeof(FH2Toast) */
+    const char* key;               /* letters, digits and '_': replaces your waiting pop-up with the same key; NULL = never */
+    const char* title;             /* UTF-8, shown in capitals; 28 characters */
+    const char* subtitle;          /* UTF-8, as given; 45 characters; may be NULL */
+    uint32_t icon;                 /* FH2_ICON_: one of the game's nine pictures, or none */
+    uint32_t sound;                /* FH2_SOUND_ when it appears; 0 = none, as the game's own pop-ups */
+    uint32_t flags;                /* FH2_TOAST_FLAG_ */
+    uint32_t expire_s;             /* dropped once it could have shown for this long and didn't; 0 = 120; 1 to 600 */
+} FH2Toast;
+```
+
+A pop-up on the game's own HUD notification: one of its pictures, a title and a line, at the bottom centre of the driving view for about 5 seconds, exactly as the game shows a discovered road or an unlocked achievement.
+
+- **One queue for every mod**, spaced around the game's own notifications. One with the same `key` as one of yours that is waiting replaces it (a second F8 press replaces the first's pop-up); one already on screen runs its 5 seconds. Up to `FH2_TOAST_MAX_WAITING` (4) of yours wait at once, and a 5th drops your oldest waiting one.
+- **The player decides** whether mod pop-ups show: the game's Minor notifications option, the platform's "Mod pop-ups" row and your mod's "Pop-ups" row (`FH2_UI_TOASTS_OFF`).
+- **Flags.** `FH2_TOAST_FLAG_URGENT`: a fault the player must know about and act on; it goes first in the queue, twice a session per mod (later ones are treated as normal). `FH2_TOAST_FLAG_REPLY`: it answers the player's own press, honoured when it comes within 1 s of your hotkey, command or callback being called, and dropped if it can't show within 6 s. `FH2_TOAST_FLAG_PRIVATE`: the text may name people, so the log gets your mod's name and the key only, and "Recent pop-ups" shows "(private)".
+- **Icons** are the game's own nine pictures, which always show: `FH2_ICON_TROPHY` (an achievement), `_ROADS` (a road discovered), `_PHOTO`, `_BOARDS` (a bonus board), `_BUCKET` (a bucket list challenge), `_CARMEET`, `_CLUB` (a club payout), `_PAYOUT` (a Drivatar payout) and `_BARNFIND`; or `FH2_ICON_NONE`.
+- **Returns** 1 if queued (it can still expire or be dropped), 0 if not: pop-ups off, no title, a bad key; the log says which.
+- **`clear_toast`** takes down your waiting pop-up `key`, or all your waiting ones for `NULL`. One already on screen runs its 5 seconds.
+
+### show_tip, tip_seen and set_tip_seen (being built)
+
+```c
+typedef struct FH2Tip {
+    uint32_t size;                 /* sizeof(FH2Tip) */
+    const char* key;               /* the seen key: once seen, show_tip with it returns 0; NULL = no seen state */
+    const char* text;              /* UTF-8, with "{button}" where the button goes; 45 characters in all */
+    FH2Prompt button;              /* glyph 0, vk 0 and no hotkey = no button */
+    uint32_t delay_s;              /* seconds of driving, with nothing else showing, before it shows; 0 = 60 */
+    uint32_t max_sessions;         /* FH2_TIP_FLAG_UNTIL_DONE only: shown in at most this many sessions; 0 = 1 */
+    uint32_t flags;                /* FH2_TIP_FLAG_ */
+} FH2Tip;
+```
+
+A hint with a button in it, "Press {button} to keep it", shown once rather than every session: a pop-up with your mod's name as its title and the tip as its line, after `delay_s` seconds of driving and at least 3 minutes after any other mod's tip. One tip per mod a session, and three from every mod together.
+
+- **The button** is written for the device the player used last: "(A)" on a controller, "[SPACE]" on the keyboard, a chord as "(LB) + (RB) + (X)". Set `button.hotkey` to one of your hotkeys' keys (API 9) and it shows the player's current binding.
+- **Seen.** The platform remembers which tips were seen, in `fh2-mods\platform-seen.txt`, by your DLL's file name and the tip's `key`. A tip counts as seen only once it was really drawn: with the game's Minor notifications off, `show_tip` returns 0 and the tip isn't used up. With `FH2_TIP_FLAG_UNTIL_DONE` it's seen only when you call `set_tip_seen(mod, key, 1)`, once the player has done the thing, and `max_sessions` caps how many sessions it shows in until then.
+- **`tip_seen`** returns 1 if the tip `key` has been seen. **`set_tip_seen`** marks it seen (1), which also drops it if it's waiting, or not seen (0), to show it again.
+- **The player** can turn tips off ("Tips" on the platform's page) and bring every mod's tips back ("Show tips again"). Deleting `platform-seen.txt` brings them back too, which is also how to test yours.
+- **Returns** 1 if queued, 0 if it was seen, tips or the game's Minor notifications are off, or a button is set but the text has no `{button}` (the log says which).
+
+### show_message_box (being built)
+
+```c
+typedef void (*FH2BoxChooseFn)(void* user, const char* key, uint32_t choice);
+
+typedef struct FH2MessageBox {
+    uint32_t size;                 /* sizeof(FH2MessageBox) */
+    const char* key;               /* passed to on_choose */
+    const char* title;             /* UTF-8, shown in capitals; 30 characters */
+    const char* message;           /* UTF-8, up to 200 characters, wrapped; may be NULL */
+    const char* const* choices;    /* UTF-8, copied; put the safe one first; no Back of your own */
+    uint32_t choice_count;         /* 1 to FH2_TITLE_MAX_CHOICES - 1 (the platform adds Back); over 10, 8 at a time */
+    uint32_t focus;                /* the choice the focus starts on */
+    FH2BoxChooseFn on_choose;      /* may be NULL */
+    void* user;
+} FH2MessageBox;
+```
+
+The game's own message box over the page the player is on: the screen behind blurred, a title, a message, your choices and Back, which the platform adds last.
+
+- **Only from your callbacks**: a page's `on_open`, `on_select`, `on_button` or `on_slot`, a setting's `on_change`, or a title-screen entry's `on_press` or `on_choose`. From anywhere else (a hotkey, a command, while driving), or from a box's own `on_choose`, it returns 0 and the log says so: send the player to your page instead.
+- **One box at a time**, and nothing is queued, so a box never appears later over a page the player didn't ask on.
+- **`on_choose`** gets the choice (from 0) or `FH2_BOX_BACK`, on the game's UI thread: keep it short, and don't call into the game from it. It may never be called if the player leaves the box another way (B, for now), so never rely on it being called. From it, `show_toast`, `set_tip_seen`, `show_page_hint` and `play_ui_sound` work.
+- **Writing one:** ask a question in the title; say in the message what happens and what's kept; put the safe answer first, where the focus starts; add no Back of your own.
+- **Returns** 1 if shown, 0 if not: not from a callback, a box already open, no choices (the log says why).
+
+### set_page_help, set_page_hints and show_page_hint (being built)
+
+```c
+typedef struct FH2Prompt {
+    uint32_t glyph;                /* FH2_GLYPH_ */
+    uint32_t vk;                   /* the key, a Windows virtual-key code (VK_SPACE, 'R'); 0 = the glyph always */
+    uint32_t modifiers;            /* FH2_KEY_CTRL | FH2_KEY_SHIFT | FH2_KEY_ALT (API 9), shown before it */
+    uint32_t word;                 /* FH2_WORD_: the game's own word instead of `label` */
+    const char* hotkey;            /* or the key of one of your hotkeys: shows its current binding; NULL = not used */
+    const char* label;             /* UTF-8: "Keep it"; ignored when `word` is set */
+    int32_t hold;                  /* nonzero: "Hold" before it, with the hold fill (the HUD layer only) */
+    uint32_t reserved[5];          /* zero */
+} FH2Prompt;
+```
+
+- **`set_page_help`** sets your page's help bar: these prompts (copied), beside the platform's own (B) Back and, when the page has `on_select`, (A) Select, in the game's order. Only buttons a callback of the page can handle are accepted: A and B on a page of rows; A, B, X, Y, LB and RB on a page of your own design (`on_button`). It returns how many prompts were accepted, and the log says why any weren't.
+- **`set_page_hints`** gives the texts your page's hint line can show (copied; up to 8, each up to 80 characters), written into the page each time it opens. Call it from `fh2mod_init` or the page's `on_open`. It returns 1, or 0 for no such page.
+- **`show_page_hint`** shows hint `index` in `kind`, or none for -1: `FH2_HINT_INFO` (white), `FH2_HINT_ATTENTION` (orange, with the info glyph) or `FH2_HINT_FAULT` (red, with a warning glyph). When the page opens, or from its own callbacks, it changes on screen at once; at any other time it shows the next time the page opens. It returns 1, or 0 for no such page or hint.
+- **Glyphs** (`FH2_GLYPH_`) are the game's own controller pictures, 0 to 24: A, B, X, Y, LB, RB (1 to 6, the same numbers as `FH2_BUTTON_A` to `FH2_BUTTON_RB`, so a page's button code is its glyph), LT, RT, Menu, View, the d-pad's four directions and its up/down and left/right pairs, L3, R3, and each stick with its up/down and left/right. The HUD layer preview uses the same numbers.
+- **Words** (`FH2_WORD_`) are the game's own, in the player's language with no translation work: `SELECT`, `BACK`, `ACCEPT`, `TOGGLE`, `ON`, `OFF`, `PREVIOUS` and `NEXT`.
+- `FH2Prompt` is embedded in `FH2Tip` and passed in arrays, so it's frozen: it never grows, and `reserved` must be zero. `FH2Toast`, `FH2Tip` and `FH2MessageBox` start with `size`, and the platform reads only that many bytes of them, so a mod built against a later header still works here, and one built against this header works on a later platform.
+
+### fh2mod_ui.h: the same calls on any platform
+
+[`include/fh2mod_ui.h`](../include/fh2mod_ui.h), header-only, wraps every member as `fh2ui_<member>`, with the member's own arguments but without `api` and `mod`. On a platform whose `FH2ModApi` hasn't got the member (it checks `api->size`), each does nothing and returns 0, so a mod built against API 10 runs on an older platform without its templates and needs no version checks. Call `fh2_helpers_init(api, mod)` once, straight after `register_mod`; it keeps the two pointers ([`include/fh2mod_helpers.h`](../include/fh2mod_helpers.h): automatic in C++, and in C define `FH2_HELPERS_IMPLEMENTATION` in one `.c` file). Two more: `fh2ui_notify(title, line)`, a pop-up with no key, icon or sound, in one call; and `fh2ui_notify_or_log(title, line)`, which writes "title: line" to `platform.log` when the pop-up isn't shown.
+
+What to do when a call returns 0 is yours to choose. Some suggestions: for a pop-up, your own path or a line in the log; for a tip, a title-screen notice (`set_notice`); for a message box, a page row with a description; for page help and the hint line, the help fragment and row descriptions you have today. Every mod's release still ships the platform it was built with, and an older platform from another mod's zip takes the templates away until a newer one is installed again.
+
+```cpp
+#include "fh2mod_ui.h"
+#include "fh2mod_l10n.h"
+
+// in fh2mod_init
+g_mod = api->register_mod(&info);
+fh2_helpers_init(api, g_mod);
+fh2ui_ui_uses(FH2_UI_USES_TOASTS | FH2_UI_USES_TIPS);
+
+// a hotkey's on_press: a pop-up that answers it, or a sound and a log line
+static void on_snapshot(void*, const char*) {
+    FH2Toast t{};
+    t.size     = sizeof t;
+    t.key      = "Snapshot";   // a second press replaces it while it waits
+    // L10N: pop-up title
+    t.title    = FH2_TR(FH2_API, FH2_MOD, "toast.snapshot", "Snapshot written");
+    t.subtitle = FH2_TR(FH2_API, FH2_MOD, "toast.snapshot.where", "WreckingBall-defs.txt, next to the game");
+    t.icon     = FH2_ICON_PHOTO;
+    t.flags    = FH2_TOAST_FLAG_REPLY;
+    if (!fh2ui_show_toast(&t)) {   // off, or an older platform
+        fh2ui_play_ui_sound(FH2_SOUND_SELECT);
+        FH2_API->log(FH2_MOD, "Snapshot written (no pop-up shown).");
+    }
+    fh2ui_set_tip_seen("FirstSnapshot", 1);   // the tip below has done its job
+}
+
+// a tip that follows the hotkey's binding, until the player has used it
+FH2Tip tip{};
+tip.size = sizeof tip;
+tip.key  = "FirstSnapshot";
+tip.text = FH2_TR(FH2_API, FH2_MOD, "tip.snapshot", "Press {button} to write a snapshot");
+tip.button.hotkey = "Snapshot";   // [F8], or the player's own binding
+tip.flags = FH2_TIP_FLAG_UNTIL_DONE;
+tip.max_sessions = 3;
+fh2ui_show_tip(&tip);
+
+// a confirm box from your page's on_select (the row "Reset")
+static void on_reset_choice(void*, const char*, uint32_t choice) {
+    if (choice == 1) reset_progress();   // 0 is "Keep my progress"; FH2_BOX_BACK is Back
+}
+static void on_select(void*, const char*, const char* row_key) {
+    if (strcmp(row_key, "Reset") != 0) return;
+    const char* choices[] = {FH2_TR(FH2_API, FH2_MOD, "box.keep", "Keep my progress"), FH2_TR(FH2_API, FH2_MOD, "box.reset", "Reset")};
+    FH2MessageBox b{};
+    b.size = sizeof b;
+    b.key = "Reset";
+    b.title = FH2_TR(FH2_API, FH2_MOD, "box.title", "Reset your progress?");
+    b.message = FH2_TR(FH2_API, FH2_MOD, "box.msg", "Every achievement and counter goes back to locked. Your save isn't touched.");
+    b.choices = choices;
+    b.choice_count = 2;
+    b.on_choose = on_reset_choice;
+    fh2ui_show_message_box(&b);   // works here: on_select is a page callback
+}
 ```
 
 ## Crash reports
