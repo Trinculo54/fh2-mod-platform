@@ -4526,6 +4526,16 @@ void hook_tiles(FH2Mod* m) {
     }
 }
 
+// Whether a mod has anything of its own under YOUR MODS or on a tile (settings, hotkeys, links, pages): what the player
+// misses while the MODS menus aren't showing. The Load switches and the platform's own page don't count.
+bool mods_have_settings() {
+    const auto a_mods = [](const FH2Mod* m) { return m && m != &g_hub_owner && m != &g_owner_mod && m != platform_self(); };
+    std::scoped_lock lk{g_mu};
+    return std::any_of(g_rows.begin(), g_rows.end(), [&](const Row& r) { return a_mods(r.mod); }) ||
+           std::any_of(g_links.begin(), g_links.end(), [&](const LinkRow& l) { return a_mods(l.mod); }) ||
+           std::any_of(g_pages.begin(), g_pages.end(), [&](const ModPage& p) { return a_mods(p.mod); });
+}
+
 void hook_hud_shown(FH2Mod* m);
 bool g_hud_notice = false;   // A_Hud.xaml has the notice
 void d_pause_menu_wire(void* page) {
@@ -4541,7 +4551,8 @@ void d_pause_menu_wire(void* page) {
     g_hub_builds = 0;
     o_pause_menu_wire(page);
     wire_installed_tile(page);
-    // the MODS tab's tiles aren't there: the game isn't reading the platform's files. Said once a session.
+    // the MODS tab's tiles aren't there: the game isn't reading the platform's files. Logged once a session; the
+    // player is told only when a mod has settings, links or pages there to miss, and once for each platform version.
     static bool looked = false;
     if (!looked && page && g_find_button_ok && g_popup_ok) {
         looked = true;
@@ -4550,8 +4561,16 @@ void d_pause_menu_wire(void* page) {
             slog("couldn't look for the MODS tab's tiles on the pause menu");
         } else if (!has) {
             slog("the pause menu has no MODS tab: the game isn't reading the platform's menu files (for the mediaoverride folder, "
-                 "Extra Options needs EnableMediaOverrides=1 and its patches on). Telling the player once this session");
-            if (show_missing_box(page)) return;   // no restart question under it
+                 "Extra Options needs EnableMediaOverrides=1 and its patches on)");
+            if (!mods_have_settings()) {
+                slog("no mod has settings, links or pages to miss there, so the player isn't told");
+            } else if (seen_get(kSeenPlatform, "menus.missing.told") == FH2MOD_PLATFORM_VERSION) {
+                slog("the player has been told about it with this platform version already, so not again");
+            } else if (show_missing_box(page)) {
+                seen_set(kSeenPlatform, "menus.missing.told", FH2MOD_PLATFORM_VERSION);
+                slog("told the player in a message box (once for platform " FH2MOD_PLATFORM_VERSION ")");
+                return;   // no restart question under it
+            }
         }
     }
     // a page's tile text may have changed since this page's bindings read it

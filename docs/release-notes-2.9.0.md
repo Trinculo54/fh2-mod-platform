@@ -14,7 +14,7 @@ The language and UI release. Mod settings get one home, the platform's menus fol
   - A car whose drivetrain isn't in the game's database (from a car pack or a mod that changes the database) no longer stops the game when the Autoshow or a garage lists it: it's listed without its drivetrain, and `platform.log` names the car ([issue #23](https://github.com/Trinculo54/fh2-mod-platform/issues/23)).
   - A mod's page that would crash the game as it opens is checked first, and shows "This page couldn't be shown" instead. A page that crashed the game anyway, as it opened, is left out until the mod is updated or reinstalled, or until you press A on that message to give it another try.
   - When another program installs a crash handler after the platform's, a crash now goes through it once, after the platform's report, instead of back and forth between the two until the stack overflowed; Azimuth's and Windows' own handling is reached again.
-- **If the MODS tab is missing** because the game isn't reading the platform's menu files, a message box now says so once a session, and `fh2-mods\platform.log` says why.
+- **If the MODS tab is missing** because the game isn't reading the platform's menu files, and a mod has settings or pages you'd miss, a message box now says so, once for each platform version, and `fh2-mods\platform.log` says why every session.
 
 ### Online play (FH2MP)
 

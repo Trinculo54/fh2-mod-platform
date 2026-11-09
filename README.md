@@ -39,7 +39,7 @@ The platform turns the pause menu's old MARKETPLACE tab, the last one, into **MO
 - **To turn a mod off**, use Load this mod at the bottom of its page. Outside the game, move its DLL out of `fh2-mods`.
 - Until you've opened YOUR MODS once, the title screen says where mod settings are, the MODS tab has a NEW mark, and the first few times you drive the game says which mods are loaded. A mod you add later gets a "NEW MOD" notice once. All of this is kept in `fh2-mods\platform-seen.txt`; deleting it brings the hints back.
 
-**If MODS is missing**, the game isn't reading the platform's menu files, and from 2.9.0 a message box says so once a session. With Extra Options, update it, keep `EnableMediaOverrides=1` in `FH2_ExtraOptions.ini`, and check the first line of `FH2_ExtraOptions.log`. `fh2-mods\platform.log` says why. Your mods keep running meanwhile; to turn one off, move its DLL out of `fh2-mods`.
+**If MODS is missing**, the game isn't reading the platform's menu files, and from 2.9.0, when a mod has settings or pages you'd miss, a message box says so once for each platform version. With Extra Options, update it, keep `EnableMediaOverrides=1` in `FH2_ExtraOptions.ini`, and check the first line of `FH2_ExtraOptions.log`. `fh2-mods\platform.log` says why. Your mods keep running meanwhile; to turn one off, move its DLL out of `fh2-mods`.
 
 Before platform 2.9.0, Pause > Settings > MODS opened a page of its own with every mod's switches, and each mod's full page was under MODS > INSTALLED MODS. A mod zip that ships an older platform brings that layout back until a mod with platform 2.9.0 or newer is installed again.
 
