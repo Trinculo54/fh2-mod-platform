@@ -355,11 +355,16 @@ int wmain(int argc, wchar_t** argv) {
     const bool online_phase = phase.rfind(L"online", 0) == 0 || phase == L"fh2mp-off";
     // the HUD layer preview's phase: run last, with HudTestMod.dll added
     const bool hud_phase = phase == L"hud";
+    // the cues about where mod settings are (platform 2.9.0): run after "removed", with platform-seen.txt edited
+    const bool cue_phase = phase == L"upgrade" || phase == L"newmod" || phase == L"home";
+    // the game's UI.zip is here (FH2_MEDIA), so the MODS menus are written: the title screen's line points at them
+    const bool menus = fs::exists(L"FH2\\Mount\\media\\UI.zip");
     std::string log;
     for (int i = 0; i < 250; ++i) {
         Sleep(100);
         log = slurp(L"fh2-mods\\platform.log");
-        if (hud_phase ? has(log, "mod(s) loaded") && has(log, "[HudTestMod] after init:") && has(log, "[HUD layer] page:") &&
+        if (cue_phase ? has(log, "mod(s) loaded")
+            : hud_phase ? has(log, "mod(s) loaded") && has(log, "[HudTestMod] after init:") && has(log, "[HUD layer] page:") &&
                             (argc <= 2 || hud_started(log))
             : online_phase ? has(log, "mod(s) loaded") &&
                                  ((phase != L"online-late" && phase != L"online-ready") || has(log, "[OfflineMod] after start:")) &&
@@ -395,20 +400,31 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(ai_has(L"Buddy1") && ai_has(L"Buddy2") && !ai_has(L"Nocomply76") && ai_has(L"Womgoose"));
         const auto title = str("Main.str", 0x18F0);
         std::printf("title: [%ls]\n", title.c_str());
-        // the platform's own line about where mod settings are comes last (fh2-mods\notices\~platform.txt), until
-        // YOUR MODS has been opened (platform 2.9.0)
-        CHECK(title == L"\n\n\n\n\nTO START\nTest notice line\nsecond line\nOld FH2 Mod Platform: reinstall TestMod\nMod settings: Pause > MODS (the last tab)");
-        // TestMod's notice is tr()'s text (API 10): each language's Main.str has it in that language's words, with the
-        // platform's line after it; English where there's no translation (TestMod's Brazilian Portuguese has none).
-        // The platform's own line is in each language's words too (tr_in).
-        CHECK(str_in(L"PL", "Main.str", 0x18F0) ==
-              L"\n\n\n\n\nTO START\nTestowa linia og\u0142oszenia\ndruga linia\nOld FH2 Mod Platform: reinstall TestMod\n"
-              L"Ustawienia mod\u00f3w: Pauza > MODS (ostatnia karta)");
-        CHECK(str_in(L"br", "Main.str", 0x18F0) ==
-              L"\n\n\n\n\nTO START\nTest notice line\nsecond line\nOld FH2 Mod Platform: reinstall TestMod\n"
-              L"Configura\u00e7\u00f5es dos mods: Pausa > MODS (a \u00faltima aba)");
-        CHECK(slurp(L"fh2-mods\\notices\\~platform.txt") == "\nMod settings: Pause > MODS (the last tab)\n");
-        CHECK(has(log, "[MODS] title screen: where mod settings are, until YOUR MODS is opened"));
+        // the platform's own line about where mod settings are comes last (fh2-mods\platform-title.txt), until
+        // YOUR MODS has been opened (platform 2.9.0); with no MODS menus to point at (no UI.zip here), there's none
+        if (menus) {
+            CHECK(title == L"\n\n\n\n\nTO START\nTest notice line\nsecond line\nOld FH2 Mod Platform: reinstall TestMod\nMod settings: Pause > MODS (the last tab)");
+            // TestMod's notice is tr()'s text (API 10): each language's Main.str has it in that language's words, with
+            // the platform's line after it; English where there's no translation (TestMod's Brazilian Portuguese has
+            // none). The platform's own line is in each language's words too (tr_in).
+            CHECK(str_in(L"PL", "Main.str", 0x18F0) ==
+                  L"\n\n\n\n\nTO START\nTestowa linia og\u0142oszenia\ndruga linia\nOld FH2 Mod Platform: reinstall TestMod\n"
+                  L"Ustawienia mod\u00f3w: Pauza > MODS (ostatnia karta)");
+            CHECK(str_in(L"br", "Main.str", 0x18F0) ==
+                  L"\n\n\n\n\nTO START\nTest notice line\nsecond line\nOld FH2 Mod Platform: reinstall TestMod\n"
+                  L"Configura\u00e7\u00f5es dos mods: Pausa > MODS (a \u00faltima aba)");
+            // kept out of fh2-mods\notices, which older platforms read too (they'd show it in English at every start)
+            CHECK(has(slurp(L"fh2-mods\\platform-title.txt"), "\nMod settings: Pause > MODS (the last tab)\n"));
+            CHECK(has(log, "[MODS] title screen: where mod settings are, until YOUR MODS is opened"));
+        } else {
+            CHECK(title == L"\n\n\n\nTO START\nTest notice line\nsecond line\nOld FH2 Mod Platform: reinstall TestMod");
+            CHECK(str_in(L"PL", "Main.str", 0x18F0) ==
+                  L"\n\n\n\nTO START\nTestowa linia og\u0142oszenia\ndruga linia\nOld FH2 Mod Platform: reinstall TestMod");
+            CHECK(!fs::exists(L"fh2-mods\\platform-title.txt") && !has(log, "[MODS] title screen:"));
+        }
+        CHECK(!fs::exists(L"fh2-mods\\notices\\~platform.txt"));
+        CHECK(has(log, "this is the platform's first start in this Azimuth folder\n") ||
+              has(log, "this is the platform's first start in this Azimuth folder\r\n"));
         CHECK(slurp(L"fh2-mods\\platform-tables.txt").find("AIPlayers.str") != std::string::npos);
         if (argc > 2) CHECK(log.find("the game is mapped at") != std::string::npos);
 
@@ -859,13 +875,58 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(!has(log, "started from the FH2MP launcher") && has(log, "FH2MP.dll is turned off on the MODS tab"));
             CHECK(has(log, "[OfflineMod] running offline") && has(log, "loaded HelloMod.dll"));
         }
+    } else if (cue_phase) {
+        // The cues about where mod settings are, kept in platform-seen.txt (platform 2.9.0), so a second start of the
+        // game in the same launch (Azimuth can do that) still has them: platform-mods.txt is written again at once.
+        const std::string seen  = slurp("fh2-mods\\platform-seen.txt");
+        const std::wstring title = str("Main.str", 0x18F0);
+        std::printf("title: [%ls]\n", title.c_str());
+        const bool pages = fs::exists(L"FH2\\Mount\\media\\UI.zip") && argc <= 2;
+        const std::string hud = pages ? slurp(layer() / L"UI\\Scenes\\Anthem\\A_Hud.xaml") : std::string();
+        if (pages) {
+            std::string why;
+            const bool ok = well_formed(hud, why);
+            std::printf("%s A_Hud.xaml is well-formed%s%s\n", ok ? "ok  " : "FAIL", ok ? "" : ": ", why.c_str());
+            if (!ok) ++fails;
+        }
+        CHECK(!fs::exists(L"fh2-mods\\notices\\~platform.txt"));
+        if (phase == L"upgrade") {
+            // platform-mods.txt there and platform-seen.txt not: an older platform ran here, so it's an upgrade
+            CHECK(has(seen, "*\tfirst\tupgrade\t"));
+            CHECK(has(log, "this is the platform's first start in this Azimuth folder; an older platform ran here before"));
+            if (menus) {
+                CHECK(title == L"\n\nTO START\nMod settings have moved: Pause > MODS" &&
+                      str_in(L"PL", "Main.str", 0x18F0) == L"\n\nTO START\nUstawienia modów są teraz tu: Pauza > MODS");
+                CHECK(has(slurp(L"fh2-mods\\platform-title.txt"), "\nMod settings have moved: Pause > MODS\n"));
+                CHECK(has(log, "[MODS] title screen: mod settings have moved"));
+            }
+        } else if (phase == L"newmod") {
+            // OfflineMod is new, and the welcome has had its three sessions: the HUD's notice is NEW MOD. The upgrade
+            // is still told (the HUD hasn't been shown since).
+            CHECK(has(seen, "OfflineMod.dll\tmod.new\t") && has(seen, "*\tfirst\tupgrade\t"));
+            CHECK(has(slurp("fh2-mods\\platform-mods.txt"), "OfflineMod.dll\t"));
+            if (menus) CHECK(title == L"\n\nTO START\nMod settings have moved: Pause > MODS");
+            if (pages)
+                CHECK(has(hud, "NEW MOD: OFFLINEMOD") && has(hud, "Its settings are under Pause ") &&
+                      !has(hud, "YOUR MODS ARE READY"));
+        } else {
+            // home: YOUR MODS has been opened, so no line on the title screen. OfflineMod is still told as new, though
+            // platform-mods.txt has listed it since the launch before: its notice hasn't played yet.
+            CHECK(title.find(L"Mod settings") == std::wstring::npos && !fs::exists(L"fh2-mods\\platform-title.txt"));
+            CHECK(!has(log, "[MODS] title screen:"));
+            CHECK(has(seen, "OfflineMod.dll\tmod.new\t"));
+            if (pages) CHECK(has(hud, "NEW MOD: OFFLINEMOD") && !has(hud, "YOUR MODS ARE READY"));
+        }
     } else {
         // TestMod gone: its tables and notice are cleaned up, HelloMod's stays. The title screen keeps only the
         // platform's line about where mod settings are (YOUR MODS hasn't been opened), in each language's words.
         CHECK(str("LoadingMessages.str", 0x6875) == L"Fast Traveling to Destination (hello from HelloMod!)");
         CHECK(str("AIPlayers.str", 0) == L"<none>");
-        CHECK(str("Main.str", 0x18F0) == L"\n\nTO START\nMod settings: Pause > MODS (the last tab)" &&
-              str_in(L"PL", "Main.str", 0x18F0) == L"\n\nTO START\nUstawienia modów: Pauza > MODS (ostatnia karta)");
+        if (menus)
+            CHECK(str("Main.str", 0x18F0) == L"\n\nTO START\nMod settings: Pause > MODS (the last tab)" &&
+                  str_in(L"PL", "Main.str", 0x18F0) == L"\n\nTO START\nUstawienia modów: Pauza > MODS (ostatnia karta)");
+        else
+            CHECK(str("Main.str", 0x18F0).find(L"Mod settings") == std::wstring::npos);
         CHECK(str("LoadingMessages.str", 0x5507) != L"A loading tip from TestMod" &&
               str_in(L"PL", "LoadingMessages.str", 0x5507) != L"Wskaz\u00f3wka z TestMod");
         CHECK(slurp(L"fh2-mods\\platform-tables.txt").find("AIPlayers.str") == std::string::npos);

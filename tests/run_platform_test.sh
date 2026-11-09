@@ -54,6 +54,21 @@ run_layout() {   # run_layout mediaoverride|own
     wine azimuth.exe full "${exe[@]}"
     rm fh2-mods/TestMod.dll
     wine azimuth.exe removed
+    # The cues about where mod settings are (platform 2.9.0), told from fh2-mods\platform-seen.txt: an older platform
+    # ran here (platform-mods.txt there, platform-seen.txt not); then OfflineMod added once the welcome has had its
+    # three sessions; then YOUR MODS opened. Both files are put back after, for the phases below.
+    cp fh2-mods/platform-seen.txt seen.keep
+    cp fh2-mods/platform-mods.txt mods.keep
+    rm fh2-mods/platform-seen.txt
+    wine azimuth.exe upgrade
+    printf '*\twelcome.sessions\t3\t2026-11-08\n' >> fh2-mods/platform-seen.txt
+    cp "$b/OfflineMod.dll" fh2-mods/
+    wine azimuth.exe newmod
+    printf '*\thome\tseen\t2026-11-08\n' >> fh2-mods/platform-seen.txt
+    wine azimuth.exe home
+    rm fh2-mods/OfflineMod.dll
+    mv seen.keep fh2-mods/platform-seen.txt
+    mv mods.keep fh2-mods/platform-mods.txt
     # The database test makes its own Azimuth folders (without data\titles): once is enough.
     [ "$1" = mediaoverride ] && wine database_test.exe
     wine azimuth.exe crash
