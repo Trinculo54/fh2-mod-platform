@@ -102,14 +102,22 @@ struct CrashReport {
     std::string name;
 };
 
+// How soon after a page's "opening" mark a crash report has to be for the page to count as the cause: 30 s, in
+// FILETIME's 100 ns ticks. A page that crashes the game does so as it loads, within a second or two.
+inline constexpr std::uint64_t kGuardCrashWindow = 30ull * 10000000ull;
+
 // Last session's entries as this session starts, by the rule the HUD layer's crash marker has. A page still
-// "opening" is left out only with something to show the game went down loading it: a crash report newer than the
-// mark (`file_time`, the guard file's last-write time, stands in for a line without one), or the same page left
-// opening in two sessions running. Otherwise the mark is dropped, and it goes into `carried`, so a mark this session
-// counts it (page_guard_opening). A page left out stays so until its DLL changes. `stamp_of` gives a DLL's stamp now
-// ("" if it's gone). `lines` gets a log line for each entry.
+// "opening" is left out only with something to show the game went down loading it: a crash report from within
+// kGuardCrashWindow after the mark (`file_time`, the guard file's last-write time, stands in for a line without one),
+// or the same page left opening in two sessions running. A crash report from later than that is another crash: the
+// mark is dropped. With no crash report since, the mark is dropped too, and it goes into `carried`, so a mark this
+// session counts it (page_guard_opening). A page left out stays so until its DLL changes or guard_retry takes it
+// out. `stamp_of` gives a DLL's stamp now ("" if it's gone). `lines` gets a log line for each entry.
 std::vector<GuardEntry> guard_at_start(const std::vector<GuardEntry>& last, const std::function<std::string(const std::string&)>& stamp_of,
                                        const CrashReport& newest, std::uint64_t file_time, std::vector<GuardEntry>& carried,
                                        std::vector<std::string>& lines);
+
+// The player gives a left-out page another try: its "skip" entry (the DLL in any case) goes. True if there was one.
+bool guard_retry(std::vector<GuardEntry>& entries, std::string_view dll, std::string_view page);
 
 } // namespace fh2platform

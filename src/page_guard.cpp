@@ -3,10 +3,11 @@
 // The crash guard's file, fh2-mods\platform-pages.txt (format in xaml_safety.cpp, guard_text), is written by the
 // game's UI thread as a page opens: CreateFileW and WriteFile only, small, and not flushed (a crash of the game
 // doesn't lose what Windows has been given). The mark is taken off once the page has been up for 10 s, or as soon as
-// the player leaves it, so a session that ends any other way leaves nothing behind. A mark found at the next start
-// leaves the page out only by the HUD layer's crash marker's rule: a crash report in fh2-mods\crashes newer than the
-// mark, or the page left opening in two sessions running (the player closing Azimuth's window as a page opens leaves
-// a mark too, and that alone isn't a crash).
+// the player leaves it (another page, the pause menu, or the freeroam HUD again), so a session that ends any other
+// way leaves nothing behind. A mark found at the next start leaves the page out only by the HUD layer's crash
+// marker's rule: a crash report in fh2-mods\crashes from within 30 s after the mark, or the page left opening in two
+// sessions running (the player closing Azimuth's window as a page opens leaves a mark too, and that alone isn't a
+// crash). A page left out says so on its tile, where A gives it another try (page_guard_retry).
 #include "page_guard.hpp"
 
 #include "platform.hpp"
@@ -230,6 +231,18 @@ bool page_guard_skipped(const FH2Mod* mod, const std::string& page) {
     for (const GuardEntry& e : g_guard)
         if (e.state == "skip" && e.page == page && same_dll(e.dll, dll)) return true;
     return false;
+}
+
+bool page_guard_retry(const FH2Mod* mod, const std::string& page) {
+    if (!mod) return false;
+    const std::string dll = narrow(mod->dll);
+    {
+        std::scoped_lock lk{g_guard_mu};
+        if (!guard_retry(g_guard, dll, page)) return false;
+        write_guard();
+    }
+    plog("pages: " + dll + "'s page " + page + " gets another try, as the player chose: it's shown the next time it opens");
+    return true;
 }
 
 void page_guard_opening(const FH2Mod* mod, const std::string& page) {

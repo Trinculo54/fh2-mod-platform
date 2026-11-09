@@ -2309,10 +2309,14 @@ std::string page_left_out(const ModPage& pg) {
     if (pg.xaml_refused)
         return trf("This page from {0} has a mistake that would crash the game, so it's left out. fh2-mods\\platform.log has more.", {pg.mod->name});
     if (page_guard_skipped(pg.mod, pg.key))
-        return trf("The game crashed opening this page last time, so it's left out until {0} is updated. fh2-mods\\platform.log has more.",
+        return trf("The game crashed opening this page last time, so it's left out until {0} is updated or you choose to try it again. "
+                   "fh2-mods\\platform.log has more.",
                    {pg.mod->name});
     return "";
 }
+// What A does on the row a page left out by the crash guard shows on its tile (its select; a mod's row keys are
+// letters, digits and _, so never this): page_guard_retry.
+const char* const kRetryPage = "*retry";
 
 // A page's rows, as its list shows them (under g_mu).
 std::vector<PageItem> page_items(const ModPage& pg) {
@@ -3107,6 +3111,11 @@ bool write_hub_page(int p) {
                 g_pages[j].xaml_written = content;
             } else if (!left_out.empty()) {   // left out: the platform's own row says why, rather than the game crashing
                 items = {info(tr("This page couldn't be shown"), left_out)};
+                if (!pg.xaml_refused) {   // the crash guard's: A gives it another try (a mod that never chose the guard can undo it)
+                    items[0].hint   = tr("Press A to try it again the next time you open it.");
+                    items[0].select = kRetryPage;
+                    select          = true;
+                }
                 title = pg.title;
                 g_pages[j].xaml_written.clear();
             } else {
@@ -4339,7 +4348,9 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
                 j      = g_tile_page[t];
                 custom = j >= 0 && g_pages[j].custom && !left_out(g_pages[j]);
             }
-            if (custom) return custom_page_button(page, j, button, pressed);
+            // the crash guard's message is what's on screen until the page opens again, even once A has given it another try
+            const bool retry_shown = !g_tile_acts[t].empty() && g_tile_acts[t][0].select == kRetryPage;
+            if (custom && !retry_shown) return custom_page_button(page, j, button, pressed);
         }
     for (std::size_t t = 0; t < kTileCount; ++t)
         if (page && page == g_tile_page_obj[t].load() && button == kButtonA) {
@@ -4347,11 +4358,18 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
             const int n = g_selected.load();
             if (pressed && n >= 0 && static_cast<std::size_t>(n) < g_tile_acts[t].size() && !g_tile_acts[t][n].select.empty()) {
                 int j = -1;
+                FH2Mod* mod = nullptr;
+                std::string key;
                 {
                     std::scoped_lock lk{g_mu};
                     j = g_tile_page[t];
+                    if (j >= 0) mod = g_pages[j].mod, key = g_pages[j].key;
                 }
-                select_on_page(j, g_tile_acts[t][n].select, page);
+                if (g_tile_acts[t][n].select == kRetryPage) {   // a page the crash guard left out: tried again next time
+                    if (page_guard_retry(mod, key)) play_sound(kSoundSelect);
+                } else {
+                    select_on_page(j, g_tile_acts[t][n].select, page);
+                }
             }
             return true;
         }

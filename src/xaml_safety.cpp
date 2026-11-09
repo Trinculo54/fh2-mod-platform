@@ -452,7 +452,8 @@ std::vector<GuardEntry> parse_guard(std::string_view text) {
 
 std::string guard_text(const std::vector<GuardEntry>& entries) {
     std::string s = "# FH2 Mod Platform: pages of the mods' own design that were opening when the game stopped, and ones left out\r\n"
-                    "# since, until their mod's DLL changes (platform.log says why). Delete a line to try that page again.\r\n";
+                    "# since, until their mod's DLL changes (platform.log says why). To try a page again, press A on the message\r\n"
+                    "# its tile shows instead, or delete its line here.\r\n";
     for (const GuardEntry& e : entries) {
         char tail[48];
         std::snprintf(tail, sizeof tail, "\t%d\t%016llX\r\n", e.sessions, static_cast<unsigned long long>(e.marked));
@@ -479,17 +480,24 @@ std::vector<GuardEntry> guard_at_start(const std::vector<GuardEntry>& last, cons
             continue;
         }
         if (e.state == "opening") {
-            // as the HUD layer's crash marker: a crash report since the mark, or two sessions running
+            // as the HUD layer's crash marker: a crash report soon after the mark, or two sessions running
             const std::uint64_t marked = e.marked ? e.marked : file_time;
-            if (!newest.name.empty() && newest.time > marked) {
+            if (!newest.name.empty() && newest.time > marked && newest.time - marked <= kGuardCrashWindow) {
                 e.state = "skip";
                 lines.push_back("the game crashed while " + page + " was opening last session (crash report " + newest.name +
-                                "); the page is left out until " + e.dll + " changes (an update or a reinstall)");
+                                "); the page is left out until " + e.dll + " changes (an update or a reinstall) or the player "
+                                "gives it another try");
+            } else if (!newest.name.empty() && newest.time > marked) {
+                // the game went on for a while after the page started opening: that crash was something else's
+                lines.push_back("the game crashed " + std::to_string((newest.time - marked) / 10000000) + " s after " + page +
+                                " started opening last session (crash report " + newest.name + "), too long after for the page to be "
+                                "the cause, so the page stays in");
+                continue;
             } else if (e.sessions >= 2) {
                 e.state = "skip";
                 lines.push_back("the game stopped while " + page + " was opening in " + std::to_string(e.sessions) +
                                 " sessions running, and it was never up for 10 s; the page is left out until " + e.dll +
-                                " changes (an update or a reinstall)");
+                                " changes (an update or a reinstall) or the player gives it another try");
             } else {
                 carried.push_back(e);
                 lines.push_back("the game stopped while " + page + " was opening last session, but there's no crash report since, so the "
@@ -498,11 +506,17 @@ std::vector<GuardEntry> guard_at_start(const std::vector<GuardEntry>& last, cons
             }
         } else {
             lines.push_back(page + " is still left out: the game stopped while it was opening" + (e.date.empty() ? "" : " on " + e.date) +
-                            ", and " + e.dll + " hasn't changed since");
+                            ", and " + e.dll + " hasn't changed since (A on the page's message gives it another try)");
         }
         out.push_back(e);
     }
     return out;
+}
+
+bool guard_retry(std::vector<GuardEntry>& entries, std::string_view dll, std::string_view page) {
+    const std::size_t before = entries.size();
+    std::erase_if(entries, [&](const GuardEntry& e) { return e.state == "skip" && e.page == page && lowered(e.dll) == lowered(dll); });
+    return entries.size() != before;
 }
 
 } // namespace fh2platform

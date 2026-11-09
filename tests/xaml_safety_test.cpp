@@ -418,6 +418,42 @@ void guard() {
     const std::vector<GuardEntry> old = guard_at_start(e, stamp_of, {0x01DD000000000100ull, "crash-old.txt"}, 0x01DD000000000150ull, carried, lines);
     check(old.size() == 2 && carried.size() == 2, "a crash report older than the mark doesn't count");
 
+    // only a crash soon after the mark counts (30 s): later, the game had gone on, and the crash was something else's
+    {
+        const std::uint64_t mark = 0x01DD000100000000ull;
+        const std::vector<GuardEntry> one = {{"opening", "TestMod.dll", "Stats", "100-01D9", "2026-11-08", 1, mark},
+                                             {"opening", "TestMod.dll", "Twice", "100-01D9", "2026-11-08", 2, mark}};
+        lines.clear();
+        const std::vector<GuardEntry> soon = guard_at_start(one, stamp_of, {mark + 29 * 10000000ull, "crash-soon.txt"}, 0, carried, lines);
+        check(soon.size() == 2 && soon[0].state == "skip" && soon[1].state == "skip" && carried.empty(),
+              "a crash report 29 s after the mark: the page is left out");
+        check(said("the page is left out until TestMod.dll changes (an update or a reinstall) or the player gives it another try"),
+              "the log says the player can give it another try");
+        lines.clear();
+        const std::vector<GuardEntry> late = guard_at_start(one, stamp_of, {mark + 31 * 10000000ull, "crash-late.txt"}, 0, carried, lines);
+        check(late.empty() && carried.empty(),
+              "a crash report 31 s after the mark: not the page's, so the mark is dropped (not carried), even after two sessions");
+        check(said("the game crashed 31 s after TestMod.dll's page Stats started opening last session (crash report crash-late.txt), too long "
+                   "after for the page to be the cause, so the page stays in"),
+              "the log says how long after, and that the page stays in");
+        lines.clear();
+        guard_at_start({{"opening", "TestMod.dll", "Stats", "100-01D9", "2026-11-08"}}, stamp_of, {mark, "crash-old-form.txt"}, mark - 60 * 10000000ull,
+                       carried, lines);
+        check(said("the game crashed 60 s after TestMod.dll's page Stats started opening"),
+              "a line in the first form (no time of its own): the file's time stands in, with the same window");
+    }
+
+    // the player gives a left-out page another try (A on the message its tile shows)
+    {
+        std::vector<GuardEntry> left = after;
+        check(guard_retry(left, "testmod.DLL", "Stats") && left.size() == 2 && left[0].page == "List" && left[1].page == "Twice",
+              "another try: the page's skip goes (the DLL in any case), the others stay");
+        check(!guard_retry(left, "TestMod.dll", "Stats") && !guard_retry(left, "TestMod.dll", "Nope") && left.size() == 2,
+              "nothing to retry: false, and nothing changes");
+        std::vector<GuardEntry> marks = {{"opening", "TestMod.dll", "Stats", "1-1", ""}};
+        check(!guard_retry(marks, "TestMod.dll", "Stats") && marks.size() == 1, "a page that's only marked as opening isn't touched");
+    }
+
     const std::string written = guard_text(after);
     check(parse_guard(written).size() == 3 && written.find("skip\tTestMod.dll\tStats\t100-01D9\t2026-11-08\t1\t0000000000000000\r\n") != std::string::npos &&
               written.find("skip\tTestMod.dll\tTwice\t100-01D9\t2026-11-08\t2\t01DD000000000300\r\n") != std::string::npos &&
