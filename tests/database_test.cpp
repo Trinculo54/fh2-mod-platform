@@ -809,8 +809,14 @@ static void car_ids() {
     const fs::path title = c.dir / "fh2-mods" / "platform-title.txt";
     fs::create_directories(saves);
     std::ofstream{saves / "test.sav", std::ios::binary} << "a save";
+    // The pack has a problem of another kind too, noted first (a zip the game can't read): the reason given for its cars
+    // is still why the database left it out.
+    const fs::path broken = pack / "media" / "cars" / "test_broken.zip";
+    fs::create_directories(broken.parent_path());
+    std::ofstream{broken, std::ios::binary} << "not a zip";
     c.mods({"CarIdLate"});
     c.launch(L"snapshot");
+    CHECK(has(c.log, "test-pack: couldn't read the zip directory of game:\\media\\cars\\test_broken.zip"));
     CHECK(has(c.log, "[car pack test-pack] database: left out, so none of its changes were made: TEST_Pack01's Id, 3003, is "
                      "taken now: CarIdLate's SQL adds Data_Engine 3003."));
     CHECK(car(3003) == "" && car(3001) == "LIT_Pack01" && q(layer, "SELECT count(*) FROM Data_Engine WHERE EngineID = 3003") == "1");
@@ -822,7 +828,7 @@ static void car_ids() {
     CHECK(listed(missing) == "TEST_Pack01\t3003\n");
     // the pack, and why on a line of its own (each a message each language's Main.str gets in its own words)
     CHECK(has(slurp(title), "Car pack {0}'s cars aren't in the game this time.") && has(slurp(title), "Test pack") &&
-          has(slurp(title), "is taken now: {2}'s SQL adds {3}.") &&
+          has(slurp(title), "is taken now: {2}'s SQL adds {3}.") && !has(slurp(title), "can't read its") &&
           has(slurp(title), "A copy of your saves from before is in fh2-mods\\save-snapshots."));
     bool copied = false;
     for (const auto& e : fs::directory_iterator(c.dir / "fh2-mods" / "save-snapshots"))
@@ -833,6 +839,7 @@ static void car_ids() {
           !has(c.log, "save snapshot:") && has(slurp(title), "Car pack {0}'s cars aren't in the game this time."));
 
     // That mod gone: the pack is back with the same Id, and nothing is said about it.
+    fs::remove(broken);
     c.mods({});
     c.launch();
     CHECK(car(3003) == "TEST_Pack01" && car(3000) == "" && listed(record) == ids);

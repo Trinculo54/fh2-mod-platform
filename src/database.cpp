@@ -574,7 +574,13 @@ std::string lower_ascii(std::string s) {
 std::mutex g_warn_mu;
 std::map<std::string, std::vector<std::string>> g_pack_warnings, g_mod_warnings;   // messages from later()
 
+// Packs (by folder name) whose changes this build left out or rolled back, and why (a message from later()), under
+// g_db_mu: why their cars are missing (check_recorded_cars), even when an earlier problem of theirs (an engine sound,
+// say) is the one the MODS tab names.
+std::map<std::string, std::string> g_pack_out;
+
 void clear_sql_warnings() {
+    g_pack_out.clear();
     std::scoped_lock lk{g_warn_mu};
     g_pack_warnings.clear();
     g_mod_warnings.clear();
@@ -736,6 +742,7 @@ std::vector<Sql> with_car_ids(const Files& f, const fs::path& base, const std::s
         if (!o.problem.empty()) {
             log_line(s.name, "database: left out, so none of its changes were made: " + english(o.problem));
             note_car_pack_problem(s.pack->name, o.problem);
+            g_pack_out[s.pack->name] = o.problem;
             continue;
         }
         for (const auto& [car, id] : o.given) {
@@ -893,8 +900,11 @@ bool names_kept(const fs::path& copy) {
 // A car pack's statements that failed (a result line, "car pack <name><TAB>FAILED, ..."): for the MODS tab.
 void note_pack_result(const std::string& source, const std::string& result) {
     const std::string pack = "car pack ", failed = "FAILED, so none of its changes were made: ";
-    if (source.rfind(pack, 0) == 0 && result.rfind(failed, 0) == 0)
-        note_car_pack_problem(source.substr(pack.size()), later("Its database changes failed: {0}.", {result.substr(failed.size())}));
+    if (source.rfind(pack, 0) == 0 && result.rfind(failed, 0) == 0) {
+        const std::string why = later("Its database changes failed: {0}.", {result.substr(failed.size())});
+        note_car_pack_problem(source.substr(pack.size()), why);
+        g_pack_out[source.substr(pack.size())] = why;
+    }
 }
 
 void replay(const State& st) {
@@ -1128,13 +1138,15 @@ void check_recorded_cars(const Files& f) {
             for (const auto& p : car_packs())
                 for (const auto& c : p.cars)
                     if (lower_ascii(c) == lower_ascii(car)) pack = &p;
-            // There: its Id is still that car; or, for a pack whose SQL writes an Id of its own, the pack ran and the
-            // database has the car by name.
+            // There: its Id is still that car; or, for a pack whose SQL writes an Id of its own, the pack ran (this build
+            // didn't leave it out or roll it back; a problem with its files or sound doesn't count) and the database has
+            // the car by name.
+            const auto out = pack ? g_pack_out.find(pack->name) : g_pack_out.end();
             const int64_t at = id;
             if (lower_ascii(ask("SELECT MediaName FROM Data_Car WHERE Id = ?1", [&](sqlite3_stmt* q) { sqlite3_bind_int64(q, 1, at); })) ==
                 lower_ascii(car))
                 continue;
-            if (pack && car_pack_problem(pack->name).empty() &&
+            if (pack && out == g_pack_out.end() &&
                 !ask("SELECT MediaName FROM Data_Car WHERE MediaName = ?1 COLLATE NOCASE",
                      [&](sqlite3_stmt* q) { sqlite3_bind_text(q, 1, car.c_str(), -1, SQLITE_TRANSIENT); }).empty())
                 continue;
@@ -1143,7 +1155,8 @@ void check_recorded_cars(const Files& f) {
                                      "game database this session: ";
             if (pack) {
                 if (car_pack_problem(pack->name).empty()) note_car_pack_problem(pack->name, later("Its cars aren't in the game database this time."));
-                const std::string why = car_pack_problem(pack->name);
+                // why this build left it out, else the first problem the pack had
+                const std::string why = out != g_pack_out.end() ? out->second : car_pack_problem(pack->name);
                 log_line("car pack " + pack->name, what + english(why));
                 if (packs.insert(pack->name).second) {   // the reason on a line of its own: the title screen doesn't wrap them
                     lines.push_back(later("Car pack {0}'s cars aren't in the game this time.", {pack->title.empty() ? pack->name : pack->title}));
