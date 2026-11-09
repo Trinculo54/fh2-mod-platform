@@ -12,7 +12,8 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 for d in /opt/llvm-mingw/bin /usr/local/llvm-mingw/bin; do [ -d "$d" ] && PATH=$d:$PATH; done
-cmake -S "$root" -B "$root/build" -DCMAKE_TOOLCHAIN_FILE="$root/cmake/mingw-w64-x86_64.cmake" -DCMAKE_BUILD_TYPE=Release
+# FH2MOD_PLATFORM_BUILD empty: named by its version, even in a build folder a test build once named "... dev"
+cmake -S "$root" -B "$root/build" -DCMAKE_TOOLCHAIN_FILE="$root/cmake/mingw-w64-x86_64.cmake" -DCMAKE_BUILD_TYPE=Release -DFH2MOD_PLATFORM_BUILD=
 cmake --build "$root/build" -j "${JOBS:-$(nproc)}"
 rm -rf "$root/dist"
 mkdir -p "$root/dist/examples" "$root/dist/include"
