@@ -92,6 +92,42 @@ static int db_xp(int id) {
 
 static bool has(const std::string& log, const char* s) { return log.find(s) != std::string::npos; }
 
+// Whether XAML the platform wrote is well-formed: every element closed in order, comments and the declaration
+// skipped, attribute values quoted (a page that isn't crashes the game when it opens). `why` says where not.
+static bool well_formed(const std::string& x, std::string& why) {
+    std::vector<std::string> open;
+    for (std::size_t i = x.find('<'); i != std::string::npos; i = x.find('<', i)) {
+        if (x.compare(i, 4, "<!--") == 0) {
+            const std::size_t e = x.find("-->", i);
+            if (e == std::string::npos) return why = "a comment isn't closed", false;
+            i = e + 3;
+            continue;
+        }
+        if (x.compare(i, 2, "<?") == 0) {
+            i = x.find("?>", i);
+            if (i == std::string::npos) return why = "the declaration isn't closed", false;
+            continue;
+        }
+        std::size_t e = i + 1;
+        char quote = 0;
+        for (; e < x.size() && (quote || x[e] != '>'); ++e)
+            if (x[e] == '"' || x[e] == '\'') quote = quote == x[e] ? 0 : quote ? quote : x[e];
+        if (e >= x.size()) return why = "a tag isn't closed at " + std::to_string(i), false;
+        const std::string tag = x.substr(i + 1, e - i - 1);
+        const bool closing = !tag.empty() && tag[0] == '/', empty = !tag.empty() && tag.back() == '/';
+        const std::string name = tag.substr(closing ? 1 : 0, tag.find_first_of(" \t\r\n/", 1) - (closing ? 1 : 0));
+        if (closing) {
+            if (open.empty() || open.back() != name) return why = "</" + name + "> doesn't match <" + (open.empty() ? "" : open.back()) + "> at " + std::to_string(i), false;
+            open.pop_back();
+        } else if (!empty) {
+            open.push_back(name);
+        }
+        i = e + 1;
+    }
+    if (!open.empty()) return why = "<" + open.back() + "> isn't closed", false;
+    return true;
+}
+
 // The HUD layer preview's start thread has finished, one way or another ("hud" phase).
 static bool hud_started(const std::string& log) {
     return has(log, "[HUD layer] hooks: 4 of 4 made and on; the HUD layer is ready") || has(log, "[HUD layer] the Mods page's hooks didn't go in") ||
@@ -359,12 +395,20 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(ai_has(L"Buddy1") && ai_has(L"Buddy2") && !ai_has(L"Nocomply76") && ai_has(L"Womgoose"));
         const auto title = str("Main.str", 0x18F0);
         std::printf("title: [%ls]\n", title.c_str());
-        CHECK(title == L"\n\n\n\nTO START\nTest notice line\nsecond line\nOld FH2 Mod Platform: reinstall TestMod");
+        // the platform's own line about where mod settings are comes last (fh2-mods\notices\~platform.txt), until
+        // YOUR MODS has been opened (platform 2.9.0)
+        CHECK(title == L"\n\n\n\n\nTO START\nTest notice line\nsecond line\nOld FH2 Mod Platform: reinstall TestMod\nMod settings: Pause > MODS (the last tab)");
         // TestMod's notice is tr()'s text (API 10): each language's Main.str has it in that language's words, with the
-        // platform's line after it; English where there's no translation (TestMod's Brazilian Portuguese has none)
+        // platform's line after it; English where there's no translation (TestMod's Brazilian Portuguese has none).
+        // The platform's own line is in each language's words too (tr_in).
         CHECK(str_in(L"PL", "Main.str", 0x18F0) ==
-              L"\n\n\n\nTO START\nTestowa linia og\u0142oszenia\ndruga linia\nOld FH2 Mod Platform: reinstall TestMod");
-        CHECK(str_in(L"br", "Main.str", 0x18F0) == title);
+              L"\n\n\n\n\nTO START\nTestowa linia og\u0142oszenia\ndruga linia\nOld FH2 Mod Platform: reinstall TestMod\n"
+              L"Ustawienia mod\u00f3w: Pauza > MODS (ostatnia karta)");
+        CHECK(str_in(L"br", "Main.str", 0x18F0) ==
+              L"\n\n\n\n\nTO START\nTest notice line\nsecond line\nOld FH2 Mod Platform: reinstall TestMod\n"
+              L"Configura\u00e7\u00f5es dos mods: Pausa > MODS (a \u00faltima aba)");
+        CHECK(slurp(L"fh2-mods\\notices\\~platform.txt") == "\nMod settings: Pause > MODS (the last tab)\n");
+        CHECK(has(log, "[MODS] title screen: where mod settings are, until YOUR MODS is opened"));
         CHECK(slurp(L"fh2-mods\\platform-tables.txt").find("AIPlayers.str") != std::string::npos);
         if (argc > 2) CHECK(log.find("the game is mapped at") != std::string::npos);
 
@@ -403,7 +447,7 @@ int wmain(int argc, wchar_t** argv) {
 
         // Pages (API 8)
         CHECK(has(log, "[TestMod] page: Test stats, on the Achievements tile"));
-        CHECK(has(log, "[TestMod] add_page: there's no tile called Nope; Other is only under MODS > Installed mods"));
+        CHECK(has(log, "[TestMod] add_page: there's no tile called Nope; Other is only on its mod's page under MODS > YOUR MODS"));
         CHECK(has(log, "[TestMod] add_page: there's already a page called Other"));
         CHECK(has(log, "[TestMod] set_page_rows: there's no page called Missing"));
         CHECK(has(log, "[TestMod] set_page_xaml: Stats's content has no element named FirstItem"));
@@ -477,8 +521,11 @@ int wmain(int argc, wchar_t** argv) {
             if (!once) ++fails;
         }
         CHECK(has(log, "[TestMod] Test pop-up: from the helper") && has(log, "[TestMod] ui helpers ok"));
-        // nothing was seen, so the platform hasn't written platform-seen.txt
-        CHECK(!fs::exists("fh2-mods\\platform-seen.txt"));
+        // platform-seen.txt: the platform's first launch here (no platform-mods.txt before it), and nothing seen yet
+        {
+            const std::string seen = slurp("fh2-mods\\platform-seen.txt");
+            CHECK(has(seen, "*\tfirst\tnew\t") && !has(seen, "\thome\t") && !has(seen, "mod.new"));
+        }
         // commands (API 9): through fh2mod.exe, as a tool would
         {
             const std::wstring pid = L"--pid " + std::to_wstring(GetCurrentProcessId()) + L" ";
@@ -547,7 +594,7 @@ int wmain(int argc, wchar_t** argv) {
             const auto tile      = slurp(scenes / "A_ModPage_80.xaml");
             CHECK(has(installed, "local:BindingProxy.A=\"Test stats &amp; more\"") && has(installed, "x:Name=\"PART_Button_FH2Mod_Page_0\""));
             CHECK(has(installed, "Content=\"TEST STATS\"") && has(installed, "{Binding FH2Mod_ViewIn_") && has(installed, "{Binding FH2Mod_Bar_3"));
-            CHECK(has(installed, "The pause menu's Achievements tile opens it too."));
+            CHECK(has(installed, "Pause &gt; PROGRESS &gt; ACHIEVEMENTS opens it too."));
             CHECK(has(installed, "FH2Mod_InfoRow_Heading") && has(installed, "FH2Mod_InfoRow_Dim"));
             CHECK(has(installed, "Heading=\"Footer &lt;line&gt; &#183; dot\"") && has(installed, "local:BindingProxy.B=\"Alert\""));
             // the tile: the page of TestMod's own design, in the options page's frame
@@ -568,7 +615,10 @@ int wmain(int argc, wchar_t** argv) {
             for (int k = 0; k < 5; ++k)
                 hub_tags = hub_tags && has(pause, ("Tag=\"{Binding FH2Mod_HubTile_" + std::to_string(k) +
                                                    ", RelativeSource={RelativeSource AncestorType=Page, Mode=FindAncestor}}\"").c_str());
-            CHECK(hub_tags && !has(pause, "FH2Mod_HubTile_5") &&
+            // and the YOUR MODS tile's subtitle and four lines of names, GET MODS' line (platform 2.9.0)
+            for (int k = 5; k < 11; ++k)
+                hub_tags = hub_tags && has(pause, ("{Binding FH2Mod_HubTile_" + std::to_string(k) + ", RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type Page}}").c_str());
+            CHECK(hub_tags && !has(pause, "FH2Mod_HubTile_11") &&
                   has(pause, "<ControlTemplate x:Key=\"FH2Mod_Tile_Installed_Template\"") &&
                   has(pause, "<local:FZTextBlock Text=\"{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}\" Style=\"{StaticResource A_Style_FZTextBlock_TileTitle}\""));
             // the title screen: the entries' lines under PRESS (A) TO START, fading with it in all five states
@@ -597,7 +647,50 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(installed, "Heading=\"Version 0.5.0 (doesn't check for updates)\""));
             CHECK(has(installed, "It isn't working: It needs FH2 Mod Platform 9.9.9 or newer; this is 2.9.0. Reinstall it to get the "
                                  "platform it came with. fh2-mods\\platform.log has more."));
-            CHECK(has(installed, "Reinstall it to get the platform it came with. Off leaves it in fh2-mods, but the game doesn't load it."));
+            // "One home" (platform 2.9.0): YOUR MODS, "MODS / YOUR MODS", a row per mod ending in ">" with what A shows
+            CHECK(has(installed, "Tag=\"MODS\" Content=\"YOUR MODS\""));
+            CHECK(has(installed, "local:BindingProxy.A=\"TestMod\" local:BindingProxy.C=\"\" local:BindingProxy.B=\"! Not working\"") &&
+                  has(installed, "  &gt;\" local:BindingProxy.B=\"\""));
+            CHECK(has(installed, "Press A for its ") && has(installed, "Press A to see what's wrong."));
+            CHECK(has(installed, "{Binding FH2Mod_PanelText}") && has(installed, "{Binding FH2Mod_PanelShown,"));
+            CHECK(has(installed, "FH2Mod_InfoRow_Update") && has(installed, "FH2Mod_Color_Yellow"));
+            // each mod's page: "MODS / TESTMOD"; its own rows, its hotkeys under "Keys and buttons", its page, then About,
+            // What it does and Load this mod (marked *: it takes a restart) at the bottom
+            {
+                // (the rows' data items, in the page's resources in the order of each view's rows)
+                const std::size_t own = installed.find("Heading=\"Test button, renamed\""), keys = installed.find("Heading=\"Keys and buttons\"");
+                const std::size_t key_row = installed.find("Heading=\"Mark this spot: key\""), page = installed.find("Heading=\"Test stats &amp; more\"");
+                const std::size_t about = installed.find("Heading=\"About TestMod\"");
+                const std::size_t what = installed.find("Heading=\"What it does\"", about), load = installed.find("Heading=\"Load this mod *\"", about);
+                CHECK(own != std::string::npos && own < keys && keys < key_row && key_row < page && page < about && about < what && what < load &&
+                      load != std::string::npos);
+                CHECK(has(installed, "Tag=\"MODS\" Content=\"TESTMOD\"") && has(installed, "Label=\"Load this mod *\""));
+                CHECK(has(installed, "Description=\"Off leaves it in fh2-mods, but the game doesn't load it. Takes effect the next time you start the game.\""));
+                CHECK(!has(installed, "(TestMod)\"") && !has(installed, "Load TestMod"));   // no "(Mod)" after descriptions; the old switch
+                CHECK(has(installed, "x:Name=\"FH2Mod_R1_1\"") && has(installed, "Heading=\"Not working\""));
+            }
+            // HELP in ALL SETTINGS' place: information only, so no A on its help bar
+            const auto help = slurp(scenes / "A_ModPage_06.xaml");
+            CHECK(has(help, "Content=\"HELP\"") && has(help, "Heading=\"Where mod settings are\"") && has(help, "Heading=\"Turning a mod off\"") &&
+                  !has(help, "ADescription") && !has(help, "Heading=\"Online play\""));
+            // the list that stands in for the MODS tab when its hooks don't go in: "SETTINGS / MODS", a heading per mod
+            CHECK(has(mods, "Tag=\"{local:Loc ScreenTitles.IDS_MyProfile}\"") && has(mods, "Content=\"MODS\"") &&
+                  has(mods, "local:BindingProxy.A=\"TestMod\" local:BindingProxy.C=\"\" local:BindingProxy.B=\"\" Template=\"{StaticResource FH2Mod_InfoRow_Heading}\"") &&
+                  has(mods, "Heading=\"More for each mod\"") && has(mods, "* Takes effect the next time you start the game.") && !has(mods, "ADescription"));
+            // the tab: HELP's tile, the NEW badge (the player hasn't opened YOUR MODS), and the badges on the tiles
+            CHECK(has(pause, "x:Key=\"FH2Mod_Tile_Help\"") && has(pause, "{Binding FH2Mod_NewBadge}") && has(pause, "{Binding FH2Mod_TileNewBadge,") &&
+                  has(pause, "{Binding FH2Mod_TileUpdateBadge,") && has(pause, "x:Key=\"FH2Mod_Style_TileBadge_Red\""));
+            // the Settings door: its MODS tile, with the line under its name
+            const auto options = slurp(scenes / "A_PauseOptions.xaml");
+            CHECK(has(options, "x:Name=\"PART_Button_Mods\"") && has(options, "Template=\"{StaticResource FH2Mod_Template_ModsTile}\"") &&
+                  has(options, "{Binding FH2Mod_HubTile_11,"));
+            // every page the platform wrote is well-formed XAML
+            for (const auto& e : fs::directory_iterator(scenes)) {
+                std::string why;
+                const bool ok = well_formed(slurp(e.path()), why);
+                std::printf("%s %ls is well-formed%s%s\n", ok ? "ok  " : "FAIL", e.path().filename().c_str(), ok ? "" : ": ", why.c_str());
+                if (!ok) ++fails;
+            }
         }
         // No mod adds a HUD layer here, so the preview behaves as 2.8.0: nothing of the layer in the log,
         // no file of its own, no layer in any A_Hud.xaml written; only line 1 names the build.
@@ -671,8 +764,8 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(!has(log, "OfflineMod.dll: fh2mod_init returned") && !has(log, "[OfflineMod] running"));
             CHECK(has(known, "OfflineMod.dll\tOfflineMod\t1.0.0\tMade for offline play.\t\t1"));
             if (pages) {
-                CHECK(has(installed, "local:BindingProxy.C=\"Off online  1.0.0\""));
-                // each mod's page is a view of Installed mods: OfflineMod's has the switch, FH2MP's doesn't
+                CHECK(has(installed, "local:BindingProxy.C=\"Off online  1.0.0  &gt;\""));
+                // each mod's page is a view of YOUR MODS: OfflineMod's has the switch, FH2MP's doesn't
                 CHECK(has(installed, "Heading=\"Load when playing online\"") && has(installed, "Its author made it for offline play"));
                 CHECK(has(installed, "the game doesn't load OfflineMod, so it can't change online play. Its author made it for offline play, so "
                                      "it's off unless you turn it on. Takes effect the next time you start the game from the launcher."));
@@ -683,7 +776,9 @@ int wmain(int argc, wchar_t** argv) {
             // ... and from then on isn't loaded at all online
             CHECK(has(log, "OfflineMod.dll is set to stay off when playing online; not loaded") && !has(log, "loaded OfflineMod.dll"));
             CHECK(has(log, "loaded HelloMod.dll") && has(log, "FH2MP.dll has no fh2mod_init"));
-            if (pages) CHECK(has(installed, "local:BindingProxy.C=\"Off online  1.0.0\""));
+            if (pages) CHECK(has(installed, "local:BindingProxy.C=\"Off online  1.0.0  &gt;\""));
+            // OfflineMod is new since the launch before: "New" on its row until its page is opened, the HUD says so
+            CHECK(has(slurp("fh2-mods\\platform-seen.txt"), "OfflineMod.dll\tmod.new\t"));
         } else if (phase == L"online-chosen") {
             // the player's choices (platform-online.txt) win over the author's
             CHECK(has(log, "[OfflineMod] running online"));
@@ -718,7 +813,7 @@ int wmain(int argc, wchar_t** argv) {
             // what FH2MP is told before it connects
             CHECK(has(log, "[FH2MP] going_online: 1 started (OfflineMod; cut short \"Off\"), playing_online 1"));
             CHECK(has(known, "ZzFH2MP.dll\tFH2MP\t0.0.1"));
-            if (pages) CHECK(has(installed, "local:BindingProxy.C=\"Off online  1.0.0\"") && has(installed, "Stopped for online play"));
+            if (pages) CHECK(has(installed, "local:BindingProxy.C=\"Off online  1.0.0  &gt;\"") && has(installed, "Stopped for online play"));
         } else if (phase == L"online-renamed") {
             // ... and from then on it's known as FH2MP: online from the start, OfflineMod isn't loaded
             CHECK(has(log, "ZzFH2MP.dll (FH2MP) is turned on and FH2MP's session file is there (data\\bin\\fh2mp-session.txt), "
@@ -765,10 +860,12 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(log, "[OfflineMod] running offline") && has(log, "loaded HelloMod.dll"));
         }
     } else {
-        // TestMod gone: its tables and notice are cleaned up, HelloMod's stays.
+        // TestMod gone: its tables and notice are cleaned up, HelloMod's stays. The title screen keeps only the
+        // platform's line about where mod settings are (YOUR MODS hasn't been opened), in each language's words.
         CHECK(str("LoadingMessages.str", 0x6875) == L"Fast Traveling to Destination (hello from HelloMod!)");
         CHECK(str("AIPlayers.str", 0) == L"<none>");
-        CHECK(str("Main.str", 0x18F0) == L"<none>" && str_in(L"PL", "Main.str", 0x18F0) == L"<none>");
+        CHECK(str("Main.str", 0x18F0) == L"\n\nTO START\nMod settings: Pause > MODS (the last tab)" &&
+              str_in(L"PL", "Main.str", 0x18F0) == L"\n\nTO START\nUstawienia modów: Pauza > MODS (ostatnia karta)");
         CHECK(str("LoadingMessages.str", 0x5507) != L"A loading tip from TestMod" &&
               str_in(L"PL", "LoadingMessages.str", 0x5507) != L"Wskaz\u00f3wka z TestMod");
         CHECK(slurp(L"fh2-mods\\platform-tables.txt").find("AIPlayers.str") == std::string::npos);
