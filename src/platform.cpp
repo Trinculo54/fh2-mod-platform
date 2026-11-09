@@ -24,6 +24,7 @@
 #include "lang.hpp"
 #include "platform.hpp"
 #include "platform_version.h"
+#include "seen.hpp"
 #include "strings.hpp"
 #include "text.hpp"
 #include "updates.hpp"
@@ -1046,6 +1047,8 @@ DWORD WINAPI load_mods(LPVOID) {
     }
     start_media_overrides();
     l10n_start();
+    // What the player has already been shown (tips, the settings' first-run cues), read before any mod starts.
+    seen_open(g_azimuth / "fh2-mods" / "platform-seen.txt", plog);
 
     struct Loaded {
         std::wstring file;
