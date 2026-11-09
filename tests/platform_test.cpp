@@ -19,8 +19,9 @@
 // include/fh2mod_hud.h).
 // The UI templates' player controls (platform 2.9.0) are set up by this program before it loads the
 // platform: in "full", AaaMod declares pop-ups (aaa_popups.txt) and fh2-mods\platform-popups.ini has
-// the player's switch for them off; in "newmod", platform-popups.ini has Developer=1; in "home",
-// Developer=1 with mod pop-ups and tips off. Both go again ("removed", and the ends of "newmod" and "home").
+// the player's switch for them off; in "newmod", platform-popups.ini has Developer=1 and AaaMod
+// declares pop-ups again; in "home", Developer=1 with mod pop-ups and tips off. Both go again
+// ("removed", and the ends of "newmod" and "home").
 // The runner goes through the phases twice, once per layout (platform 2.9.0): first with no
 // data\titles folder (Azimuth before 1.0, or Extra Options loaded), where the platform's files go
 // to mediaoverride; then with one (Azimuth 1.0 or later without Extra Options), where they go to
@@ -374,7 +375,10 @@ int wmain(int argc, wchar_t** argv) {
         fs::remove("aaa_popups.txt");
         fs::remove("fh2-mods\\platform-popups.ini");
     }
-    if (phase == L"newmod") std::ofstream{"fh2-mods\\platform-popups.ini", std::ios::binary} << "[popups]\r\nDeveloper=1\r\n";
+    if (phase == L"newmod") {
+        std::ofstream{"fh2-mods\\platform-popups.ini", std::ios::binary} << "[popups]\r\nDeveloper=1\r\n";
+        std::ofstream{"aaa_popups.txt"} << "1";   // for "ui set" on AaaMod's Pop-ups row
+    }
     if (phase == L"home")
         std::ofstream{"fh2-mods\\platform-popups.ini", std::ios::binary} << "[popups]\r\nDeveloper=1\r\n[player]\r\nModPopups=0\r\nTips=0\r\n";
     if (phase == L"full" && own_layer()) {   // a save, for the snapshot TestMod asks for (platform 2.8.0)
@@ -666,7 +670,7 @@ int wmain(int argc, wchar_t** argv) {
             std::string out;
             CHECK(run_cli(pid + L"Platform ui", out) == 0 && has(out, "pop-ups: ") && has(out, "TestMod: pop-up waiting ") &&
                   has(out, "the player's choices (fh2-mods\\platform-popups.ini): mod pop-ups same as Notifications, tips on\n") &&
-                  has(out, "aaamod.dll's pop-ups: off\n") && has(out, "the test commands (toast, tip, keyboard, pad, auto, demo) need Developer=1"));
+                  has(out, "aaamod.dll's pop-ups: off\n") && has(out, "the test commands (toast, tip, keyboard, pad, auto, demo, set) need Developer=1"));
             CHECK(!has(out, "TestGamertag"));   // private text stays out of it
             std::printf("---- fh2mod Platform ui\n%s----\n", out.c_str());
             out.clear();
@@ -1075,7 +1079,25 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(after, "[Platform] pop-up replaced while waiting: Two words / and a line (key Test)"));
             CHECK(has(after, "[Platform] urgent pop-up queued: Demo: urgent / 3 of 5: a fault, first in the queue (key Demo3)") &&
                   has(after, "[Platform] pop-up queued: key Demo4") && !has(after, "4 of 5: the log has its key only"));
+            // "ui set" (Developer=1) on a mod's Pop-ups row, as the player would turn it off on the mod's page: AaaMod
+            // declared pop-ups here (aaa_popups.txt), OfflineMod didn't. platform-popups.ini gets [mods] beside the test's
+            // [popups], and [player] as it is.
+            out.clear();
+            CHECK(run_cli(pid + L"Platform ui set aaamod off", out) == 0 && out == "AaaMod's Pop-ups: Off, and kept in fh2-mods\\platform-popups.ini\n");
+            out.clear();
+            CHECK(run_cli(pid + L"Platform ui set OfflineMod off", out) == 1 && has(out, "error: OfflineMod has no Pop-ups row"));
+            out.clear();
+            CHECK(run_cli(pid + L"Platform ui set Nobody on", out) == 1 && has(out, "error: \"Nobody\" isn't ModPopups, Tips or an installed mod's name"));
+            out.clear();
+            CHECK(run_cli(pid + L"Platform ui set Tips maybe", out) == 1 && out == "error: ui set ModPopups|Tips|<mod> on|off\n");
+            std::string ini;
+            for (int i = 0; i < 50 && !has(ini = slurp(L"fh2-mods\\platform-popups.ini"), "aaamod.dll=0"); ++i) Sleep(100);
+            CHECK(has(ini, "[popups]\r\nDeveloper=1\r\n") && has(ini, "[mods]\r\naaamod.dll=0\r\n") && has(ini, "ModPopups=1") && has(ini, "Tips=1"));
+            CHECK(has(slurp(L"fh2-mods\\platform.log"), "[AaaMod] the player turned its pop-ups off on its page"));
+            out.clear();
+            CHECK(run_cli(pid + L"Platform ui", out) == 0 && has(out, "aaamod.dll's pop-ups: off\n"));
             fs::remove("fh2-mods\\platform-popups.ini");
+            fs::remove("aaa_popups.txt");
         } else {
             // home: YOUR MODS has been opened, so no line on the title screen. OfflineMod is still told as new, though
             // platform-mods.txt has listed it since the launch before: its notice hasn't played yet.
@@ -1126,6 +1148,24 @@ int wmain(int argc, wchar_t** argv) {
                 std::printf("%s A_ModPage_01.xaml is well-formed with the UI templates page%s%s\n", ok ? "ok  " : "FAIL", ok ? "" : ": ", why.c_str());
                 if (!ok) ++fails;
             }
+            // "ui set" (Developer=1) on the platform's own rows, as the player would set them, with no platform-popups.ini:
+            // the platform writes a new one, its comments first, then the player's choices
+            fs::remove("fh2-mods\\platform-popups.ini");
+            out.clear();
+            CHECK(run_cli(pid + L"Platform ui set Tips on", out) == 0 && out == "Tips: On, and kept in fh2-mods\\platform-popups.ini\n");
+            out.clear();
+            CHECK(run_cli(pid + L"Platform ui set modpopups on", out) == 0 &&
+                  out == "Mod pop-ups: Same as Notifications, and kept in fh2-mods\\platform-popups.ini\n");
+            std::string ini;
+            for (int i = 0; i < 50 && !has(ini = slurp(L"fh2-mods\\platform-popups.ini"), "ModPopups=1"); ++i) Sleep(100);
+            CHECK(ini.rfind("; FH2 Mod Platform: pop-ups and tips (platform 2.9.0).", 0) == 0 && has(ini, "; Developer=1 adds the UI templates test page") &&
+                  has(ini, "ModPopups=1") && has(ini, "Tips=1") && !has(ini, "ModPopups=0") && !has(ini, "Tips=0"));
+            CHECK(ini.find("ModPopups=1") > ini.find("\n[player]\r\n") && ini.find("ModPopups=1") < ini.find("\n[mods]\r\n") &&
+                  ini.find("\n[mods]\r\n") != std::string::npos);   // in [player], not after the comments' own "[player] and [mods]"
+            log = slurp(L"fh2-mods\\platform.log");
+            CHECK(has(log, "[Pop-ups] the player turned tips on") && has(log, "[Pop-ups] the player set Mod pop-ups to Same as Notifications"));
+            out.clear();
+            CHECK(run_cli(pid + L"Platform ui", out) == 0 && has(out, "mod pop-ups same as Notifications, tips on\n"));
             fs::remove("fh2-mods\\platform-popups.ini");   // the phases after this one run without it
         }
     } else {

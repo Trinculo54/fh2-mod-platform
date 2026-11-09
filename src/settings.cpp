@@ -1902,6 +1902,52 @@ void add_player_rows() {
     }
 }
 
+} // namespace
+
+// "fh2mod Platform ui set" (Developer=1): one of the rows above changed as the player would change it, so what's kept
+// in fh2-mods\platform-popups.ini can be tried without the game's menus.
+std::string settings_player_set(const std::string& which, bool on) {
+    FH2SettingChangedFn fn = nullptr;
+    void* user             = nullptr;
+    std::string key, what;
+    int v = 0;
+    {
+        std::scoped_lock lk{g_mu};
+        int row = -1;
+        if (_stricmp(which.c_str(), "ModPopups") == 0) {
+            row  = g_platform_rows[0];
+            v    = on ? 0 : 1;   // the choice's index: Same as Notifications, Off
+            what = std::string("Mod pop-ups: ") + (on ? "Same as Notifications" : "Off");
+        } else if (_stricmp(which.c_str(), "Tips") == 0) {
+            row  = g_platform_rows[1];
+            v    = on;
+            what = std::string("Tips: ") + (on ? "On" : "Off");
+        } else {
+            for (std::size_t i = 0; i < g_entries.size(); ++i) {
+                if (_stricmp(g_entries[i].name.c_str(), which.c_str()) != 0) continue;
+                if (i >= g_entry_popups_row.size() || g_entry_popups_row[i] < 0)
+                    return "error: " + g_entries[i].name + " has no Pop-ups row (it didn't declare pop-ups, or has a row of its own)\n";
+                row  = g_entry_popups_row[i];
+                v    = on;
+                what = g_entries[i].name + "'s Pop-ups: " + (on ? "On" : "Off");
+                break;
+            }
+            if (row < 0) return "error: \"" + which + "\" isn't ModPopups, Tips or an installed mod's name\n";
+        }
+        if (row < 0 || static_cast<std::size_t>(row) >= g_rows.size()) return "error: the platform's rows aren't there yet\n";
+        Row& r = g_rows[static_cast<std::size_t>(row)];
+        r.value = v;
+        if (r.slider) r.fvalue = static_cast<float>(v);
+        fn   = r.on_change;
+        user = r.user;
+        key  = r.key;
+    }
+    if (fn) call_on_change(fn, user, key.c_str(), v);   // the platform's own: ui_player.cpp keeps it
+    return what + ", and kept in fh2-mods\\platform-popups.ini\n";
+}
+
+namespace {
+
 // A mod's "Load when playing online" row's text, in the game's language now (English before it has one).
 void online_row_text(Row& o, const ModEntry& e) {
     o.label       = tr("Load when playing online");

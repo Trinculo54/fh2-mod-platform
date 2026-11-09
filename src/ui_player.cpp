@@ -19,8 +19,9 @@
 //    player's choices; "ui recent" lists Recent pop-ups. The command is added quietly: it never starts the command pipe
 //    by itself, so it works whenever a mod's command has started it.
 //  - With Developer=1 in [popups]: the pipe starts anyway, the pop-up hooks go in even when no mod declared pop-ups
-//    (popups.cpp), the ui command's tests work (toast, tip, keyboard, pad, auto, demo), and the platform's page gets
-//    "UI templates", a page whose rows fire each template once. Players never see either, so their text is English.
+//    (popups.cpp), the ui command's tests work (toast, tip, keyboard, pad, auto, demo, set), and the platform's page
+//    gets "UI templates", a page whose rows fire each template once. Players never see either, so their text is
+//    English.
 #include "ui_player.hpp"
 
 #include "lang.hpp"
@@ -185,7 +186,7 @@ std::string choices_text() {
     s += device < 0 ? std::string("buttons in tips are written for the controller: no key has been pressed yet\n")
                     : "buttons in tips are written for " + device_text(device) + "\n";
     s += g_developer ? "Developer=1: the UI templates test page and the test commands are on\n"
-                     : "the test commands (toast, tip, keyboard, pad, auto, demo) need Developer=1 in [popups]\n";
+                     : "the test commands (toast, tip, keyboard, pad, auto, demo, set) need Developer=1 in [popups]\n";
     return s;
 }
 
@@ -257,13 +258,19 @@ std::string run_ui(const std::string& args) {
     if (space != std::string::npos)
         for (const std::string& f : fields(line.substr(space + 1))) w.push_back(f);
     if (same_word(sub, "recent")) return recent_text();
-    const char* const tests[] = {"toast", "tip", "keyboard", "pad", "auto", "demo"};
+    const char* const tests[] = {"toast", "tip", "keyboard", "pad", "auto", "demo", "set"};
     bool test = false;
     for (const char* t : tests) test = test || same_word(sub, t);
     if (!test)
         return "error: ui has no \"" + sub + "\": ui, ui recent, and with Developer=1 ui toast Title | Line | [icon] [urgent] [reply] "
-               "[private], ui tip Press {button} to try it | [A, B, X, Y, LB or RB], ui keyboard, ui pad, ui auto, ui demo\n";
+               "[private], ui tip Press {button} to try it | [A, B, X, Y, LB or RB], ui keyboard, ui pad, ui auto, ui demo, "
+               "ui set ModPopups|Tips|<mod> on|off\n";
     if (!g_developer) return "error: ui " + sub + " needs Developer=1 in fh2-mods\\platform-popups.ini's [popups], then a restart of the game\n";
+    if (same_word(sub, "set")) {   // a row changed as the player would: Mod pop-ups, Tips or a mod's Pop-ups
+        const std::vector<std::string> sw = words(space == std::string::npos ? "" : line.substr(space + 1));
+        if (sw.size() != 2 || !(same_word(sw[1], "on") || same_word(sw[1], "off"))) return "error: ui set ModPopups|Tips|<mod> on|off\n";
+        return settings_player_set(sw[0], same_word(sw[1], "on"));
+    }
     if (same_word(sub, "toast")) {
         if (w.size() < 2 || w[1].empty()) return "error: ui toast Title | Line | [icon] [urgent] [reply] [private]\n";
         uint32_t icon = FH2_ICON_TROPHY, flags = 0;
@@ -317,7 +324,10 @@ void recent_rows() {
 }
 void on_open_recent(void*, const char*) { recent_rows(); }
 
-// The UI templates test page (Developer=1): A on a row fires that template once, from the platform.
+// The UI templates test page (Developer=1): A on a row fires that template once, from the platform. The design (5.4)
+// also asks for a test language row; there's none, as for players: the test language is test=1 in
+// fh2-mods\platform-language.ini, read once at start-up (l10n.cpp), since text set in fh2mod_init and the title
+// screen's lines can't change language during a session, and a row would leave a mix.
 struct TestRow {
     const char *key, *label, *description;
 };

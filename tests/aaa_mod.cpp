@@ -1,7 +1,7 @@
 // A mod for the platform test that loads first (alphabetically): owns a
 // file TestMod also wants, has SQL that fails, uses TestMod's interface,
 // and crashes on request (the "crash" phase). With aaa_popups.txt there (the
-// "full" phase), it declares pop-ups without a row of its own, so its page
+// "full" and "newmod" phases), it declares pop-ups without a row of its own, so its page
 // gets the platform's "Pop-ups" row (API 10), and sends one once every mod
 // has started.
 #include "fh2mod.h"
