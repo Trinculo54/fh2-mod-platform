@@ -43,6 +43,7 @@ The language and UI release. Mod settings get one home, the platform's menus fol
 - **UI templates.** `ui_status`, `ui_uses`, `play_ui_sound`, `show_toast`, `clear_toast`, `show_tip`, `tip_seen`, `set_tip_seen`, `show_message_box`, `set_page_help`, `set_page_hints` and `show_page_hint`: the game's own notification, message box and UI sounds, and your pages' help bar and hint line, filled with your text. The platform draws them, decides when they show, logs what they showed, and never takes XAML from you. `include/fh2mod_ui.h` wraps every one so it does nothing on an older platform, with no version checks of your own. `fh2mod Platform ui` says what's on screen and waiting, and `Developer=1` under `[popups]` in `fh2-mods\platform-popups.ini` adds a test page and test commands.
 - **For FH2MP:** the `FH2Platform.Online` interface, with `going_online` to call before connecting.
 - **Previews:** `FH2Platform.HudLayer` (version 2, adding a shared feed over the minimap) and `FH2Platform.PadLayer` (version 1). See [hud-layer-preview.md](hud-layer-preview.md) and [pad-layer-preview.md](pad-layer-preview.md).
+- **The release zip** has every header in `include/` now, the helpers (`fh2mod_l10n.h`, `fh2mod_ui.h`, `fh2mod_helpers.h`) and the previews' interfaces (`fh2mod_hud.h`, `fh2mod_pad.h`) as well as `fh2mod.h` and `fh2game.h`, and the translation scripts in `tools\l10n`.
 
 [api.md](api.md) covers every member, and [writing-a-mod.md](writing-a-mod.md#showing-things-to-the-player) has a table of which template to use for what.
 

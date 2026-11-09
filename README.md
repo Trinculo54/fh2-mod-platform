@@ -109,7 +109,7 @@ The platform is built with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/r
 ./scripts/build.sh
 ```
 
-`dist/` then holds `d3dcompiler_47.dll` and `DWrite.dll`, the example mod, `fh2mod.h` and `fh2game.h`, the `fh2mod` command tool, a `README.txt` and the licence files. GitHub Actions does the same on every push, and a tag like `v2.0.0` attaches the zip to a release. The version lives in `project(... VERSION x.y.z)` in `CMakeLists.txt`; bump it before tagging, since the tag build refuses to run if the two don't match.
+`dist/` then holds `d3dcompiler_47.dll` and `DWrite.dll`, the example mod, every header in `include/` (`fh2mod.h`, `fh2game.h`, the helpers and the previews' interfaces), the `fh2mod` command tool, the translation scripts in `tools/l10n`, a `README.txt` and the licence files. GitHub Actions does the same on every push, and a tag like `v2.0.0` attaches the zip to a release. The version lives in `project(... VERSION x.y.z)` in `CMakeLists.txt`; bump it before tagging, since the tag build refuses to run if the two don't match.
 
 A mod usually adds this repo as a git submodule and builds the platform alongside itself, so its release zip always carries a matching `d3dcompiler_47.dll`. [`docs/writing-a-mod.md`](docs/writing-a-mod.md) shows the CMake for that.
 
