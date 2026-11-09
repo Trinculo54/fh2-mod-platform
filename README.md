@@ -15,7 +15,7 @@ For players:
 - **Pop-ups and tips from mods**, on the game's own notification and paced around the game's own. You decide whether they show, on the platform's own page at the end of YOUR MODS, where Recent pop-ups also says which mod sent which.
 - **Car packs:** new cars for the Autoshow from the `fh2-cars` folder, on Azimuth 1.0 or later without Extra Options ([docs/car-packs.md](docs/car-packs.md)).
 - **Fewer crashes:** a car whose drivetrain isn't in the game's database is listed without it instead of stopping the game ([issue #23](https://github.com/Trinculo54/fh2-mod-platform/issues/23)), and a mod's page that would crash the game shows "This page couldn't be shown" instead.
-- **Online play:** mods that shouldn't run online are stopped even when FH2MP only turns out to be online after they started ([issue #22](https://github.com/Trinculo54/fh2-mod-platform/issues/22)).
+- **Online play:** mods that shouldn't run online are stopped even when FH2MP only turns out to be online after they started ([issue #22](https://github.com/Trinculo54/fh2-mod-platform/issues/22)). FH2MP's launcher puts back the platform it ships every time you press Play, so online players get 2.9.0 once an FH2MP release ships it.
 - **Proton:** mods' text, files and database changes reach the game without Extra Options there too ([PR #17](https://github.com/Trinculo54/fh2-mod-platform/pull/17)).
 
 For mod makers, API 10 adds translations, the UI templates (pop-ups, tips, message boxes, UI sounds and your pages' help bar and hint line, with no XAML of your own) and the HUD and pad layers as previews; `set_file` now refuses the platform's own UI files. [docs/release-notes-2.9.0.md](docs/release-notes-2.9.0.md) has the whole list.
