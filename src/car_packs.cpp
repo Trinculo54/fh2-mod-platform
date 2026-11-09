@@ -52,6 +52,7 @@ namespace {
 
 std::vector<CarPack> g_packs;
 std::string g_unread;                         // why fh2-cars' packs aren't read this session
+std::atomic<bool> g_merged{false};            // the layer's zipmanifest.xml is the platform's, with the packs' zips
 std::mutex g_problem_mu;
 std::map<std::string, std::string> g_problems; // pack -> why it isn't working
 
@@ -184,6 +185,7 @@ void write_manifest() {
         merged += line;
     }
     if (read_all(out) == merged) {
+        g_merged = true;
         plog("car packs: zipmanifest.xml unchanged (" + std::to_string(zips.size()) + " pack zip(s))");
         return;
     }
@@ -191,6 +193,7 @@ void write_manifest() {
         plog("car packs: couldn't write " + narrow(out.wstring()) + " (error " + std::to_string(GetLastError()) + ")");
         return;
     }
+    g_merged = true;
     plog("car packs: wrote zipmanifest.xml from " + narrow(base.wstring()) + " with " + std::to_string(zips.size()) +
          " pack zip(s) (" + std::to_string(replaced) + " of them replacing the game's line)");
     for (const auto& [p, d] : zips)
@@ -463,6 +466,8 @@ unsigned parse_roots(const std::string& text) {
 }
 
 const std::vector<CarPack>& car_packs() { return g_packs; }
+
+bool car_packs_manifest() { return g_merged.load(); }
 
 void car_packs_unavailable(const std::string& why) {
     std::error_code ec;

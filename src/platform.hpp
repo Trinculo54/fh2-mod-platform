@@ -150,6 +150,8 @@ const std::vector<CarPack>& car_packs();
 // Finds the packs, puts their files on the temp drive, and writes the merged zipmanifest.xml to
 // instance_media(). Their SQL goes into the database with the mods' (apply_database).
 void prepare_car_packs();
+// That merged zipmanifest.xml is in the layer this session (a pack has zips): set_file refuses a mod's.
+bool car_packs_manifest();
 // Once a pack's cars have their Ids (database.cpp): the part Ids of their own that their carbins
 // name (<car>.part-ids.txt), set in their zips on the temp drive.
 void place_car_ids(const CarPack& pack, const std::vector<std::pair<std::string, int64_t>>& cars);

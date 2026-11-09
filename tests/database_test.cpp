@@ -822,6 +822,26 @@ static void car_ids() {
     CHECK(car(3003) == "TEST_Pack01" && car(3000) == "" && listed(record) == ids);
 }
 
+// A mod that replaces zipmanifest.xml with set_file: its own without a car pack zip, as before; refused while the
+// platform writes the merged one, with a pack's zip, to the layer (which the mod's would otherwise replace).
+static void zip_manifest() {
+    Case c{"zip-manifest"};
+    fs::create_directories(c.dir / "data" / "titles" / "1A96545B");
+    const fs::path manifest = c.dir / "data" / "titles" / "1A96545B" / "tmp" / "fh2-platform" / "media" / "zipmanifest.xml";
+    std::ofstream{c.dir / "FH2" / "Mount" / "media" / "zipmanifest.xml", std::ios::binary} << "<ZipFiles>\r\n</ZipFiles>\r\n";
+    c.mods({"ZipTest"});
+    c.launch();
+    CHECK(has(c.log, "[ZipTest] zipmanifest.xml replaced") && slurp(manifest) == "<ZipFiles>\r\n</ZipFiles>\r\n");
+    const fs::path cars = c.dir / "fh2-cars" / "zip-pack" / "media" / "cars";
+    fs::create_directories(cars);
+    std::ofstream{cars / "zip_car.zip", std::ios::binary} << std::string("PK\x05\x06", 4) + std::string(18, '\0');   // an empty zip
+    c.launch();
+    CHECK(has(c.log, "[ZipTest] set_file: media\\zipmanifest.xml isn't replaced: this session the platform writes it to this "
+                     "Azimuth folder's own layer, with the car packs' zips (fh2-cars) added to the game's."));
+    CHECK(has(c.log, "[ZipTest] zipmanifest.xml refused"));
+    CHECK(has(slurp(manifest), "<Zip version=\"1\" path=\"game:\\media\\cars\\zip_car.zip\""));
+}
+
 // An update from 2.8.0 in an Azimuth folder with its own layer (data\titles\1A96545B), where 2.8.0 wrote its files and
 // string tables to mediaoverride and listed them without a root: the ones it listed are moved to
 // fh2-mods\platform-old-overrides\mediaoverride once, before anything is written, and nothing else in mediaoverride
@@ -1146,6 +1166,7 @@ int wmain(int argc, wchar_t** argv) {
     fh2mp_copying();
     car_pack();
     car_ids();
+    zip_manifest();
     upgrade();
     other_install();
     fh2ml();

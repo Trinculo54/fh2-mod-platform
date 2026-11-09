@@ -120,11 +120,22 @@ bool remove_file(const fs::path& target) {
            GetLastError() == ERROR_PATH_NOT_FOUND;
 }
 
+// The layer's zipmanifest.xml is the platform's own this session, merged with the car packs' zips (car_packs.cpp).
+bool merged_manifest(unsigned root, const std::wstring& rel) {
+    return root == kRootLayer && lower_w(rel) == L"zipmanifest.xml" && car_packs_manifest();
+}
+
 // Deletes the platform's copies of `rel` in every root `roots` names: 0, or the Windows error of one that failed.
 DWORD remove_copies(const std::wstring& rel, unsigned roots) {
     DWORD error = 0;
-    for (const unsigned r : {kRootOverride, kRootLayer})
-        if ((roots & r) && !remove_file(root_folder(r) / rel) && !error) error = GetLastError();
+    for (const unsigned r : {kRootOverride, kRootLayer}) {
+        if (!(roots & r)) continue;
+        if (merged_manifest(r, rel)) {   // a mod's from a session without packs: the one there now isn't the mod's
+            plog("files: left media\\zipmanifest.xml in this folder's layer: it's the platform's this session, with the car packs' zips");
+            continue;
+        }
+        if (!remove_file(root_folder(r) / rel) && !error) error = GetLastError();
+    }
     return error;
 }
 
@@ -209,6 +220,14 @@ int set_file(FH2Mod* mod, const char* media_path, const void* data, std::size_t 
     }
     if (game_mount().empty()) {
         log_line(mod->name, "set_file: the game folder wasn't found, so " + shown(rel) + " can't be replaced");
+        return 0;
+    }
+    // The car packs' merged zipmanifest.xml (written before any mod starts) lists their zips: a mod's would take them
+    // out, at every start, while the database still has their cars.
+    if (merged_manifest(current_root(), key)) {
+        log_line(mod->name, "set_file: " + shown(rel) + " isn't replaced: this session the platform writes it to this Azimuth "
+                                "folder's own layer, with the car packs' zips (fh2-cars) added to the game's. A zip of a mod's "
+                                "own can be added the same way, as a car pack");
         return 0;
     }
     std::scoped_lock lk{g_files_mu};

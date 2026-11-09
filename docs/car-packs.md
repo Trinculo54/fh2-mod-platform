@@ -76,7 +76,7 @@ A pack is left out, and the log says why, when the database already has one of i
 
 ### The model
 
-`media\cars\<car>.zip` is laid out as the game's own car zips ([game-notes.md](game-notes.md#cars)). The platform reads its directory and adds its line to the game's `zipmanifest.xml`, so it can be any size. The car's files name it in their paths, `game:\media\cars\<car in lower case>\...`, so a copy of a stock car has to have those changed too. A zip with the name of one of the game's replaces it for that Azimuth folder.
+`media\cars\<car>.zip` is laid out as the game's own car zips ([game-notes.md](game-notes.md#cars)). The platform reads its directory and adds its line to the game's `zipmanifest.xml`, so it can be any size. While it writes that merged `zipmanifest.xml`, a mod can't replace it with `set_file`, which would take the packs' zips out. The car's files name it in their paths, `game:\media\cars\<car in lower case>\...`, so a copy of a stock car has to have those changed too. A zip with the name of one of the game's replaces it for that Azimuth folder.
 
 A carbin names the models of the car's upgradeable parts (rear wing, bumpers, side skirts, hood, roll cage) by the Ids of their database rows. The bumpers', side skirts', hood's and roll cage's are its body's rows, so a car sharing a stock car's body names them as that car does. The rear wing's rows are the car's own, `{car:X} * 1000 + n`, so its carbin can only name them once the car has its Id: `<car>.part-ids.txt` says where they are, and at each start the platform sets them in its copy of the zip on the temporary drive.
 
