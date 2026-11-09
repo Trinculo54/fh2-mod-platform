@@ -176,12 +176,17 @@ private:
     void drop(std::size_t i, const std::string& why, double now, bool rated);
     bool lane_free(double now) const;
     std::string prepare(const std::string& s, std::size_t limit, bool capitals, bool wide);
-    std::string button_text(const Item& it, bool keyboard);
-    std::string key_text(uint32_t vk, uint32_t modifiers);
-    std::string glyph_text(uint32_t glyph);
-    std::string chord_text(uint32_t chord);
+    // The button's text; `wide`: the text goes to the game as UTF-16, so words needn't fold to ASCII.
+    std::string button_text(const Item& it, bool keyboard, bool wide);
+    std::string key_text(uint32_t vk, uint32_t modifiers, bool wide);
+    std::string glyph_text(uint32_t glyph, bool wide);
+    std::string chord_text(uint32_t chord, bool wide);
     std::string tr(const char* english);    // the platform's own words (lang.cpp's table has each)
     std::string caps(const std::string& s); // capitals in the game's language
+    // A word of the platform's for a button, in capitals in the game's language; in English when the text is
+    // folded to ASCII and the word has letters with no plain form (Russian, Japanese, Korean, Chinese), which would
+    // be question marks.
+    std::string word(int which, bool wide);   // which: popup_queue.cpp's kWords
     std::string held_text(uint32_t held) const;
     void note_shown(const Item& it, double now, bool private_title);
 

@@ -36,6 +36,10 @@ enum : uint32_t {
     kHeldNotReady  = 16,
 };
 
+// The platform's words in tips' buttons (word(); lang.cpp's table has each).
+enum : int { kSpace, kUp, kDown, kLeft, kRight, kDpad };
+const char* const kWords[] = {"Space", "Up", "Down", "Left", "Right", "D-pad"};
+
 const char* const kIconNames[] = {"",        "Achievement",    "RoadDiscovery",  "PhotoCollection", "RewardBoards",
                                   "BucketList", "CarMeet",     "ClubTierPayout", "DrivatarPayout",  "BarnFindDiscovered"};
 
@@ -593,31 +597,57 @@ std::string PopupQueue::tr(const char* english) { return env_.tr ? env_.tr(engli
 
 std::string PopupQueue::caps(const std::string& s) { return env_.upper ? env_.upper(s) : ascii_upper(s); }
 
-std::string PopupQueue::key_text(uint32_t vk, uint32_t modifiers) {
+std::string PopupQueue::word(int which, bool wide) {
+    const std::string w = caps(tr(kWords[which]));
+    if (wide) return w;
+    const auto marks = [](const std::string& s) { return std::count(s.begin(), s.end(), '?'); };
+    return marks(popup_fold_ascii(w)) == marks(w) ? w : ascii_upper(kWords[which]);
+}
+
+std::string PopupQueue::key_text(uint32_t vk, uint32_t modifiers, bool wide) {
+    // The name on the player's keyboard layout, as the keycap prints it ("ENTF" on a German keyboard, whatever the
+    // game's language) and as the hotkey rows name the key; "" if there's none or it isn't plain ASCII (a Cyrillic or
+    // CJK name would be boxes or question marks).
+    const auto on_layout = [&]() -> std::string {
+        const std::string n = env_.key_name ? env_.key_name(vk) : "";
+        for (const char c : n)
+            if (c < 0x20 || c > 0x7E) return "";
+        return ascii_upper(n);
+    };
+    const auto layout_or = [&](const char* english) {
+        const std::string n = on_layout();
+        return n.empty() ? std::string(english) : n;
+    };
     std::string name;
     if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) name = std::string(1, static_cast<char>(vk));
     else if (vk >= 0x70 && vk <= 0x87) name = "F" + std::to_string(vk - 0x70 + 1);
     else if (vk >= 0x60 && vk <= 0x69) name = "NUM " + std::to_string(vk - 0x60);
     else
         switch (vk) {
-            case 0x20: name = caps(tr("Space")); break;
-            case 0x25: name = caps(tr("Left")); break;
-            case 0x26: name = caps(tr("Up")); break;
-            case 0x27: name = caps(tr("Right")); break;
-            case 0x28: name = caps(tr("Down")); break;
-            case 0x08: name = "BACKSPACE"; break;
+            // the space bar has no label, and the arrows' keycaps carry arrows the game's fonts haven't got: the
+            // platform's words, in the game's language
+            case 0x20: name = word(kSpace, wide); break;
+            case 0x25: name = word(kLeft, wide); break;
+            case 0x26: name = word(kUp, wide); break;
+            case 0x27: name = word(kRight, wide); break;
+            case 0x28: name = word(kDown, wide); break;
+            // keys whose keycaps differ from one keyboard to another: the layout's name, else the English one
+            case 0x08: name = layout_or("BACKSPACE"); break;
+            case 0x0D: name = layout_or("ENTER"); break;
+            case 0x14: name = layout_or("CAPS LOCK"); break;
+            case 0x21: name = layout_or("PAGE UP"); break;
+            case 0x22: name = layout_or("PAGE DOWN"); break;
+            case 0x23: name = layout_or("END"); break;
+            case 0x24: name = layout_or("HOME"); break;
+            case 0x2D: name = layout_or("INSERT"); break;
+            case 0x2E: name = layout_or("DELETE"); break;
+            case 0x90: name = layout_or("NUM LOCK"); break;
+            case 0x91: name = layout_or("SCROLL LOCK"); break;
+            // the same everywhere, or (Pause, Print Screen) keys Windows can't name from their virtual-key code
             case 0x09: name = "TAB"; break;
-            case 0x0D: name = "ENTER"; break;
             case 0x13: name = "PAUSE"; break;
-            case 0x14: name = "CAPS LOCK"; break;
             case 0x1B: name = "ESC"; break;
-            case 0x21: name = "PAGE UP"; break;
-            case 0x22: name = "PAGE DOWN"; break;
-            case 0x23: name = "END"; break;
-            case 0x24: name = "HOME"; break;
             case 0x2C: name = "PRINT SCREEN"; break;
-            case 0x2D: name = "INSERT"; break;
-            case 0x2E: name = "DELETE"; break;
             case 0x10: case 0xA0: case 0xA1: name = "SHIFT"; break;
             case 0x11: case 0xA2: case 0xA3: name = "CTRL"; break;
             case 0x12: case 0xA4: case 0xA5: name = "ALT"; break;
@@ -626,17 +656,10 @@ std::string PopupQueue::key_text(uint32_t vk, uint32_t modifiers) {
             case 0x6D: name = "NUM -"; break;
             case 0x6E: name = "NUM ."; break;
             case 0x6F: name = "NUM /"; break;
-            case 0x90: name = "NUM LOCK"; break;
-            case 0x91: name = "SCROLL LOCK"; break;
             default: {
-                // the name on the player's layout, if it's plain ASCII (a Cyrillic or CJK name would be boxes or folded
-                // to question marks); otherwise the key's code
-                const std::string n = env_.key_name ? env_.key_name(vk) : "";
-                bool ascii          = !n.empty();
-                for (const char c : n) ascii = ascii && c >= 0x20 && c < 0x7F;
-                if (ascii) {
-                    name = ascii_upper(n);
-                } else {
+                // any other key: its name on the layout, otherwise its code
+                name = on_layout();
+                if (name.empty()) {
                     char b[8];
                     std::snprintf(b, sizeof b, "0x%02X", vk);
                     name = b;
@@ -651,17 +674,20 @@ std::string PopupQueue::key_text(uint32_t vk, uint32_t modifiers) {
     return s + "[" + name + "]";
 }
 
-std::string PopupQueue::glyph_text(uint32_t g) {
+std::string PopupQueue::glyph_text(uint32_t g, bool wide) {
     static const char* const kNames[] = {"", "A", "B", "X", "Y", "LB", "RB", "LT", "RT", "MENU", "VIEW"};
     if (g >= 1 && g <= 10) return std::string("(") + kNames[g] + ")";
-    const std::string up_down = caps(tr("Up")) + "/" + caps(tr("Down")), left_right = caps(tr("Left")) + "/" + caps(tr("Right"));
+    const std::string up = word(kUp, wide), down = word(kDown, wide), left = word(kLeft, wide), right = word(kRight, wide);
+    const std::string up_down = up + "/" + down, left_right = left + "/" + right;
+    // the d-pad as the game's own text names it in each language ("Steuerkreuz", "BMD", "Cruceta")
+    const std::string dpad = "(" + word(kDpad, wide) + " ";
     switch (g) {
-        case FH2_GLYPH_DPAD_UP: return "(D-PAD " + caps(tr("Up")) + ")";
-        case FH2_GLYPH_DPAD_DOWN: return "(D-PAD " + caps(tr("Down")) + ")";
-        case FH2_GLYPH_DPAD_LEFT: return "(D-PAD " + caps(tr("Left")) + ")";
-        case FH2_GLYPH_DPAD_RIGHT: return "(D-PAD " + caps(tr("Right")) + ")";
-        case FH2_GLYPH_DPAD_UPDOWN: return "(D-PAD " + up_down + ")";
-        case FH2_GLYPH_DPAD_LEFTRIGHT: return "(D-PAD " + left_right + ")";
+        case FH2_GLYPH_DPAD_UP: return dpad + up + ")";
+        case FH2_GLYPH_DPAD_DOWN: return dpad + down + ")";
+        case FH2_GLYPH_DPAD_LEFT: return dpad + left + ")";
+        case FH2_GLYPH_DPAD_RIGHT: return dpad + right + ")";
+        case FH2_GLYPH_DPAD_UPDOWN: return dpad + up_down + ")";
+        case FH2_GLYPH_DPAD_LEFTRIGHT: return dpad + left_right + ")";
         case FH2_GLYPH_L3: case FH2_GLYPH_LS: return "(LS)";
         case FH2_GLYPH_R3: case FH2_GLYPH_RS: return "(RS)";
         case FH2_GLYPH_LS_UPDOWN: return "(LS " + up_down + ")";
@@ -673,7 +699,7 @@ std::string PopupQueue::glyph_text(uint32_t g) {
 }
 
 // A controller chord as up to three glyphs, in the hotkey rows' order; a fourth button and beyond as "…".
-std::string PopupQueue::chord_text(uint32_t chord) {
+std::string PopupQueue::chord_text(uint32_t chord, bool wide) {
     static const uint32_t kOrder[][2] = {
         {FH2_PAD_LB, FH2_GLYPH_LB},         {FH2_PAD_RB, FH2_GLYPH_RB},           {FH2_PAD_Y, FH2_GLYPH_Y},
         {FH2_PAD_X, FH2_GLYPH_X},           {FH2_PAD_B, FH2_GLYPH_B},             {FH2_PAD_A, FH2_GLYPH_A},
@@ -689,14 +715,14 @@ std::string PopupQueue::chord_text(uint32_t chord) {
             s += " + \xE2\x80\xA6";
             break;
         }
-        s += (s.empty() ? "" : " + ") + glyph_text(o[1]);
+        s += (s.empty() ? "" : " + ") + glyph_text(o[1], wide);
     }
     return s;
 }
 
 // The tip's button for the device used last: a hotkey's binding now, else the prompt's key or glyph. "" when there's
 // nothing to write (a hotkey bound to nothing).
-std::string PopupQueue::button_text(const Item& it, bool keyboard) {
+std::string PopupQueue::button_text(const Item& it, bool keyboard, bool wide) {
     uint32_t vk = it.button.vk, mods = it.button.modifiers, chord = 0, glyph = it.button.glyph;
     if (!it.hotkey.empty()) {
         vk = mods = glyph = 0;
@@ -707,10 +733,10 @@ std::string PopupQueue::button_text(const Item& it, bool keyboard) {
             return "";
         }
     }
-    if (keyboard && vk) return key_text(vk, mods);
-    if (chord) return chord_text(chord);
-    if (glyph) return glyph_text(glyph);
-    return vk ? key_text(vk, mods) : "";
+    if (keyboard && vk) return key_text(vk, mods, wide);
+    if (chord) return chord_text(chord, wide);
+    if (glyph) return glyph_text(glyph, wide);
+    return vk ? key_text(vk, mods, wide) : "";
 }
 
 void PopupQueue::note_shown(const Item& it, double now, bool private_title) {
@@ -791,7 +817,7 @@ PopupShow PopupQueue::tick(const PopupTick& in) {
             if (pick == items_.size() || w.seq < items_[pick].seq) pick = i;
         }
         if (pick == items_.size()) return {};
-        const std::string button = items_[pick].has_button ? button_text(items_[pick], in.keyboard) : "";
+        const std::string button = items_[pick].has_button ? button_text(items_[pick], in.keyboard, in.wide) : "";
         if (items_[pick].has_button && button.empty()) {
             drop(pick, "its button can't be written (its hotkey is bound to nothing now)", now, false);
             return {};

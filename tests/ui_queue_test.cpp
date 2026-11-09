@@ -742,6 +742,92 @@ int main() {
         check(g.shown.size() == 1, "then 20 s of quiet driving");
     }
 
+    // ---- the platform's words with no plain letters: English when folded, the language's own when wide ----
+    reset();
+    {
+        PopupEnv ru = env();
+        ru.tr       = [](const char* english) {   // as the Russian table has them, already in capitals
+            const std::string s = english;
+            return s == "Space"   ? std::string("\xD0\x9F\xD0\xA0\xD0\x9E\xD0\x91\xD0\x95\xD0\x9B")   // ПРОБЕЛ
+                   : s == "Right" ? std::string("\xD0\x92\xD0\x9F\xD0\xA0\xD0\x90\xD0\x92\xD0\x9E")   // ВПРАВО
+                   : s == "D-pad" ? std::string("\xD0\x9A\xD0\xA0\xD0\x95\xD0\xA1\xD0\xA2\xD0\x9E\xD0\x92\xD0\x98\xD0\x9D\xD0\x90")   // КРЕСТОВИНА
+                                  : s;
+        };
+        for (const bool wide : {false, true}) {
+            g_seen.clear();
+            Game k;
+            k.keyboard = true;
+            k.wide     = wide;
+            PopupQueue q{ru};
+            arm(q, k);
+            FH2Tip space  = tip("Space", "Press {button} to keep it", FH2_GLYPH_DPAD_RIGHT, VK_SPACE);
+            space.delay_s = 1;
+            q.show_tip(A, &space, 0);
+            Game p;
+            p.wide = wide;
+            PopupQueue q2{ru};
+            arm(q2, p);
+            q2.show_tip(A, &space, 0);
+            run(q, k, 13000);
+            run(q2, p, 13000);
+            if (k.shown.size() == 1 && p.shown.size() == 1) {
+                if (!wide) {
+                    same(k.shown[0].line, "Press [SPACE] to keep it", "folded: a Russian key word is shown in English, not as question marks");
+                    same(p.shown[0].line, "Press (D-PAD RIGHT) to keep it", "folded: the Russian d-pad words in English too");
+                } else {
+                    same(k.shown[0].line, "Press [\xD0\x9F\xD0\xA0\xD0\x9E\xD0\x91\xD0\x95\xD0\x9B] to keep it", "wide: the Russian key word");
+                    same(p.shown[0].line, "Press (\xD0\x9A\xD0\xA0\xD0\x95\xD0\xA1\xD0\xA2\xD0\x9E\xD0\x92\xD0\x98\xD0\x9D\xD0\x90 "
+                                          "\xD0\x92\xD0\x9F\xD0\xA0\xD0\x90\xD0\x92\xD0\x9E) to keep it",
+                         "wide: the Russian d-pad words");
+                }
+            } else {
+                check(false, wide ? "the wide Russian tips show" : "the folded Russian tips show");
+            }
+        }
+        // a word with letters that fold (Polish): kept, in plain letters
+        PopupEnv pl = env();
+        pl.tr       = [](const char* english) {
+            const std::string s = english;
+            return s == "D-pad" ? std::string("Pad kierunkowy") : s == "Up" ? std::string("G\xC3\xB3ra") : s;
+        };
+        Game p;
+        PopupQueue q{pl};
+        arm(q, p);
+        FH2Tip up = tip("Up", "Press {button}", FH2_GLYPH_DPAD_UP);
+        up.delay_s = 1;
+        q.show_tip(A, &up, 0);
+        run(q, p, 13000);
+        if (p.shown.size() == 1) same(p.shown[0].line, "Press (PAD KIERUNKOWY GORA)", "folded: a Polish d-pad word in plain letters");
+        else check(false, "the Polish d-pad tip shows");
+    }
+
+    // ---- other keys as the keyboard layout names them, else in English ----
+    reset();
+    {
+        PopupEnv de = env();
+        de.key_name = [](uint32_t vk) {
+            return vk == VK_DELETE ? std::string("Entf") : vk == VK_HOME ? std::string("\xD0\x94\xD0\xBE\xD0\xBC") : std::string();
+        };
+        Game k;
+        k.keyboard = true;
+        PopupQueue q{de};
+        arm(q, k);
+        FH2Tip del = tip("Del", "Press {button}", 0, VK_DELETE), home = tip("Home", "Press {button}", 0, VK_HOME),
+               end = tip("End", "Press {button}", 0, VK_END);
+        for (FH2Tip* t : {&del, &home, &end}) t->delay_s = 1;
+        q.show_tip(A, &del, 0);
+        q.show_tip(B, &home, 0);
+        q.show_tip(C, &end, 0);
+        run(q, k, 13000 + 2 * 181000);
+        if (k.shown.size() == 3) {
+            same(k.shown[0].line, "Press [ENTF]", "Delete as a German layout names it");
+            same(k.shown[1].line, "Press [HOME]", "a layout name that isn't ASCII: the English name");
+            same(k.shown[2].line, "Press [END]", "no layout name: the English name");
+        } else {
+            check(false, "the three layout tips show");
+        }
+    }
+
     std::printf(g_failed ? "%d FAILED\n" : "ALL PASSED\n", g_failed);
     return g_failed ? 1 : 0;
 }

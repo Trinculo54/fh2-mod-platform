@@ -699,11 +699,12 @@ void want(bool tips) {
     start();
 }
 
-// The key's name on the player's layout, for keys outside the queue's own table.
+// The key's name on the player's keyboard layout ("Entf" on a German one), as the hotkey rows name keys.
 std::string layout_key_name(uint32_t vk) {
     UINT sc = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
-    switch (vk) {   // extended keys
-        case VK_DIVIDE: case VK_NUMLOCK: case VK_RCONTROL: case VK_RMENU: sc |= 0x100; break;
+    switch (vk) {   // extended keys, so the name is the key's own, not the numpad's
+        case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN: case VK_PRIOR: case VK_NEXT: case VK_END: case VK_HOME:
+        case VK_INSERT: case VK_DELETE: case VK_DIVIDE: case VK_NUMLOCK: case VK_RCONTROL: case VK_RMENU: sc |= 0x100; break;
         default: break;
     }
     wchar_t name[64] = {};

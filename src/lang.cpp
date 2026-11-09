@@ -1706,7 +1706,9 @@ const Text kTexts[] = {
   "Слой HUD: отключён после сбоя. См. platform.log.",
   "HUD-laag: weggelaten na een crash. Zie platform.log."}},
 // Key names in tips' buttons (popup_queue.cpp), in capitals once made: the space bar has no label, and the arrows'
-// keycaps carry arrows the game's fonts haven't got. Short, as on a keycap.
+// keycaps carry arrows the game's fonts haven't got. Short, as on a keycap. Other keys are named as the player's
+// keyboard layout names them. With the text folded to ASCII, a word with letters that have no plain form is shown
+// in English instead.
 {"Space",
  {"Espaço",
   "Leertaste",
@@ -1772,6 +1774,21 @@ const Text kTexts[] = {
   "Prawo",
   "Вправо",
   "Rechts"}},
+// A d-pad direction in tips' buttons, "(D-PAD UP)": each language's word is the one the game's own text uses
+// (InGame.str IDS_HudOptionValue_TelemetryToggle, GameOptions.str IDS_DisplayName_125).
+{"D-pad",
+ {"Direcional",
+  "Steuerkreuz",
+  "BMD",
+  "Cruceta",
+  "Pad direccional",
+  "Croce direzionale",
+  "方向パッド",
+  "방향 패드",
+  "方向鍵",
+  "Pad kierunkowy",
+  "Крестовина",
+  "Navigatiepad"}},
 };
 // clang-format on
 
