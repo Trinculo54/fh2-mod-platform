@@ -658,11 +658,8 @@ typedef struct FH2ModApi {
        text included (see FH2_TOAST_FLAG_PRIVATE). When your mod faults, the
        platform drops what you have waiting. Ask ui_status what works this
        session: a call that can't show returns 0, and the log says why.
-
-       Being built: until platform 2.9.0 is released, a member that docs/api.md
-       marks "(being built)" returns 0 and says once in the log that it isn't
-       in this build yet. include/fh2mod_ui.h wraps every one of them so that
-       it does nothing on an older platform. */
+       include/fh2mod_ui.h wraps every one of them so that it does nothing on
+       an older platform. */
 
     /* What works now, as FH2_UI_ bits. Cheap. */
     uint32_t (*ui_status)(FH2Mod* mod);
@@ -679,9 +676,10 @@ typedef struct FH2ModApi {
        is. From a page, title or box callback it plays at once; from any other
        thread, at the game's next tick, or not at all if none comes within
        half a second. Each sound at most once per 100 ms from your mod. Never
-       make a sound the only cue. Returns 1, or 0 for an unknown sound, one
-       not yet tested on this platform (see FH2_SOUND_), a repeat within
-       100 ms, or before the game's sound is up. */
+       make a sound the only cue. Returns 1, or 0 for an unknown sound, a
+       repeat within 100 ms, NOTIFY or a countdown beep while the driving
+       view isn't on screen (they're silent under menus), or before the
+       game's sound is up. */
     int (*play_ui_sound)(FH2Mod* mod, uint32_t sound);
 
     /* ---- Pop-ups -----------------------------------------------------------
@@ -728,11 +726,12 @@ typedef struct FH2ModApi {
        only from a callback of one of your pages, your settings or your title
        entries (on_open, on_select, on_button, on_slot, on_change, a title
        entry's callback); from anywhere else, or from on_choose, it returns 0.
-       One box at a time, and nothing is queued. on_choose gets the choice
-       (from 0) or FH2_BOX_BACK, on the game's UI thread; it may never be
-       called if the player leaves the box another way. Returns 1 if shown,
-       0 if not (not from a callback, a box already open, no choices; the log
-       says why). */
+       One box a callback, and nothing is queued. on_choose gets the choice
+       (from 0) or FH2_BOX_BACK (the Back item, or B), on the game's UI
+       thread; it may never be called if the player leaves the box another
+       way. Returns 1 if shown (from a tile page's on_open: as the page
+       loads), 0 if not (not from a callback, on_open as YOUR MODS opens, a
+       box already shown, no choices; the log says why). */
     int (*show_message_box)(FH2Mod* mod, const FH2MessageBox* box);
 
     /* ---- Pages: help bar and hint line ------------------------------------- */
@@ -962,16 +961,16 @@ struct FH2PageRow {
 #define FH2_UI_USES_TIPS       0x0002  /* tips: the controller poll for the device used last */
 #define FH2_UI_USES_OWN_SWITCH 0x0004  /* you have a pop-ups row of your own: the platform adds none */
 
-/* Sounds (play_ui_sound, FH2Toast.sound). 0 = none. The first four play everywhere; each of the others
-   returns 0 until this platform has tested it (the release notes list which work). The HUD layer preview
+/* Sounds (play_ui_sound, FH2Toast.sound). 0 = none. All eleven were heard in game; NOTIFY and the three
+   countdown beeps sound only over the driving view, so they're refused under menus. The HUD layer preview
    (fh2mod_hud.h) plays 5 to 11 with its own play_ui_sound. */
 #define FH2_SOUND_SELECT   1
 #define FH2_SOUND_BACK     2
 #define FH2_SOUND_OPEN     3
 #define FH2_SOUND_CLOSE    4
-#define FH2_SOUND_ERROR    5   /* the menus' "can't do that" */
+#define FH2_SOUND_ERROR    5   /* the menus' "can't do that" (a low thump over the driving view) */
 #define FH2_SOUND_NOTIFY   6   /* the game's notification chime, for a milestone */
-#define FH2_SOUND_INFO     7
+#define FH2_SOUND_INFO     7   /* a pop-up opening (very faint over the driving view) */
 #define FH2_SOUND_TICK     8   /* the game's countdown beeps */
 #define FH2_SOUND_TICK_LOW 9
 #define FH2_SOUND_TICK_END 10

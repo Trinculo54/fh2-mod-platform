@@ -576,8 +576,8 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] set_setting_text: Button has 3 choices, not 2") &&
               has(log, "[TestMod] set_setting_text: there's no row called Nope"));
         // the UI templates (API 10): every member there; ui_uses records what a mod uses, from fh2mod_init only; pop-ups and
-        // tips queue and log with no game (ui_status: nothing works yet, since their hooks wait for the game); the
-        // others are being built: each returns 0 and says so once, whoever calls it
+        // tips queue and log with no game (ui_status: nothing works yet, since their hooks wait for the game); with no
+        // game and from no callback, no sound plays and no box shows; pages take their help and hints
         CHECK(has(log, "[TestMod] ui templates: all 12 members there"));
         CHECK(has(log, "[TestMod] ui_uses: 0x100 isn't a bit this platform knows, so it's ignored"));
         CHECK(has(log, "[TestMod] UI templates: it uses pop-ups, tips\n") || has(log, "[TestMod] UI templates: it uses pop-ups, tips\r\n"));
@@ -595,13 +595,30 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] show_tip: tip NoSlot has a button, but its text has no {button} to put it in"));
         CHECK(has(log, "[TestMod] pop-up queued: Test pop-up / from the helper") && has(log, "[TestMod] ui helpers ok"));
         CHECK(!has(log, "[TestMod] shows pop-ups without saying so") && !has(log, "[Pop-ups]"));   // declared; no hooks without a game
-        for (const char* m : {"play_ui_sound", "show_message_box", "set_page_help", "set_page_hints", "show_page_hint"}) {
-            const std::string line = std::string("[TestMod] ") + m + " isn't in this build yet, ";
-            const std::size_t at   = log.find(line);
-            const bool once = at != std::string::npos && log.find(line, at + 1) == std::string::npos;
-            std::printf("%s ui templates: %s says once that it isn't in this build yet\n", once ? "ok  " : "FAIL", m);
-            if (!once) ++fails;
+        CHECK(!has(log, "isn't in this build yet"));   // every member is built
+        // play_ui_sound: from fh2mod_init and from a thread of the mod's own, with no game, nothing plays (said once)
+        {
+            const std::string line = "[TestMod] play_ui_sound: the game isn't running yet, so SELECT wasn't played";
+            CHECK(has(log, line.c_str()) && log.find(line, log.find(line) + 1) == std::string::npos);
+            CHECK(has(log, "[TestMod] sound from a thread: 0") && !has(log, "so SHUTTER wasn't played") && !has(log, "[UI sounds]"));
         }
+        // show_message_box: only from the mod's page, setting and title callbacks
+        CHECK(has(log, "[TestMod] show_message_box: boxes show only from a callback of this mod's pages, settings or title-screen entries "
+                       "(on_open, on_select, on_button, on_slot, on_change, a title entry's on_press or on_choose); send the player to its page "
+                       "instead, so box Reset isn't shown"));
+        // pages' help bars and hint lines
+        CHECK(has(log, "[TestMod] ui templates: set_page_help 32, set_page_hints 2, show_page_hint 1, the wrong ones 0"));
+        CHECK(has(log, "[TestMod] set_page_help: Stats's prompt 3 (LT): no callback of a page can answer that button, so it's left out") &&
+              has(log, "[TestMod] set_page_help: Stats: its help fragment from set_page_xaml isn't used while it has these") &&
+              has(log, "[TestMod] set_page_help: Stats's help bar: (A) Select (the game's word), (X) Hint, (Y) Ask {first}, from the next time it opens"));
+        CHECK(has(log, "[TestMod] set_page_help: Tools's prompt 2 (X): a page of rows answers only A and B, so it's left out") &&
+              has(log, "[TestMod] set_page_help: Tools's help bar: (A) Run it, (B) Back (the game's word), from the next time it opens"));
+        CHECK(has(log, "[TestMod] set_page_help: there's no page called Missing") && has(log, "[TestMod] set_page_hints: there's no page called Missing"));
+        CHECK(has(log, "[TestMod] set_page_hints: Stats has 2 hints") && has(log, "[TestMod] set_page_hints: Tools: hint 2 is cut to 80 characters") &&
+              has(log, "[TestMod] set_page_hints: Tools has 3 hints"));
+        CHECK(has(log, "[TestMod] page Tools's hint line: Ready. (attention), from the next time it opens"));
+        CHECK(has(log, "[TestMod] show_page_hint: Tools has no hint 9 (it has 3; set them with set_page_hints)") &&
+              has(log, "[TestMod] show_page_hint: 7 isn't a hint kind (FH2_HINT_INFO, _ATTENTION or _FAULT)"));
         // the tip TestMod marked seen is in platform-seen.txt, by its DLL's name (written on the store's own thread)
         {
             std::string seen;
@@ -690,7 +707,15 @@ int wmain(int argc, wchar_t** argv) {
             // the tile: the page of TestMod's own design, in the options page's frame
             CHECK(has(tile, "<Grid x:Name=\"TestContent\">") && !has(tile, "BasicOptions") && has(tile, "x:Key=\"FH2Mod_ShowIf\"") &&
                   !has(tile, "Test_NoSuchKey"));
-            CHECK(has(tile, "<Color x:Key=\"Test_Color\">") && has(tile, "<Grid>\r\n<ContentControl x:Name=\"DefaultHelpPanel\" Style="));
+            CHECK(has(tile, "<Color x:Key=\"Test_Color\">"));
+            // its help bar is set_page_help's (API 10), not its help fragment: A in the game's word, X and Y as given (braces made
+            // round), B Back; and its hint line under the content, in its three looks
+            CHECK(!has(tile, "<Grid>\r\n<ContentControl x:Name=\"DefaultHelpPanel\" Style=") &&
+                  has(tile, "local:ControllerButtonPanel.ADescription=\"{local:Loc HelpButtons.IDS_Select}\"") &&
+                  has(tile, "local:ControllerButtonPanel.XDescription=\"Hint\"") && has(tile, "local:ControllerButtonPanel.YDescription=\"Ask (first)\"") &&
+                  has(tile, "local:ControllerButtonPanel.BDescription=\"{local:Loc HelpButtons.IDS_Back}\"") && !has(tile, "LBumperDescription"));
+            CHECK(has(tile, "<StackPanel>\r\n<Grid x:Name=\"TestContent\">") && has(tile, "{Binding FH2Mod_PanelShown, Converter={StaticResource FH2Mod_ShowIfHidden}}") &&
+                  has(tile, "{Binding FH2Mod_PanelKind_2, Converter={StaticResource FH2Mod_ShowIf}}"));
             CHECK(has(tile, "x:Name=\"BottomBar\"") && has(tile, "x:Class =\"ForzaUI.A_HudOptions\""));
             // the Achievements tiles show the page's tile text
             const auto pause = slurp(scenes / "A_PauseMenu.xaml");
@@ -744,6 +769,25 @@ int wmain(int argc, wchar_t** argv) {
                   has(installed, "  &gt;\" local:BindingProxy.B=\"\""));
             CHECK(has(installed, "Press A for its ") && has(installed, "Press A to see what's wrong."));
             CHECK(has(installed, "{Binding FH2Mod_PanelText}") && has(installed, "{Binding FH2Mod_PanelShown,"));
+            // the hint line (API 10): the platform's own text as it was, a mod's in orange with the game's info icon or in red
+            // with its alert icon
+            CHECK(has(installed, "Color=\"{StaticResource A_Color_SubHeader_Text}\" Style=\"{StaticResource A_Style_FZTextBlock_Body_Tight}\" "
+                                 "TextWrapping=\"Wrap\" Visibility=\"{Binding FH2Mod_PanelKind_0, Converter={StaticResource FH2Mod_ShowView}}\"") &&
+                  has(installed, "Color=\"#FFFE5723\"") && has(installed, "Color=\"#FFE0141E\"") &&
+                  has(installed, "ImageSource=\"/ForzaUI;component/Textures/Anthem/HUD/InfoIconSmall.png\" Visibility=\"{Binding FH2Mod_PanelKind_1,") &&
+                  has(installed, "ImageSource=\"/ForzaUI;component/Textures/Anthem/Icons/Alert_Icon.png\" Visibility=\"{Binding FH2Mod_PanelKind_2,"));
+            // pages with help bars of their own (API 10): Tools' (A) Run it and (B) Back, Stats' A in the game's word (a view
+            // of rows keeps only A and B), each shown with its view instead of its kind's bar
+            {
+                const std::size_t tools = installed.find("local:ControllerButtonPanel.ADescription=\"Run it\"");
+                CHECK(tools != std::string::npos && installed.rfind("x:Name=\"FH2Mod_ViewHelpPanel_P", tools) != std::string::npos &&
+                      has(installed, "{Binding FH2Mod_HelpBar_") && !has(installed, "XDescription=\"Hint\""));
+                std::size_t own = 0;
+                for (std::size_t at = installed.find("x:Name=\"FH2Mod_ViewHelpPanel_P"); at != std::string::npos;
+                     at = installed.find("x:Name=\"FH2Mod_ViewHelpPanel_P", at + 1))
+                    ++own;
+                CHECK(own == 2);
+            }
             CHECK(has(installed, "FH2Mod_InfoRow_Update") && has(installed, "FH2Mod_Color_Yellow"));
             // each mod's page: "MODS / TESTMOD"; its own rows, its hotkeys under "Keys and buttons", its page, then About,
             // What it does and Load this mod (marked *: it takes a restart) at the bottom
