@@ -726,12 +726,13 @@ typedef struct FH2ModApi {
        only from a callback of one of your pages, your settings or your title
        entries (on_open, on_select, on_button, on_slot, on_change, a title
        entry's callback); from anywhere else, or from on_choose, it returns 0.
-       One box a callback, and nothing is queued. on_choose gets the choice
+       One box at a time, and nothing is queued. on_choose gets the choice
        (from 0) or FH2_BOX_BACK (the Back item, or B), on the game's UI
        thread; it may never be called if the player leaves the box another
        way. Returns 1 if shown (from a tile page's on_open: as the page
        loads), 0 if not (not from a callback, on_open as YOUR MODS opens, a
-       box already shown, no choices; the log says why). */
+       box already shown or still coming up, no choices; the log says why).
+       A title entry that shows a box can't also start the game. */
     int (*show_message_box)(FH2Mod* mod, const FH2MessageBox* box);
 
     /* ---- Pages: help bar and hint line ------------------------------------- */

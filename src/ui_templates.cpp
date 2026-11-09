@@ -141,7 +141,7 @@ UiCallback::UiCallback(FH2Mod* mod, UiCb kind, void* page, int page_index) {
     state.outer      = g_callback;
     g_callback       = &state;
 }
-UiCallback::~UiCallback() { g_callback = const_cast<UiCallbackState*>(state.outer); }
+UiCallback::~UiCallback() { g_callback = state.outer; }
 
 UiCallbackState* ui_callback_now() { return g_callback; }
 

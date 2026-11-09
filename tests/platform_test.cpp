@@ -714,7 +714,11 @@ int wmain(int argc, wchar_t** argv) {
                   has(tile, "local:ControllerButtonPanel.ADescription=\"{local:Loc HelpButtons.IDS_Select}\"") &&
                   has(tile, "local:ControllerButtonPanel.XDescription=\"Hint\"") && has(tile, "local:ControllerButtonPanel.YDescription=\"Ask (first)\"") &&
                   has(tile, "local:ControllerButtonPanel.BDescription=\"{local:Loc HelpButtons.IDS_Back}\"") && !has(tile, "LBumperDescription"));
-            CHECK(has(tile, "<StackPanel>\r\n<Grid x:Name=\"TestContent\">") && has(tile, "{Binding FH2Mod_PanelShown, Converter={StaticResource FH2Mod_ShowIfHidden}}") &&
+            // (in a Grid: the content in its "*" row keeps a finite height, the hint line in the "Auto" row under it)
+            CHECK(has(tile, "<RowDefinition Height=\"*\" />\r\n<RowDefinition Height=\"Auto\" />\r\n</Grid.RowDefinitions>\r\n<Grid Grid.Row=\"0\">\r\n"
+                            "<Grid x:Name=\"TestContent\">") && has(tile, "<Grid Grid.Row=\"1\">\r\n                    <local:FZMaterial") &&
+                  !has(tile, "<StackPanel>\r\n<Grid x:Name=\"TestContent\">") &&
+                  has(tile, "{Binding FH2Mod_PanelShown, Converter={StaticResource FH2Mod_ShowIfHidden}}") &&
                   has(tile, "{Binding FH2Mod_PanelKind_2, Converter={StaticResource FH2Mod_ShowIf}}"));
             CHECK(has(tile, "x:Name=\"BottomBar\"") && has(tile, "x:Class =\"ForzaUI.A_HudOptions\""));
             // the Achievements tiles show the page's tile text

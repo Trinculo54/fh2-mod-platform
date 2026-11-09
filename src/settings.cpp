@@ -1885,8 +1885,13 @@ bool write_custom_page(const char* file, const std::string& resources, const std
     // (positions again: the resources moved them)
     const std::size_t b0 = page.find("<StackPanel Name=\"BasicOptions\"");
     const std::size_t b1 = page.rfind("</StackPanel>", page.find("</ContentControl>", b0)) + std::string("</StackPanel>").size();
-    // with hints (set_page_hints, API 10), the hint line under the content
-    page.replace(b0, b1 - b0, hints ? "<StackPanel>\r\n" + content + hint_panel("FH2Mod_ShowIfHidden", "FH2Mod_ShowIf", "0,12,0,0") + "\r\n</StackPanel>" : content);
+    // with hints (set_page_hints, API 10), the hint line under the content: a Grid, its content in the "*" row, so the
+    // content keeps the finite height it has without hints (a StackPanel would measure it with infinite height, and
+    // star-sized rows and scrolling lists in it would stop working)
+    page.replace(b0, b1 - b0, hints ? "<Grid>\r\n<Grid.RowDefinitions>\r\n<RowDefinition Height=\"*\" />\r\n<RowDefinition Height=\"Auto\" />\r\n"
+                                      "</Grid.RowDefinitions>\r\n<Grid Grid.Row=\"0\">\r\n" + content + "\r\n</Grid>\r\n<Grid Grid.Row=\"1\">" +
+                                      hint_panel("FH2Mod_ShowIfHidden", "FH2Mod_ShowIf", "0,12,0,0") + "\r\n</Grid>\r\n</Grid>"
+                                    : content);
     const std::size_t p0 = page.find(help_el), p1 = page.find("/>", p0) + 2;
     if (own_help && own_help->own) {   // set_page_help's prompts, in place of the mod's help fragment
         page.replace(p0, p1 - p0, page_help_bar(page.substr(p0, p1 - p0), own_help->help, false));
@@ -2778,6 +2783,7 @@ int view_focus(int k) { return k >= 1 && static_cast<std::size_t>(k - 1) < g_vie
 // A page on a tile, as last written: what A does on its rows.
 std::vector<RowAct> g_tile_acts[kTileCount];
 std::atomic<void*> g_tile_page_obj[kTileCount] = {};   // the page object showing a mod's page on a tile (UI thread)
+std::atomic<bool> g_tile_has_panel[kTileCount] = {};  // that page was written with the hint line (its hints, set_page_hints)
 
 bool write_hub_page(int p) {
     hotkeys_refresh_text();
@@ -2869,6 +2875,7 @@ bool write_hub_page(int p) {
         std::string title, res, content, help;
         bool select = false, custom = false, hints = false;
         ViewHelp own;
+        g_tile_has_panel[t] = false;   // until it's written with one
         {
             std::scoped_lock lk2{g_mu};
             const int j = g_tile_page[t];
@@ -2893,13 +2900,17 @@ bool write_hub_page(int p) {
                 select = pg.on_select != nullptr;
             }
         }
+        bool written = false;
         if (custom) {
             g_tile_acts[t].clear();
-            return write_custom_page(hub_file(p).c_str(), res, content, help, &own, hints);
+            written = write_custom_page(hub_file(p).c_str(), res, content, help, &own, hints);
+        } else {
+            g_tile_acts[t] = row_acts(items, "FirstItem");
+            written = write_list_page(hub_file(p).c_str(), upper_game(title), items, true, nullptr, nullptr,
+                                      select ? "{local:Loc HelpButtons.IDS_Select}" : nullptr, "", hints ? kPanelBound : kPanelNone, nullptr, &own);
         }
-        g_tile_acts[t] = row_acts(items, "FirstItem");
-        return write_list_page(hub_file(p).c_str(), upper_game(title), items, true, nullptr, nullptr, select ? "{local:Loc HelpButtons.IDS_Select}" : nullptr,
-                               "", hints ? kPanelBound : kPanelNone, nullptr, &own);
+        g_tile_has_panel[t] = written && hints;
+        return written;
     }
     return false;
 }
@@ -3245,6 +3256,7 @@ void mark_home();
 
 void mods_tile_pressed(void* page) {
     hub_reset();
+    g_panel_obj = nullptr;   // A_ModOptions has no hint line; YOUR MODS' bindings set it again
     mark_home();
     g_route = kRouteSettings;
     if (g_hub_ready.load()) {
@@ -3304,6 +3316,8 @@ std::atomic<int> g_hub_page{0};
 std::atomic<uint64_t> g_hub_asked{0};
 std::atomic<int> g_hub_builds{0};
 std::atomic<int> g_hub_shown{0};         // the tab's page being opened, for wiring its rows
+std::atomic<bool> g_mods_page_next{false};      // the page being opened is A_ModOptions (the stand-in list)
+std::atomic<void*> g_mods_options_page{nullptr}; // the page object showing it (set as it loads; only compared)
 // The mod's page (a view of YOUR MODS) and row the player last left with B, for Go back; g_resume: the YOUR
 // MODS being opened shows that view, and focuses that row once it's loaded (UI thread only).
 int g_last_view = 0, g_last_row = 0;
@@ -3330,7 +3344,8 @@ uint8_t* d_hud_scene(uint8_t* out) {
         page        = hub_name(p);
         g_hub_shown = p;
     } else if (asked && now - asked < 1500) {
-        page = L"A_ModOptions";
+        page             = L"A_ModOptions";
+        g_mods_page_next = true;
     }
     if (!page.empty() && !point_at_page(r, page.c_str()))
         slog("the HUD page's scene record doesn't look as expected; opened the HUD page");
@@ -3463,7 +3478,7 @@ void release(uint8_t* obj) {
 // given, is called for B (S6: events 3 to 5 all register on the box's B, key 45; registered
 // after the help layout's own B, it takes its place, and the box still closes after it).
 bool show_list_inner(void* page, FakeLocString* title, FakeLocString* message, FakeLocString* const* labels, int count,
-                     void** fn_vt, void** back_vt) {
+                     void** fn_vt, void** back_vt, void** shown) {
     void* items = nullptr;
     reinterpret_cast<MakeItemsFn>(g_base + RVA_MAKE_ITEMS)(&items);
     if (!items) return false;
@@ -3497,13 +3512,15 @@ bool show_list_inner(void* page, FakeLocString* title, FakeLocString* message, F
         reinterpret_cast<PopupHandlerFn>(g_base + RVA_POPUP_HANDLER)(popup, 3, &b, true);
     }
     release(coll);
+    if (shown) *shown = popup;
     return true;
 }
 
+// `shown`, when given, gets the game's box (its handlers' PopupFn::popup), to tell its answer from another box's.
 bool show_list(void* page, FakeLocString* title, FakeLocString* message, FakeLocString* const* labels, int count, void** fn_vt,
-               void** back_vt = nullptr) {
+               void** back_vt = nullptr, void** shown = nullptr) {
     __try {
-        return show_list_inner(page, title, message, labels, count, fn_vt, back_vt);
+        return show_list_inner(page, title, message, labels, count, fn_vt, back_vt, shown);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         g_popup_ok = false;
         return false;
@@ -3620,7 +3637,11 @@ void handle_choice(PopupFn* self) {
 bool g_settings_tile = false;   // Pause > Settings has the Mods tile (some mod has rows)
 
 void d_wire_tiles(void* page) {
-    g_mods_asked = 0;
+    g_mods_asked        = 0;
+    g_mods_page_next    = false;
+    g_panel_obj         = nullptr;   // back on Settings: no page with the hint line is up
+    g_last_hud_page     = nullptr;   // nor any page of the options class the platform wrote
+    g_mods_options_page = nullptr;
     if (!g_settings_tile) return o_wire_tiles(page);
     static bool said_grid = false;
     if (!widen_nav(page) && !said_grid) {
@@ -3670,6 +3691,7 @@ TileFn o_car_packs = nullptr, o_expansions = nullptr, o_extras = nullptr, o_vip 
 void prepare_hub(int which, bool resume) {
     // the mods' pages on it get to set their rows first
     if (which < kHubTilePage) g_custom_shown = -1;   // no page of a mod's is up on its own (the hint line reads it)
+    g_panel_obj = nullptr;   // the page that had the hint line is going: the new page's bindings set it again if it has one
     if (which == kHubInstalled) {
         mark_home();
         pages_opening();
@@ -3947,7 +3969,10 @@ void d_hud_page_loaded(void* page) {
     // Which page this is, before the page's own "loaded" (which focuses FirstItem, and so may set
     // a slot through a binding) runs: from then on, callbacks and focusing go to this page.
     const int was_shown = g_hub_shown.exchange(0);
+    const bool mods_page = g_mods_page_next.exchange(false) && was_shown == 0;
     g_last_hud_page     = page;
+    if (mods_page) g_mods_options_page = page;
+    else if (g_mods_options_page.load() == page) g_mods_options_page = nullptr;
     if (was_shown == kHubUpdates) {
         g_updates_page = page;
         g_selected     = 0;
@@ -4260,8 +4285,11 @@ void hook_tiles(FH2Mod* m) {
 void hook_hud_shown(FH2Mod* m);
 bool g_hud_notice = false;   // A_Hud.xaml has the notice
 void d_pause_menu_wire(void* page) {
-    g_custom_obj   = nullptr;   // back on the pause menu: no page of a mod's own design is up
-    g_custom_shown = -1;
+    g_custom_obj        = nullptr;   // back on the pause menu: no page of a mod's own design is up
+    g_custom_shown      = -1;
+    g_panel_obj         = nullptr;   // nor one with the hint line
+    g_last_hud_page     = nullptr;   // nor any page of the options class the platform wrote
+    g_mods_options_page = nullptr;
     page_guard_closed();
     for (auto& obj : g_tile_page_obj) obj = nullptr;
     g_focus_again.clear();
@@ -4702,6 +4730,10 @@ bool d_splash_button(void* page, int button, bool pressed) {
         crashed_in(mod, "on_press for title entry " + key);
         r = FH2_TITLE_HANDLED;
     }
+    if (r == FH2_TITLE_START && cb.state.box_shown) {   // the box would stay up over a page that's going away
+        log_line(mod->name, "title entry " + key + " showed a message box and asked to start the game; the box stays and the game doesn't start");
+        r = FH2_TITLE_HANDLED;
+    }
     if (r == FH2_TITLE_START) {
         log_line(mod->name, "title entry " + key + " starts the game");
         g_title_started = j;
@@ -4794,6 +4826,10 @@ void handle_title_choice(PopupFn* self) {
         crashed_in(mod, "on_choose for title entry " + key);
         r = FH2_TITLE_HANDLED;
     }
+    if (r == FH2_TITLE_START && cb.state.box_shown) {   // the box would stay up over a page that's going away
+        log_line(mod->name, "title entry " + key + " (" + label + ") showed a message box and asked to start the game; the box stays and the game doesn't start");
+        r = FH2_TITLE_HANDLED;
+    }
     if (r == FH2_TITLE_START) {
         log_line(mod->name, "title entry " + key + " (" + label + ") starts the game");
         g_title_started = j;
@@ -4826,10 +4862,19 @@ struct ModBox {
 std::deque<ModBox> g_boxes;
 int g_box_up          = -1;    // the box showing, by index, or -1
 int g_box_up_page     = 0;     // its page
+void* g_box_up_popup  = nullptr; // the game's box it is: an answer from any other box goes nowhere
+ULONGLONG g_box_shown_at = 0;  // when it was shown (GetTickCount64)
 std::vector<int> g_box_items;  // what each of its items is (a choice, or kBoxItem...)
 int g_box_pending     = -1;    // a box from a tile page's on_open, waiting for that page to load
 int g_box_pending_for = -1;    // that page (g_pages)
+ULONGLONG g_box_pending_at = 0; // when it was asked for
 bool g_box_back_ok    = false; // B can be wired (S6), checked against the exe on disk
+// One box at a time (S6 3.2): two shown in the same frame, or while the game is still bringing one up, make the
+// second its pending box, and a third replaces that without its handlers. So no second box from the same chain of
+// callbacks, none while one is waiting for its page, and none in the moment after one was shown (no player answers
+// a box that fast). A box that closes without telling the platform (B with g_box_back_ok false) then blocks nothing.
+constexpr ULONGLONG kBoxSettleMs  = 500;
+constexpr ULONGLONG kBoxPendingMs = 10000;   // a page loads well within this; a box older than this is dropped
 
 // UTF-16 copy of `s` that's never freed (the game's box points at it).
 const wchar_t* keep_w(const std::string& s) {
@@ -4854,9 +4899,15 @@ bool show_box_page(void* page, int idx, int p) {
     g_box_items          = std::move(items);
     g_box_up             = idx;
     g_box_up_page        = p;
-    if (show_list(page, title, b.message, labels.data(), static_cast<int>(labels.size()), g_box_fn_vt, g_box_back_ok ? g_box_back_fn_vt : nullptr))
+    void* popup          = nullptr;
+    if (show_list(page, title, b.message, labels.data(), static_cast<int>(labels.size()), g_box_fn_vt, g_box_back_ok ? g_box_back_fn_vt : nullptr,
+                  &popup)) {
+        g_box_up_popup = popup;
+        g_box_shown_at = GetTickCount64();
         return true;
-    g_box_up = -1;
+    }
+    g_box_up       = -1;
+    g_box_up_popup = nullptr;
     return false;
 }
 
@@ -4885,9 +4936,18 @@ void box_answered(void* page, int idx, uint32_t choice) {
     if (!call_box_choose(b.spec.on_choose, b.spec.user, b.spec.key.c_str(), choice)) crashed_in(mod, "on_choose for message box " + b.spec.key);
 }
 
+// An answer from a box that isn't the one the platform has up (the game showing a stray second box) goes nowhere,
+// rather than to the wrong mod's on_choose or with the wrong item map.
+bool box_is_up(const PopupFn* self) {
+    if (g_box_up >= 0 && self->popup == g_box_up_popup) return true;
+    slog("a message box answered that isn't the mod's box the platform has up; nothing is called for it");
+    return false;
+}
+
 // A chosen item (the box closes by itself after this): Previous and Next show the box again with the page before or
 // after; Back and the choices go to the mod.
 void handle_box_choice(PopupFn* self) {
+    if (!box_is_up(self)) return;
     const int idx = std::exchange(g_box_up, -1);
     if (idx < 0 || static_cast<std::size_t>(idx) >= g_boxes.size()) return;
     const int item = chosen_item(self->popup);
@@ -4902,6 +4962,7 @@ void handle_box_choice(PopupFn* self) {
 
 // B (the box closes by itself after this).
 void handle_box_back(PopupFn* self) {
+    if (!box_is_up(self)) return;
     const int idx = std::exchange(g_box_up, -1);
     if (idx >= 0 && static_cast<std::size_t>(idx) < g_boxes.size()) box_answered(self->page, idx, FH2_BOX_BACK);
 }
@@ -4911,7 +4972,7 @@ void show_pending_box(void* page, bool tile_page) {
     const int idx = std::exchange(g_box_pending, -1);
     if (idx < 0 || static_cast<std::size_t>(idx) >= g_boxes.size()) return;
     const ModBox& b = g_boxes[idx];
-    if (!tile_page || g_custom_shown.load() != g_box_pending_for) {
+    if (!tile_page || g_custom_shown.load() != g_box_pending_for || GetTickCount64() - g_box_pending_at >= kBoxPendingMs) {
         log_line(b.mod->name, "message box " + b.spec.key + " wasn't shown: the page whose on_open asked for it didn't open");
         return;
     }
@@ -5509,6 +5570,28 @@ int hint_page_now() {
     return -1;
 }
 
+// Whether `page` is one of the platform's pages that's up: YOUR MODS, a mod's page on its tile, or the stand-in
+// list (a setting's on_change and a slot's on_slot name the options-class page loaded last, g_last_hud_page).
+bool page_known_up(void* page) {
+    if (!page) return false;
+    if (page == g_installed_page.load() || page == g_mods_options_page.load()) return true;
+    for (std::size_t t = 0; t < kTileCount; ++t)
+        if (page == g_tile_page_obj[t].load()) return true;
+    return false;
+}
+
+// Whether page j is up now with the hint line, its bindings having read it (g_panel_obj, cleared as each page is
+// prepared or the menus behind are wired): a view of YOUR MODS always has it; a page on its tile only when it was
+// written with hints. Otherwise there's no live object to tell, and the page reads the hint the next time it opens.
+bool hint_panel_live(int j) {
+    if (j < 0 || hint_page_now() != j || !g_panel_obj.load()) return false;
+    if (g_custom_shown.load() != j) return g_installed_page.load() != nullptr;
+    std::scoped_lock lk{g_mu};
+    for (std::size_t t = 0; t < kTileCount; ++t)
+        if (g_tile_page[t] == j) return g_tile_has_panel[t].load() && g_tile_page_obj[t].load() != nullptr;
+    return false;
+}
+
 // Page j's hint now, "" for none; its kind into `kind` when there's one.
 std::string page_hint_text(int j, uint32_t* kind) {
     std::scoped_lock lk{g_mu};
@@ -5535,10 +5618,15 @@ std::string box_refusal(const UiCallbackState* cb, FH2Mod* m) {
     if (cb->kind == UiCb::page_open_all)
         return "this on_open runs as YOUR MODS opens, for every page at once, before the page itself is shown; show the box from the page's on_select instead";
     for (const UiCallbackState* s = cb; s; s = s->outer)
-        if (s->box_shown) return "one box at a time, and this callback has shown one already";
+        if (s->box_shown) return "one box at a time, and this callback (or one it was called from or called) has shown one already";
+    const ULONGLONG now = GetTickCount64();
+    if (g_box_pending >= 0 && now - g_box_pending_at < kBoxPendingMs) return "one box at a time, and another is waiting for its page to open";
+    if (g_box_up >= 0 && now - g_box_shown_at < kBoxSettleMs) return "one box at a time, and another was shown a moment ago";
     if (stopped_online(m)) return "this mod was stopped for online play";
     if (!g_popup_ok) return "the game's message box code isn't as expected this session";
     if (cb->kind != UiCb::page_open && !cb->page) return "the platform can't tell which of the game's pages is up";
+    if ((cb->kind == UiCb::setting || cb->kind == UiCb::page) && !page_known_up(cb->page))
+        return "the page this callback came from isn't one the platform knows is up";
     return "";
 }
 
@@ -5582,7 +5670,7 @@ int settings_show_box(FH2Mod* m, const FH2MessageBox* box) {
     }
     b.page_index = cb->page_index;
     b.faults     = ui_mod_faults(m);
-    cb->box_shown = true;
+    for (UiCallbackState* s = cb; s; s = s->outer) s->box_shown = true;   // the callbacks it's inside can't show one either
     const std::string what = " (key " + spec.key + ", " + std::to_string(spec.choices.size()) + (spec.choices.size() == 1 ? " choice" : " choices") +
                              " and Back" + (pages > 1 ? ", in " + std::to_string(pages) + " pages" : std::string()) + ")";
     if (spec.focus) log_line(m->name, "show_message_box: " + spec.key + " opens on the page with choice " + std::to_string(spec.focus) +
@@ -5590,6 +5678,7 @@ int settings_show_box(FH2Mod* m, const FH2MessageBox* box) {
     if (cb->kind == UiCb::page_open) {   // the page isn't there yet: shown once it has loaded
         g_box_pending     = idx;
         g_box_pending_for = cb->page_index;
+        g_box_pending_at  = GetTickCount64();
         log_line(m->name, "message box waiting for its page to open: " + b.shown_title + what);
         return 1;
     }
@@ -5679,9 +5768,11 @@ int pages_show_hint(FH2Mod* m, const char* key, int index, uint32_t kind) {
     // At once from the page's own callbacks while it's up (a box's on_choose over it included): its bindings read the
     // panel again. Otherwise it shows the next time the page opens, when they're read anyway.
     const UiCallbackState* cb = ui_callback_now();
-    const bool now = cb && cb->mod == m && cb->page_index == j && cb->kind != UiCb::page_open && cb->kind != UiCb::page_open_all && hint_page_now() == j;
+    const bool now = cb && cb->mod == m && cb->page_index == j && cb->kind != UiCb::page_open && cb->kind != UiCb::page_open_all && hint_panel_live(j);
+    // (from its on_open the page is about to read it anyway)
+    const bool opening = cb && cb->mod == m && cb->page_index == j && (cb->kind == UiCb::page_open || cb->kind == UiCb::page_open_all);
     log_line(m->name, std::string("page ") + key + "'s hint line: " + (index < 0 ? std::string("none") : text + " (" + hint_kind_name(kind) + ")") +
-                          (now ? "" : (cb && cb->page_index == j ? "" : ", from the next time it opens")));
+                          (now || opening ? "" : ", from the next time it opens"));
     if (now) notify_panel(nullptr);
     return 1;
 }

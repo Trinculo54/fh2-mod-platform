@@ -44,8 +44,8 @@ struct UiCallbackState {
     UiCb kind   = UiCb::page;
     void* page  = nullptr;       // the game's page the callback came from (what a box shows over), or null
     int page_index = -1;         // the mod's page (settings.cpp's g_pages), or -1
-    bool box_shown = false;      // a message box was shown from it
-    const UiCallbackState* outer = nullptr;
+    bool box_shown = false;      // a message box was shown from it, or from a callback inside it
+    UiCallbackState* outer = nullptr;
 };
 // Set for as long as it lives (callbacks can nest: a slot set from on_button comes back through on_slot). Keep it
 // out of functions with __try.

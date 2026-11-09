@@ -215,8 +215,8 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     // UI templates (API 10): all twelve members are there. ui_uses is real (an unknown bit is ignored, a second call
     // adds to the first). Pop-ups and tips queue with no game (their hooks wait for it): a pop-up taken down while
     // waiting, a private one, a bad key refused; a tip queued, marked seen (which drops it), then refused as seen,
-    // and one whose text has no {button}. The others are being built, so each returns 0 and says so in the log
-    // once. Then the same through fh2mod_ui.h.
+    // and one whose text has no {button}. play_ui_sound and show_message_box, with no game and outside a callback,
+    // return 0 with the reason in the log. Then the same through fh2mod_ui.h.
     {
         const bool all = api->size >= offsetof(FH2ModApi, show_page_hint) + sizeof api->show_page_hint && api->ui_status &&
                          api->ui_uses && api->play_ui_sound && api->show_toast && api->clear_toast && api->show_tip &&
