@@ -15,6 +15,11 @@ namespace fh2platform {
 
 // One file out of a zip (stored or deflated), or empty if it isn't there.
 std::vector<char> unzip_file(const std::filesystem::path& zip, std::string_view name);
+// The same, from a zip already read into memory (several files out of one read).
+std::vector<char> unzip_from(const std::vector<char>& zip, std::string_view name);
+// Every entry's name in a zip's central directory, as spelt there, reading only the end of the file (a texture zip
+// is 14 MB). False, with `names` empty, if it can't be read.
+bool zip_names(const std::filesystem::path& zip, std::vector<std::string>& names);
 
 // Rebuilds an "LSB2" string table with each string passed through `edit`
 // (key, current text) -> new text. Empty result if `table` isn't LSB2.
