@@ -147,8 +147,9 @@ run_layout() {   # run_layout mediaoverride|own
     cd - >/dev/null
 }
 
-# What the built platform imports (the d3dcompiler_47.dll and DWrite.dll copied in below): only KERNEL32.dll, USER32.dll
-# and the C runtime, load-time or delay-loaded (CMakeLists.txt).
+# What the built platform imports (the d3dcompiler_47.dll in $b, which run_layout copies in, and the DWrite.dll copy
+# the build leaves beside it): only KERNEL32.dll, USER32.dll and the C runtime, load-time or delay-loaded
+# (CMakeLists.txt).
 wine "$b/imports_test.exe"
 # Mods' text in the pages (src/xml_text.cpp), the platform's text in any language (src/text.cpp), car packs'
 # car Ids (src/car_ids.cpp), mods' translations (src/l10n.cpp), what the player has already seen (src/seen.cpp), the
