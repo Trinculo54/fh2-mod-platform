@@ -193,6 +193,13 @@ void write_notice_file(const fs::path& azimuth, const std::wstring& name, const 
     for (const auto& l : lines) out << l << "\n";
 }
 
+std::vector<std::string> mod_title_lines(std::vector<std::string> notice, const std::string& update,
+                                         const std::vector<std::string>& status) {
+    if (!update.empty()) notice.push_back(update);
+    notice.insert(notice.end(), status.begin(), status.end());
+    return notice;
+}
+
 namespace {
 
 std::vector<std::string> notice_lines(

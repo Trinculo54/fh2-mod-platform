@@ -598,13 +598,18 @@ typedef struct FH2ModApi {
 
        add_translation: one language's PO file, held in memory (`size`
        bytes of UTF-8; your DLL's copy can be freed after the call). `lang` is
-       its tag ("pl", "pt-BR"; "pt_BR" is read the same). Call it once per
+       its tag ("pl", "pt-BR"; "pt_BR" is read the same; "pl_PL", "ja_JP"
+       and the like as the language alone, "zh_TW" as "zh-Hant"; one none
+       of the game's languages looks for, such as "es_AR", adds nothing).
+       Call it once per
        language, from fh2mod_init right after register_mod. If
        fh2-mods\lang\<your mod's name>\<lang>.po exists, that file is used
        instead (the log says so), so translators can try theirs without a
        build. Entries marked fuzzy are skipped, and one whose {placeholders}
-       don't match the English is left out with a line in the log (a plural
-       form `lang` uses for 1 alone may leave the number out). Returns how
+       don't match the English, or whose text has a control character other
+       than \n and \t, is left out with a line in the log (a plural
+       form `lang` uses for 1 alone may leave the number out). A file that
+       isn't UTF-8 isn't read at all. Returns how
        many entries it took (0: none; the log says why).
 
        tr: `english` in the language now, or `english` when there's no
@@ -613,7 +618,10 @@ typedef struct FH2ModApi {
        changed since) isn't used, so it never shows with the wrong meaning.
        Looks in the language's catalogue, then pt-BR -> pt, en-GB -> en,
        es-MX -> es-ES -> es, then English. The text stays valid for the
-       session: don't free it.
+       session: don't free it. Pass the same English each time: past 20000
+       different texts from one mod, English not given before comes back
+       as the pointer you passed, untranslated (the log says so), as on
+       platforms before API 10.
 
        tr_plural: the same for text with a count: `one` and `other` are the
        English forms (msgid and msgid_plural), and the form for `n` is picked
@@ -624,8 +632,10 @@ typedef struct FH2ModApi {
        set_string_tr: set_string with a key, for each language's string table
        in its own words: every table gets the text for its language, so the
        game shows the right one whatever language it picks. `msg_key` and
-       `english` are looked up as in tr(). Write it from fh2mod_init, as
-       set_string.
+       `english` are looked up as in tr(). A translation whose braces don't
+       fit the English's ({0}, {{token}}), which the game's own formatting
+       could misread, goes in as the English (the log says so). Write it
+       from fh2mod_init, as set_string.
 
        format_number: `v` with `decimals` digits after the point (0 to 6),
        the way the language writes numbers: 1,234.5 in English, 12 345,5 in

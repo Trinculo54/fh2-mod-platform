@@ -176,6 +176,38 @@ if command -v python3 > /dev/null; then
     python3 -I "$root/tools/l10n/po2inc.py" --check "$root/tests/l10n/test_mod_l10n.inc" test_mod_translations \
         "$root/tests/l10n/pl.po" "$root/tests/l10n/pt_BR.po" 2> /dev/null
     echo "ok   tools/l10n: TestMod's .pot and .inc are up to date"
+    # po2inc.py reads a file named with a region the game doesn't use as the game's language (pl_PL.po as pl,
+    # zh_TW.po as zh-Hant), leaves out one no language looks for (es_AR.po) and an entry with a control character,
+    # warns about a header whose nplurals isn't the platform's, and stops at a file that isn't UTF-8, as the platform does
+    po=$(mktemp -d)
+    dirs+=("$po")
+    printf '%s\n' 'msgid ""' 'msgstr ""' '"Plural-Forms: nplurals=4; plural=0;\n"' '' 'msgctxt "a"' 'msgid "A"' \
+        "msgstr \"$(printf '\304\204')\"" '' 'msgctxt "b"' 'msgid "B"' 'msgstr "B\x01"' > "$po/pl_PL.po"
+    printf '%s\n' 'msgctxt "a"' 'msgid "A"' "msgstr \"$(printf '\347\224\262')\"" > "$po/zh_TW.po"
+    printf '%s\n' 'msgctxt "a"' 'msgid "A"' 'msgstr "A"' > "$po/es_AR.po"
+    printf '%s\n' 'msgctxt "a"' 'msgid "A"' "msgstr \"$(printf '\243')\"" > "$po/pl.po"
+    tools_ok=1
+    python3 -I "$root/tools/l10n/po2inc.py" "$po/out.inc" t "$po/pl_PL.po" "$po/zh_TW.po" "$po/es_AR.po" 2> "$po/warnings.txt" || tools_ok=0
+    grep -q '{"pl",' "$po/out.inc" && grep -q '{"zh-Hant",' "$po/out.inc" && ! grep -q '"es-AR"' "$po/out.inc" || tools_ok=0
+    grep -q "es_AR.po: none of the game's languages looks for es-AR text (its Spanish is es-ES, for Spain, or es-MX, for Latin America), so name the file es_ES.po, es_MX.po or es.po; left out" "$po/warnings.txt" || tools_ok=0
+    grep -q 'pl_PL.po:10: "b": its text has a control character (U+0001)' "$po/warnings.txt" || tools_ok=0
+    grep -q "pl_PL.po: its header says nplurals=4, but the platform reads 3 plural forms for Polish" "$po/warnings.txt" || tools_ok=0
+    if python3 -I "$root/tools/l10n/po2inc.py" "$po/out2.inc" t "$po/pl.po" 2> "$po/error.txt"; then tools_ok=0; fi
+    grep -q "pl.po:3 isn't UTF-8: save it as UTF-8" "$po/error.txt" || tools_ok=0
+    # of two files for one language, pl.po is used, though pl-PL.po sorts first; an escape that isn't UTF-8 is left out
+    mkdir "$po/two"
+    printf '%s\n' 'msgctxt "a"' 'msgid "A"' 'msgstr "Ok"' '' 'msgctxt "e"' 'msgid "E"' 'msgstr "Caf\xE9"' > "$po/two/pl.po"
+    printf '%s\n' 'msgctxt "a"' 'msgid "A"' 'msgstr "Hej"' > "$po/two/pl-PL.po"
+    python3 -I "$root/tools/l10n/po2inc.py" "$po/two.inc" t "$po/two/pl-PL.po" "$po/two/pl.po" 2> "$po/two.txt" || tools_ok=0
+    [ "$(grep -c '{"pl",' "$po/two.inc")" = 1 ] && grep -q 'msgstr \\"Ok\\"' "$po/two.inc" && ! grep -q 'Hej\|Caf' "$po/two.inc" || tools_ok=0
+    grep -q "pl-PL.po is Polish (pl) too, and pl.po is the one used; left out" "$po/two.txt" || tools_ok=0
+    grep -q "pl.po:6: \"e\": its text has an escape that isn't UTF-8 (such as \\\\xE9); left out" "$po/two.txt" || tools_ok=0
+    if [ "$tools_ok" = 1 ]; then
+        echo "ok   tools/l10n: po2inc.py reads pl_PL.po as pl and zh_TW.po as zh-Hant, and leaves out and warns as the platform does"
+    else
+        echo "FAIL tools/l10n: po2inc.py's tags and warnings"
+        cat "$po/warnings.txt" "$po/error.txt" "$po/two.txt"
+    fi
 fi
 wine "$b/wine_test.exe"
 # The database guards' rules (src/db_guard_rules.cpp); given the exe, their code is checked against it too.

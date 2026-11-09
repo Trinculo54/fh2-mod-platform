@@ -377,9 +377,8 @@ void apply_all() {
                             for (const auto& m : g_mods) {
                                 std::string text;
                                 if (_wcsicmp(m->wname.c_str(), who.c_str()) || !l10n_text_in(m.get(), "notice", lang, text)) continue;
-                                std::vector<std::string> out = split_lines(text.c_str());
-                                out.insert(out.end(), m->status.begin(), m->status.end());
-                                return out;
+                                // as refresh_notice writes the file: the notice, the update line, then the status lines
+                                return mod_title_lines(split_lines(text.c_str()), m->update_notice, m->status);
                             }
                             return lines;
                         },
@@ -409,10 +408,7 @@ void apply_all() {
 }
 
 void refresh_notice(FH2Mod* m) {
-    std::vector<std::string> lines = m->notice;
-    if (!m->update_notice.empty()) lines.push_back(m->update_notice);
-    lines.insert(lines.end(), m->status.begin(), m->status.end());
-    write_notice_file(g_azimuth, m->wname, m->dll, lines);
+    write_notice_file(g_azimuth, m->wname, m->dll, mod_title_lines(m->notice, m->update_notice, m->status));
     g_dirty.insert("main.str");
     g_table_names.emplace("main.str", "Main.str");
 }

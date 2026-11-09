@@ -352,6 +352,13 @@ int wmain(int argc, wchar_t** argv) {
     CHECK(cache_still_good(t, t + h, "v1.4.0", "1.4.0", "1.4.0"));
     CHECK(!cache_still_good(t, t - h, "v1.4.0", "1.4.0", "1.4.0"));      // clock went back
     CHECK(!cache_still_good(t, t + h, "", "1.4.0", "1.4.0"));
+    // A mod's title-screen lines: its notice (the file's, or tr()'s in a table's language), the update line, then the
+    // platform's other lines, so a tr() notice keeps "... is out" in every language's Main.str
+    CHECK((mod_title_lines({"Testowa linia", "druga"}, "TestMod 1.1.0 is out: Pause > MODS > UPDATES", {"Old FH2 Mod Platform: reinstall TestMod"}) ==
+           std::vector<std::string>{"Testowa linia", "druga", "TestMod 1.1.0 is out: Pause > MODS > UPDATES", "Old FH2 Mod Platform: reinstall TestMod"}));
+    CHECK((mod_title_lines({"Notice"}, "", {"Status"}) == std::vector<std::string>{"Notice", "Status"}));
+    CHECK((mod_title_lines({}, "TestMod 1.1.0 is out: Pause > MODS > UPDATES", {}) ==
+           std::vector<std::string>{"TestMod 1.1.0 is out: Pause > MODS > UPDATES"}));
     if (phase == L"crash") {
         std::ofstream{"crash.txt"} << "1";
         SetUnhandledExceptionFilter(after_crash); // Windows' (or Azimuth's) handler, to the platform

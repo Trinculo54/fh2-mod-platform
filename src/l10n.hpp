@@ -32,8 +32,17 @@ struct Catalogue {
 // Reads a PO file for `tag`'s language (msgctxt, msgid, msgid_plural, msgstr, msgstr[n], strings over
 // several lines and C escapes) into `out`, adding to what's there. Entries marked fuzzy, untranslated
 // ones and the header are skipped. An entry whose {placeholders} don't match the English is left out,
-// with a sentence in `refused`, as is a line that isn't PO. Returns how many entries it took.
+// with a sentence in `refused`, as is one whose text has a control character other than \n and \t
+// or an escape that isn't UTF-8, and a line that isn't PO. A file that isn't UTF-8 (UTF-16, or
+// Windows-1250 "ANSI") isn't read at all, with one sentence. A header whose nplurals isn't
+// plural_forms(tag) gets a sentence too, though its entries are taken. Returns how many entries it took.
 int parse_po(std::string_view po, const std::string& tag, Catalogue& out, std::vector<std::string>& refused);
+// How many plural forms plural_form() has for `tag` (Polish 3, English 2, Japanese 1).
+int plural_forms(const std::string& tag);
+// Whether a translation's braces fit the English's as the game's own text formatting reads them (for
+// set_string_tr): every {placeholder} and {{token}} one the English has, and no more braces on their
+// own than the English has ("{0} joined {" or "{ 0} joined" for "{0} joined" don't).
+bool braces_fit(std::string_view english, std::string_view text);
 // The {placeholders} in `s` ("{count}", "{0}"), sorted, each once: a {...} with no space or brace inside.
 std::vector<std::string> placeholders(std::string_view s);
 // Whether a translation's placeholders fit the English's. A plain entry: the same ones. A plural
@@ -52,6 +61,14 @@ std::string normal_tag(std::string_view tag);
 // The catalogues looked in for `tag`, best first: pt-BR, then pt; en-GB, then en; es-MX, then es-ES,
 // then es. English, the msgid, comes after all of them.
 std::vector<std::string> fallbacks(const std::string& tag);
+// The tag a catalogue named `tag` (normal_tag's) is kept under, so the game's language finds it: a
+// language the game has in one form, named with its usual region, is the language alone ("pl-PL" ->
+// "pl", "ja-JP" -> "ja", "en-US" -> "en"), and Chinese for Taiwan, Hong Kong or Macau, or in
+// Traditional script, is "zh-Hant" ("zh-TW", "zh-Hant-HK"). Others stay as they are ("pt-BR", "de-AT").
+std::string catalogue_tag(const std::string& tag);
+// "" when one of the game's languages looks in a catalogue for `tag` (fallbacks()); else, for the log,
+// why none does and what to name the file instead ("... so name the file es_ES.po, es_MX.po or es.po").
+std::string never_shown(const std::string& tag);
 // Which msgstr[] holds the plural form for `n` in a PO file for `tag`, numbered as gettext's usual
 // Plural-Forms for the language do (CLDR's rules): en and most others one/other (singular only
 // for 1); pl, ru, uk, cs one/few/many; pt and fr 0 and 1 singular; ja, ko, zh one form.
@@ -111,9 +128,9 @@ void l10n_follow(FH2Mod* mod, const std::string& slot, std::string& text, const 
 bool l10n_text_in(FH2Mod* mod, const std::string& slot, std::string_view table_code, std::string& text);
 // The same for text the platform keeps as UTF-16 and the game asks for as it shows it (a
 // title-screen list): `shown` is the platform's copy, which stays put, `suffix` what the platform
-// added after the mod's text, and `max_bytes` (0: no limit) how long the mod's text can be in UTF-8,
-// cut short as the platform cut what it was given.
-void l10n_note_w(FH2Mod* mod, const wchar_t* shown, const char* given, const std::wstring& suffix = {}, std::size_t max_bytes = 0);
+// added after the mod's text, and `max_chars` (0: no limit) how long the mod's text can be in
+// characters (text_chars), cut short (cut_text) as the platform cut what it was given.
+void l10n_note_w(FH2Mod* mod, const wchar_t* shown, const char* given, const std::wstring& suffix = {}, std::size_t max_chars = 0);
 // `shown`'s text in the language now, or nullptr if it doesn't hold tr()'s text. Stays valid.
 const wchar_t* l10n_follow_w(const wchar_t* shown);
 

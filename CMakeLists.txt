@@ -175,7 +175,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         target_include_directories(text_test PRIVATE src)
         target_link_options(text_test PRIVATE -static)
         # Mods' translations and text in the game's language (src/l10n.cpp), with no game: run l10n_test.exe.
-        add_executable(l10n_test tests/l10n_test.cpp src/l10n.cpp)
+        add_executable(l10n_test tests/l10n_test.cpp src/l10n.cpp src/text.cpp)
         target_include_directories(l10n_test PRIVATE include src)
         target_compile_definitions(l10n_test PRIVATE UNICODE _UNICODE)
         target_compile_options(l10n_test PRIVATE ${_warn})

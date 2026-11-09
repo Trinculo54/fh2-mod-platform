@@ -1,6 +1,7 @@
 // Mods' text in the platform's XAML pages (src/xml_text.cpp), with no game. Exits 0 when every check passes.
 #include "xml_text.hpp"
 
+#include <cstdint>
 #include <cstdio>
 #include <string>
 
@@ -45,7 +46,21 @@ int main() {
     same("Pr\xC3\xA9" "f\xC3\xA9r\xC3\xAA" "ncias", "Pr&#233;f&#233;r&#234;ncias", "accented letters (Brazilian Portuguese)");
     same("Zak\xC5\x82" "adki \xC5\xBC\xC3\xB3\xC5\x82w", "Zak&#322;adki &#380;&#243;&#322;w", "Polish letters outside Latin-1");
     same("\xE2\x82\xAC" "5 \xE2\x80\x93 \xE2\x80\x9Cok\xE2\x80\x9D", "&#8364;5 &#8211; &#8220;ok&#8221;", "3-byte characters: euro, dash, quotes");
-    same("\xF0\x9F\x8F\x81", "&#127937;", "a 4-byte character is one reference");
+    // beyond U+FFFF (emoji): the game's fonts have none, and a reference past 16 bits may not load, so a ?
+    same("\xF0\x9F\x8F\x81", "?", "a 4-byte character (U+1F3C1) is a ?");
+    same("\xF0\x9F\x9A\x97 Breaks trees", "? Breaks trees", "an emoji in a description is a ?, and the rest stays");
+    same("\xF0\x90\x80\x80 \xF4\x8F\xBF\xBF", "? ?", "U+10000 and U+10FFFF, the ends of the range, are ? too");
+    same("\xEF\xBF\xBE\xEF\xBF\xBF", "??", "U+FFFE and U+FFFF aren't characters: ?");
+    same("\xEF\xBF\xBD \xEF\xBF\xBC", "&#65533; &#65532;", "U+FFFD and U+FFFC are characters, kept as references");
+
+    // control characters: XML has none but tab, LF and CR, not even as references
+    same("a\tb", "a b", "a tab becomes a space");
+    same("A\x01" "B", "AB", "U+0001 is left out");
+    same(std::string("A\x01" "B\0C", 5), "ABC", "a NUL is left out, and the text after it kept");
+    same("\x1B[1mBold\x1F", "[1mBold", "escape and unit separator are left out");
+    same("a\rb", "a\rb", "a CR is written as it is, as XML allows and 2.8.0 did");
+    same("{0}\x01", "{0}&#160;", "a control character after the braces doesn't hide them: still kept as text");
+    same("\x02{0}", "{0}&#160;", "nor one before them");
 
     // Not UTF-8: read as Windows-1252, which is what the game showed for those bytes before
     same("Caf\xE9", "Caf&#233;", "a lone Latin-1 byte (\xE9 as Windows-1252) stays an e-acute");
@@ -67,6 +82,21 @@ int main() {
         check(ascii, "every byte value comes out as ASCII");
         check(got.find("<") == std::string::npos && got.find(">") == std::string::npos && got.find('"') == std::string::npos,
               "no < > or \" survives");
+        bool controls = false;
+        for (unsigned char c : got) controls = controls || (c < 0x20 && c != '\r');
+        check(!controls, "no control character but CR survives");
+        check(got.find("&#1;") == std::string::npos && got.find("&#0;") == std::string::npos, "nor one as a reference");
+    }
+    // every code point of the 16-bit range that XML allows is one reference; nothing past it is
+    {
+        bool ok = true;
+        for (std::uint32_t cp : {0x80u, 0x7FFu, 0x800u, 0xD7FFu, 0xE000u, 0xFFFDu}) {
+            std::string s;
+            if (cp < 0x800) s += static_cast<char>(0xC0 | cp >> 6), s += static_cast<char>(0x80 | (cp & 0x3F));
+            else s += static_cast<char>(0xE0 | cp >> 12), s += static_cast<char>(0x80 | (cp >> 6 & 0x3F)), s += static_cast<char>(0x80 | (cp & 0x3F));
+            ok = ok && xml_escape(s) == "&#" + std::to_string(cp) + ";";
+        }
+        check(ok, "U+0080 to U+FFFD stay references (the ends of each length, around the surrogates)");
     }
 
     std::printf(g_failed ? "\n%d FAILED\n" : "\nALL PASSED\n", g_failed);
