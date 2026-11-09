@@ -121,6 +121,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         # The hook test: tests/run_hook_test.sh <forza_durango_release_final.exe>
         add_executable(hook_test tests/hook_test.cpp)
         target_compile_definitions(hook_test PRIVATE UNICODE _UNICODE)
+        target_compile_options(hook_test PRIVATE -fms-extensions)   # __try, for the database guards' converter run
         target_link_options(hook_test PRIVATE -municode -static -Wl,--image-base=0x10000000)
         add_library(hook_mod SHARED tests/hook_mod.cpp)
         target_link_libraries(hook_mod PRIVATE fh2mod_api)
@@ -197,6 +198,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         target_include_directories(xaml_safety_test PRIVATE src)
         target_compile_options(xaml_safety_test PRIVATE ${_warn})
         target_link_options(xaml_safety_test PRIVATE -static)
+        # The database guards' rules (src/db_guard_rules.cpp), with no game: run db_guards_test.exe; given the game's exe,
+        # it also checks their code against it.
+        add_executable(db_guards_test tests/db_guards_test.cpp src/db_guard_rules.cpp ${_sqlite_src})
+        target_include_directories(db_guards_test PRIVATE src third_party/sqlite)
+        target_compile_options(db_guards_test PRIVATE ${_warn})
+        target_link_options(db_guards_test PRIVATE -static)
         # What's different under Wine and Proton (src/wine.cpp), on its own: run wine_test.exe.
         add_executable(wine_test tests/wine_test.cpp src/wine.cpp)
         target_include_directories(wine_test PRIVATE src)

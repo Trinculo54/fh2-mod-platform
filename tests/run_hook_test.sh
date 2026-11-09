@@ -31,6 +31,12 @@ for phase in $phases; do
         mapped=$other
         [ "$phase" = skip-launcher ] && args=(--skip-launcher)
     fi
+    if [ "$phase" = plain ]; then
+        # Another mod's game database in mediaoverride (no mod has SQL, so the platform leaves it alone): the database
+        # guards go in. In "eo" the game reads its own, and they stay out.
+        mkdir -p "$dir/FH2/Mount/mediaoverride/Stripped"
+        printf "another mod's database" > "$dir/FH2/Mount/mediaoverride/Stripped/gamedbRC.slt"
+    fi
     overrides=
     if [ "$phase" = eo ] || [ "$phase" = eo-hidden ] || [ "$phase" = wine-builtin ]; then
         cp "$b/winmm.dll" "$dir/"

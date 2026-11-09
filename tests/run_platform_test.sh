@@ -156,5 +156,7 @@ if command -v python3 > /dev/null; then
     echo "ok   tools/l10n: TestMod's .pot and .inc are up to date"
 fi
 wine "$b/wine_test.exe"
+# The database guards' rules (src/db_guard_rules.cpp); given the exe, their code is checked against it too.
+wine "$b/db_guards_test.exe" "${exe[@]}"
 run_layout mediaoverride
 run_layout own
