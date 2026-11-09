@@ -425,6 +425,48 @@ int main() {
         check((q.status(&g_a, false) & FH2_UI_TIPS_OFF) != 0, "ui_status: FH2_UI_TIPS_OFF");
     }
 
+    // ---- the player's rows turned Off while pop-ups and a tip wait (in the pause menu): they go, and never show ----
+    reset();
+    {
+        Game g;
+        PopupQueue q{env()};
+        arm(q, g);
+        g.on_screen = false;   // the pause menu, where the player changes the rows
+        FH2Toast a = toast("From A", nullptr, "a"), a2 = toast("Again A"), b = toast("From B", nullptr, "b"), c = toast("From C");
+        FH2Tip t   = tip("Wait", "A waiting tip");
+        t.delay_s  = 1;
+        q.show_toast(A, &a, 0);
+        q.show_toast(A, &a2, 0);
+        q.show_toast(B, &b, 0);
+        q.show_toast(C, &c, 0);
+        q.show_tip(D, &t, 0);
+        run(q, g, 1000);
+        check(q.waiting() == 5, "four pop-ups and a tip wait in the menu");
+        q.set_mod_toasts(&g_a, false);
+        check(q.waiting() == 3 && logged("[ModA] pop-up dropped: the player turned this mod's pop-ups off (From A (key a))") &&
+                  logged("[ModA] pop-up dropped: the player turned this mod's pop-ups off (Again A)"),
+              "a mod's Pop-ups Off: its waiting pop-ups go, each with a line");
+        q.set_platform_toasts(false);
+        check(q.waiting() == 1 && logged("[ModB] pop-up dropped: the player turned mod pop-ups off (From B (key b))") &&
+                  logged("[ModC] pop-up dropped: the player turned mod pop-ups off (From C)"),
+              "Mod pop-ups Off: every waiting pop-up goes, the tip stays");
+        q.set_tips(false);
+        check(q.waiting() == 0 && logged("[ModD] tip Wait dropped: the player turned tips off; it isn't marked seen"), "Tips Off: the waiting tip goes");
+        // turned on again before driving: nothing comes back
+        q.set_mod_toasts(&g_a, true);
+        q.set_platform_toasts(true);
+        q.set_tips(true);
+        g.on_screen = true;
+        run(q, g, 30000);
+        check(g.shown.empty() && q.recent().empty() && !logged("pop-up shown") && !logged("tip Wait shown") && g_seen.empty(),
+              "back to driving: none of them shows");
+        // Off with nothing waiting says nothing
+        const std::size_t lines = g_log.size();
+        q.set_platform_toasts(false);
+        q.set_tips(false);
+        check(g_log.size() == lines, "Off with nothing waiting: no line");
+    }
+
     // ---- what a mod passes ----
     reset();
     {

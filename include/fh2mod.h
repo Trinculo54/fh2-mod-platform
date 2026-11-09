@@ -701,9 +701,9 @@ typedef struct FH2ModApi {
        from fh2mod_init waits for the first drive. The player decides whether
        mod pop-ups show: the game's Minor notifications option, the
        platform's "Mod pop-ups" row and your mod's "Pop-ups" row
-       (FH2_UI_TOASTS_OFF says they're off). Returns 1 if queued (it can still
-       expire or be dropped), 0 if not (off, no title, a bad key; the log
-       says which). */
+       (FH2_UI_TOASTS_OFF says they're off; turning one off also drops those
+       waiting). Returns 1 if queued (it can still expire or be dropped), 0 if
+       not (off, no title, a bad key; the log says which). */
     int (*show_toast)(FH2Mod* mod, const FH2Toast* toast);
     /* Takes down your waiting pop-up `key`, or all your waiting ones for
        NULL. One already on screen runs its 5 seconds. */
@@ -716,7 +716,8 @@ typedef struct FH2ModApi {
        mod's tip. The button is written as the player last pressed: "(A)" on
        a pad, "[SPACE]" on the keyboard. The platform remembers which tips
        were seen (fh2-mods\platform-seen.txt); a tip counts as seen only once
-       it was really drawn. The player can turn tips off. Returns 1 if
+       it was really drawn. The player can turn tips off, which also drops a
+       waiting one (not seen). Returns 1 if
        queued, 0 if it was seen, tips or the game's Minor notifications are
        off, or a button is set but the text has no "{button}" (the log says
        which). */

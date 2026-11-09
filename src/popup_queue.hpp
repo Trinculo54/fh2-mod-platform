@@ -119,7 +119,8 @@ public:
     int available() const;
     // Whether the watch on the game's Show is in (pop-ups 5.0 s after any Show), or not (5.5 s after the platform's).
     void set_watch(bool on);
-    // The player's rows (the settings restructure's): "Mod pop-ups", a mod's "Pop-ups", "Tips". On by default.
+    // The player's rows (the settings restructure's): "Mod pop-ups", a mod's "Pop-ups", "Tips". On by default. Off
+    // also drops what the row covers that's waiting, with a line each.
     void set_platform_toasts(bool on);
     void set_mod_toasts(const void* mod, bool on);
     void set_tips(bool on);

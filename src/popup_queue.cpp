@@ -564,19 +564,33 @@ void PopupQueue::set_watch(bool on) {
     watch_ = on;
 }
 
+// Turning a row Off takes down what it covers that's waiting (the player usually turns them off in the pause menu,
+// just where pop-ups wait), each with a line, in the order they came.
 void PopupQueue::set_platform_toasts(bool on) {
     std::scoped_lock lk{mu_};
     platform_toasts_ = on;
+    if (on) return;
+    for (std::size_t i = 0; i < items_.size();)
+        if (!items_[i].tip) drop(i, "the player turned mod pop-ups off", last_tick_, false);
+        else ++i;
 }
 
 void PopupQueue::set_mod_toasts(const void* mod, bool on) {
     std::scoped_lock lk{mu_};
     mod_off_[mod] = !on;
+    if (on) return;
+    for (std::size_t i = 0; i < items_.size();)
+        if (!items_[i].tip && items_[i].mod == mod) drop(i, "the player turned this mod's pop-ups off", last_tick_, false);
+        else ++i;
 }
 
 void PopupQueue::set_tips(bool on) {
     std::scoped_lock lk{mu_};
     tips_ = on;
+    if (on) return;
+    for (std::size_t i = 0; i < items_.size();)
+        if (items_[i].tip) drop(i, "the player turned tips off", last_tick_, false);
+        else ++i;
 }
 
 int PopupQueue::tips_again() {
