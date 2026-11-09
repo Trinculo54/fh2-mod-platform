@@ -1,6 +1,21 @@
 # API reference
 
-Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. API version 1 came with platform 2.0, version 2 with 2.1, 3 with 2.2, 4 with 2.3, 5 with 2.4, 6 with 2.5, 7 with 2.6, 8 with 2.7, 9 with 2.8 and 10 with 2.9. Version 2 added file overrides, database patches and interfaces between mods, version 3 hooks, version 4 settings rows (on each mod's page under MODS > YOUR MODS from 2.9.0), version 5 their sliders, version 6 mod descriptions and link rows for the MODS tab, version 7 byte patches and instruction hooks, version 8 pages of your own, version 9 title-screen entries, choice rows and online play (FH2MP), and version 10 text in the game's language, translations and the UI templates (pop-ups, tips, message boxes, UI sounds and page help); the sections for those say so.
+Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes through it member by member. Each API version came with a platform release, and the sections for the later ones say which:
+
+| API | Platform | Added |
+|---|---|---|
+| 1 | 2.0 | `register_mod`, `log`, string tables, title-screen notices, `game_base` and `wait_for_game` |
+| 2 | 2.1 | file overrides, database changes, interfaces between mods |
+| 3 | 2.2 | hooks and `wait_for_code` |
+| 4 | 2.3 | settings rows (on each mod's page under MODS > YOUR MODS from 2.9.0) |
+| 5 | 2.4 | sliders |
+| 6 | 2.5 | mod descriptions and link rows |
+| 7 | 2.6 | byte patches and instruction hooks |
+| 8 | 2.7 | pages of your own |
+| 9 | 2.8 | title-screen entries, choice rows, online play (FH2MP), sessions, save snapshots, hotkeys, commands, crash-dump memory |
+| 10 | 2.9 | text in the game's language, translations, and the UI templates (pop-ups, tips, message boxes, UI sounds and page help) |
+
+API 10 only adds members at the end, so a mod built for API 9 or older loads on platform 2.9.0 without a rebuild. A few rules did change in 2.9.0 for every mod: `set_file` refuses the platform's own UI files ([set_file](#set_file-and-clear_file-api-2)), a mod that shouldn't run online is stopped when FH2MP turns out to be online after the mods started ([Online play](#online-play-api-9)), and pop-ups and tips need declaring ([ui_uses](#ui_status-and-ui_uses)).
 
 ## Rules that apply everywhere
 
@@ -203,7 +218,11 @@ A mod can offer other mods a struct of function pointers. Publish it under a nam
 
 WheresMyBuddy publishes `WheresMyBuddy.Friends`, with the names on the Drivatars and the signed-in gamertag (see `include/wheresmybuddy.h` in its repo). FH2 Universal Radio publishes `FH2UniversalRadio.NowPlaying`, with the song that's playing (`include/fh2universalradio.h`).
 
-One test build of the platform, "2.8.0 + HUD layer preview 3", publishes an interface of its own, `FH2Platform.HudLayer` (`include/fh2mod_hud.h`): a bar, labels and prompts of a mod's own inside the game's free-roam HUD. The platform publishes it before any mod starts, so it's there from `fh2mod_init`. It isn't part of this API, released platforms return null for it, and it will change: see [`hud-layer-preview.md`](hud-layer-preview.md).
+The platform publishes three interfaces of its own, before any mod starts, so they're there from `fh2mod_init`, and platform 2.8.0 and older return null for them:
+
+- **`FH2Platform.HudLayer`** (version 2, [`include/fh2mod_hud.h`](../include/fh2mod_hud.h)): a bar, labels, prompts and a feed of a mod's own inside the game's free-roam HUD. A preview: it isn't part of this API and will change ([`hud-layer-preview.md`](hud-layer-preview.md)).
+- **`FH2Platform.PadLayer`** (version 1, [`include/fh2mod_pad.h`](../include/fh2mod_pad.h)): controller buttons of a mod's own while the player holds a modifier. A preview too ([`pad-layer-preview.md`](pad-layer-preview.md)).
+- **`FH2Platform.Online`** (version 1, in `fh2mod.h`): for FH2MP, to say it's going online ([below](#for-fh2mp-fh2platformonline-platform-290)).
 
 ## Hooks (API 3)
 
@@ -414,7 +433,7 @@ if (api->api_version >= 9) {
 
 **Link rows (API 6).** Set `kind = FH2_SETTING_LINK` and `url` (an `http://` or `https://` address), and the row sits with your pages on your mod's page, with the value "Browser" and the address under its description. A opens it in the player's browser, behind the game, and the page stays. A link row has no value: `get_setting` and `set_setting` ignore it.
 
-The log (`[MODS]`, `[Mods page]` up to platform 2.8.0) says when the pages are ready, and each change is logged under your mod's name ("Trees set to 0 on its MODS page"). If the game's menu code doesn't look as expected, there's no tile or page and the platform's three files for it are removed again; your mod keeps running and simply isn't told of changes. [`game-notes.md`](game-notes.md#menus) explains how the page is put together.
+The log (`[MODS]`, `[Mods page]` up to platform 2.8.0) says when the pages are ready, and each change is logged under your mod's name ("Trees set to 0 on its MODS page"). If the pause menu's code doesn't look as expected, there's no MODS tab (its files are removed again) and Pause > Settings > MODS opens the list that stands in for it, with the same rows; if the Settings page's code doesn't either, there's no tile or page at all, and your mod keeps running and simply isn't told of changes. [`game-notes.md`](game-notes.md#menus) explains how the page is put together.
 
 ## Pages (API 8)
 
@@ -523,9 +542,9 @@ The page keeps the frame of the game's options pages: the blurred background, th
 - Every `{StaticResource K}` and `{DynamicResource K}` (and `<StaticResource ResourceKey="K"/>`), in any of the three parts, has to name a key that every page has, or one of your own. Every page has the keys of the dictionaries `AnthemApp.xaml` merges (the `Global_*` and `Shared_*` files in `Resources/Anthem/`, about 1,100 keys) and the three converters the platform adds (`FH2Mod_ShowIf`, `FH2Mod_ShowIfHidden`, `FH2Mod_HideIf`). Your own are any `x:Key` in your fragments. A key that a game page keeps in its own `<Page.Resources>` (`A_Style_FZTextBlock_TileClubMemberCount` is only in `A_PauseMenu.xaml`), or that's only in a dictionary no page merges (the `Common_*` files, `Resources\*ResourceDictionary.xaml`), isn't there: copy its markup into your `resources`. Merging a dictionary yourself doesn't add its keys to the check. Keys given as markup (`{StaticResource {x:Type Button}}`) aren't checked.
 - Every image path has to be one of the game's textures, written as the game writes them: `/ForzaUI;component/Textures/<folder>/<path>.png` (or `/Textures/...`, with `/` or `\`), which is `<path>.swatchbin` in `media\ui\textures\<folder>.zip`, and for `Data_Bound/<name>/...` in `media\ui\textures\data_bound\<name>.zip` (or `Data_Bound.zip`). A loose file counts too, as the game reads one: `ui\textures\<folder>\<path>.swatchbin` in any media folder the game reads (the folder `set_file` writes to, a car pack's, `mediaoverride`, `mediapc` or `media`), so a texture of your own that you `set_file` before you set the XAML passes. The platform looks at `Source`, `ImageSource`, `UriSource` and `Icon`, a `Setter`'s `Value` for one of them, an `<ImageSource>` element's text, and any value written in one of those two forms. A path in any other form (`Images/mine.png`, `pack://...`) is refused too.
 
-A fragment that fails is refused: `set_page_xaml` returns 0 and the log says which key or path and in which part. As with a missing FirstItem, the page keeps the last XAML you set that passed. If none has passed yet, the page shows the platform's own row instead, "This page couldn't be shown", saying why, rather than crashing the game, until you set XAML that passes; the row on your mod's page under MODS > Installed mods says so too, in red. If the game's files can't be read, nothing is checked (a log line says so), but the page can't be written then either.
+A fragment that fails is refused: `set_page_xaml` returns 0 and the log says which key or path and in which part. As with a missing FirstItem, the page keeps the last XAML you set that passed. If none has passed yet, the page shows the platform's own row instead, "This page couldn't be shown", saying why, rather than crashing the game, until you set XAML that passes; the page's row on your mod's page under MODS > YOUR MODS says so too, in red. If the game's files can't be read, nothing is checked (a log line says so), but the page can't be written then either.
 
-**The crash guard (2.9.0).** Just before the game loads a page of your own design, the platform marks it as opening in `fh2-mods\platform-pages.txt`, and takes the mark off once the page has been up for 10 seconds or the player has left it. If the next session finds a mark, the game stopped while it was loading that page. That alone isn't proof (the player may have closed Azimuth's window), so the page is left out only when there's also a crash report in `fh2-mods\crashes` newer than the mark, or when the same page was left opening in two sessions running; otherwise the mark is dropped and the log says so. A page left out shows "This page couldn't be shown", and its row under Installed mods says the game crashed opening it, until your mod's DLL changes, which an update or a reinstall does; the log says so each session. While you work on a page, delete its line from the file to try it again with the same DLL.
+**The crash guard (2.9.0).** Just before the game loads a page of your own design, the platform marks it as opening in `fh2-mods\platform-pages.txt`, and takes the mark off once the page has been up for 10 seconds or the player has left it. If the next session finds a mark, the game stopped while it was loading that page. That alone isn't proof (the player may have closed Azimuth's window), so the page is left out only when there's also a crash report in `fh2-mods\crashes` newer than the mark, or when the same page was left opening in two sessions running; otherwise the mark is dropped and the log says so. A page left out shows "This page couldn't be shown", and its row on your mod's page under YOUR MODS says the game crashed opening it, until your mod's DLL changes, which an update or a reinstall does; the log says so each session. While you work on a page, delete its line from the file to try it again with the same DLL.
 
 As with rows, the XAML is copied, and the page is written from the last you set each time it opens, so it's static: put your data straight into it, and call `set_page_xaml` again when it changes (or from `on_open`). On your mod's page under MODS > YOUR MODS such a page shows its rows if you've set any, and otherwise its row is dim and says where the tile is ("Open it from Pause > PROGRESS > ACHIEVEMENTS, or the PORSCHE tab's ACHIEVEMENTS tile."); a page of your own design needs a tile to be seen.
 
@@ -921,7 +940,7 @@ Ready-made pieces of the game's own UI that you fill with text: pop-ups on the g
 - **Faults.** When the platform catches a crash in one of your callbacks, it drops your waiting pop-ups and tip. A message box of yours that's open stays until the player answers it, and your `on_choose` isn't called.
 - **Your callbacks** are where the page templates work best. The platform knows when it's calling one of your page, setting, title-screen or message box callbacks (on the game's UI thread): a message box shows only from there, a sound from there plays at once, and a hint changed from one of the page's own shows at once.
 - **Nothing works by itself on an older platform**: use [`include/fh2mod_ui.h`](../include/fh2mod_ui.h) (below), and it does nothing there instead of crashing.
-- **Don't hook the game's notification code yourself** (`Show`, `MakeDisplayString`, the notification component's constructor and destructor, the achievements tick): the platform chains them with the mods that already do, and Achievements 1.0.x checks `Show`'s first bytes in memory.
+- **Don't hook the game's notification code yourself** (`Show`, `MakeDisplayString`, the notification component's constructor and destructor, the achievements tick): the platform chains them with the mods that already do, Achievements 1.0.x checks the first 15 bytes of `Show` and of `MakeDisplayString` in memory, and FH2MP 1.2.0 the first 16 of `MakeDisplayString` ([game-notes.md](game-notes.md#code-released-mods-check-in-memory)).
 
 ### ui_status and ui_uses
 
