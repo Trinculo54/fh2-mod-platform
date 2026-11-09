@@ -34,6 +34,7 @@
 //    the Mods page writes it with a space before the '=', which keeps them off it.
 //  - The message box is the one the options pages use for "Unsaved changes": see the popup
 //    section below.
+#include "db_guards.hpp"
 #include "hud_layer.hpp"
 #include "l10n.hpp"
 #include "lang.hpp"
@@ -2329,6 +2330,16 @@ std::vector<PageItem> installed_items() {
         items.push_back(info(tr("No mods installed"), trf("Mods go in the fh2-mods folder next to azimuth.exe. See {0} for some to try.", {tr("GET MODS")})));
     const std::vector<PageItem> packs = car_pack_items();
     items.insert(items.end(), packs.begin(), packs.end());
+    // A database guard stopped a crash this session (db_guards.cpp): the car the game couldn't show, last, in red.
+    if (uint32_t id = 0, times = 0; db_guard_fired(&id, &times)) {
+        PageItem it = info(tr("Game database"),
+                           trf("A car in the game's database has a powertrain ({0}) the game doesn't know, which would have "
+                               "stopped the game. The car is shown without its drivetrain instead.",
+                               {std::to_string(id)}));
+        it.note       = tr("The likely cause is a car pack or a mod that changes the game database. fh2-mods\\platform.log has more.");
+        it.note_alert = true;
+        items.push_back(it);
+    }
     return items;
 }
 
