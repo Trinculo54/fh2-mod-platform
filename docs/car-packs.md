@@ -4,7 +4,7 @@ From 2.9.0 the platform loads car packs: new cars for the Autoshow, each pack in
 
 ## What they need
 
-Azimuth 1.0 or later, without Extra Options. The platform then mounts its own folders ahead of the game's ([game-notes.md](game-notes.md#azimuths-drives-and-this-folders-layer)), which is what packs are read from. With Extra Options loaded, or on an older Azimuth, packs aren't read, and `fh2-mods\platform.log` says so ("car packs: the 1 pack(s) in fh2-cars aren't read: Extra Options is loaded"). Mods work there as before.
+Azimuth 1.0 or later, without Extra Options. The platform then mounts its own folders ahead of the game's ([game-notes.md](game-notes.md#azimuths-drives-and-this-folders-layer)), which is what packs are read from. With Extra Options loaded, or on an older Azimuth, packs aren't read, and `fh2-mods\platform.log` says so ("car packs: the 1 pack(s) in fh2-cars aren't read: Extra Options is loaded"). Mods work there as before. What the platform looks for, as it starts, is the `data\titles\1A96545B` folder Azimuth keeps the game's temporary drive in (Azimuth 0.9.10 has it too). A fresh Azimuth folder only has it once the game has been started, so packs are read from the second start.
 
 ## Installing and removing a pack
 
@@ -12,9 +12,19 @@ Put the pack's folder in `fh2-cars`, so that its `pack.ini` is at `fh2-cars\<pac
 
 To remove a pack, delete its folder. Its cars and files are gone from the next start. A car you bought is in your save by its Id, and what the game does with a save whose car has gone hasn't been tried yet, so keep a copy of your saves before removing a pack whose car you own. A car keeps its Id for good (see below), so putting the pack back gives it the same one.
 
+### When a pack's cars are missing
+
+A pack's cars can also be missing from the game's database without you removing anything: the pack is left out because a mod's SQL now takes one of its car's Ids, its own SQL fails after an update, the packs aren't read at all (Extra Options installed), or the platform has gone back to an older version. The platform checks at every start, before the game reads your save, that every car it has given an Id to (`fh2-mods\platform-car-ids.txt`) is in the database the game reads. When one isn't:
+
+- the first start it's missing, your saves are copied to `fh2-mods\save-snapshots\car-packs-<session>` (the newest 5 such copies are kept, apart from those mods ask for), and `fh2-mods\platform-cars-missing.txt` lists the cars;
+- every start it's missing, the title screen says which pack's cars aren't in the game ("Car pack Mustang clone's cars aren't in the game this time."), with why on the line below, and the pack's row on the MODS tab says so in red. For a pack whose folder is gone only `platform.log` says so;
+- when the database the platform built on can't be read, which passes on its own, the database from the last start is kept as it is, with the packs' cars, rather than one without them.
+
+**Extracting an older mod zip takes car packs out.** Every mod zip ships the platform it was built with, and many (WreckingBall 1.3.3, Achievements 1.0.2 and others) still ship 2.8.0, which doesn't know car packs. Extract one of those and the next start has none of your packs' cars, with no warning, since 2.8.0 can't give one. Reinstall a mod that ships 2.9.0 (or the platform's own zip) before playing, and keep a copy of your saves if you own a pack's car.
+
 ## This Azimuth folder's own files
 
-On Azimuth 1.0 or later without Extra Options, everything the platform writes for the game goes to the Azimuth folder itself, from 2.9.0: mods' text and files (`set_string`, `set_file`), the MODS tab's pages, the database, and the packs' merged `zipmanifest.xml`. They're in `data\titles\1A96545B\tmp\fh2-platform\media`, part of the temporary drive Azimuth keeps for FH2 in its own folder, which the game reads ahead of `mediaoverride`. So Azimuth folders that share one game folder no longer see each other's mods. `mediaoverride` is still read, after this: files other mods copy there, a traffic car mod's database.
+On Azimuth 1.0 or later without Extra Options, everything the platform writes for the game goes to the Azimuth folder itself, from 2.9.0: mods' text and files (`set_string`, `set_file`), the MODS tab's pages, the database, and the packs' merged `zipmanifest.xml`. They're in `data\titles\1A96545B\tmp\fh2-platform\media`, part of the temporary drive Azimuth keeps for FH2 in its own folder, which the game reads ahead of `mediaoverride`. So Azimuth folders that share one game folder no longer see each other's mods. `mediaoverride` is still read, after this: files other mods copy there, a traffic car mod's database. The first time the layer is used, the files and string tables the platform wrote to `mediaoverride` before (as 2.8.0 did) are moved to `fh2-mods\platform-old-overrides\mediaoverride`, so they can't show through from under it; `moved.txt` there lists them.
 
 With FH2MP in the Azimuth folder (an `fh2mp` folder there), the database is the exception: online play needs exactly the server's database, which FH2MP puts in `mediaoverride`, so the platform builds the database there as before ([api.md](api.md#add_sql-clear_sql-and-apply_database-api-2)). Packs' other files are still read.
 
@@ -49,7 +59,7 @@ The platform reads `[pack]`'s `name` and `version`, the `[car ...]` section name
 
 The pack's `.sql` files run on the platform's copy of the game database, in file-name order and before mods' statements, so mods that change every car change the pack's too. Each pack runs in a transaction of its own: if a statement fails, none of the pack's changes are made, and the log has the SQLite error.
 
-Write `{car:<media name>}` wherever one of the pack's cars' Id goes, and never a number. The platform gives each car an Id the first time it sees it, and keeps it for good, since a bought car's Id is in the save. The Ids are recorded in `fh2-mods\platform-car-ids.txt`, which is each Azimuth folder's own.
+Write `{car:<media name>}` wherever one of the pack's cars' Id goes, and never a number. The platform gives each car an Id the first time it sees it, and keeps it for good, since a bought car's Id is in the save. The Ids are recorded in `fh2-mods\platform-car-ids.txt`, which is each Azimuth folder's own, with a copy next to the folder's database (`data\titles\1A96545B\tmp\fh2-platform\media\Stripped\platform-car-ids.txt`), so emptying `fh2-mods` to reinstall doesn't lose them. A car that neither lists keeps the Id it has in the database the platform built last time, and the log says so ("TEST_Pack01 is car 3003 again").
 
 A save shows the same cars on another install only if their cars have the same Ids there, so give each car an `id` in `pack.ini`, from 3000 to 8999 (the game's own cars go up to 2501, and FM5's to 2169), one no other pack's car has. A car new to an install gets the Id it asks for whenever that one is free there, so every install with the pack gives the car the same Id, whatever order its packs were added in. When it isn't free (another car has it, or a mod's or the database's rows take it), the car gets another, and the MODS tab and the log say why, and that saves from other installs don't show it. A car without an `id` gets the lowest free one from 3000 up that no other installed pack's new car asks for, so its Id can differ between installs. A car that already has an Id keeps it, even if `pack.ini` asks for another later; the log says so. An `id` that isn't a number from 3000 to 8999 is ignored, with a warning.
 
@@ -76,7 +86,7 @@ A pack is left out, and the log says why, when the database already has one of i
 
 ### The model
 
-`media\cars\<car>.zip` is laid out as the game's own car zips ([game-notes.md](game-notes.md#cars)). The platform reads its directory and adds its line to the game's `zipmanifest.xml`, so it can be any size. The car's files name it in their paths, `game:\media\cars\<car in lower case>\...`, so a copy of a stock car has to have those changed too. A zip with the name of one of the game's replaces it for that Azimuth folder.
+`media\cars\<car>.zip` is laid out as the game's own car zips ([game-notes.md](game-notes.md#cars)). The platform reads its directory and adds its line to the game's `zipmanifest.xml`, so it can be any size. While it writes that merged `zipmanifest.xml`, a mod can't replace it with `set_file`, which would take the packs' zips out. The car's files name it in their paths, `game:\media\cars\<car in lower case>\...`, so a copy of a stock car has to have those changed too. A zip with the name of one of the game's replaces it for that Azimuth folder.
 
 A carbin names the models of the car's upgradeable parts (rear wing, bumpers, side skirts, hood, roll cage) by the Ids of their database rows. The bumpers', side skirts', hood's and roll cage's are its body's rows, so a car sharing a stock car's body names them as that car does. The rear wing's rows are the car's own, `{car:X} * 1000 + n`, so its carbin can only name them once the car has its Id: `<car>.part-ids.txt` says where they are, and at each start the platform sets them in its copy of the zip on the temporary drive.
 

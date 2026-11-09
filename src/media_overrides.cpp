@@ -25,11 +25,14 @@
 // zips are overridden the same way: mediaoverride\UI\Scenes\... stands for
 // media\UI.zip's Scenes\....
 //
-// With Azimuth 1.0 or later it also mounts this Azimuth folder's own folders
-// ahead of mediaoverride (car_packs.cpp): its layer, where the platform's
-// files go, and the car packs, both on the game's T:\ drive. The game reads
-// only through Azimuth's drives: a game:\ path with ".." stops the game, and
-// a host path isn't found.
+// When this Azimuth folder has data\titles\1A96545B, where Azimuth keeps the
+// game's T:\ drive (1.0 does, and so does 0.9.10), it also mounts this Azimuth
+// folder's own folders ahead of mediaoverride (car_packs.cpp): its layer, where
+// the platform's files go, and the car packs, both on T:\. Whether it does is
+// decided once, at start (instance_layer). The game reads only through
+// Azimuth's drives: a game:\ path with ".." stops the game, and a host path
+// isn't found. Without the layer, mediaoverride and mediapc keep the
+// priorities they had up to 2.8.0.
 //
 // Addresses are for the 24 Nov 2015 exe, RVAs from its base:
 //   0x2E6EF28  file system vtable slot: the resolver
@@ -134,8 +137,12 @@ void mount_outside(void* filesystem, const std::vector<Outside>& folders, std::v
 }
 
 // This folder's layer, then the packs, in name order: where two packs have the same file, the
-// first one's is read (and the merged manifest has the first one's zip lines too).
+// first one's is read (and the merged manifest has the first one's zip lines too). mediaoverride and mediapc go
+// below them only with the layer; without it they keep 2.8.0's priorities (kOldOverridePriority, then one below).
 constexpr unsigned kLayerPriority = 0x7FFFFFFE, kFirstPackPriority = 0x7FFFFFF0, kOverridePriority = 0x7FFFFF00;
+constexpr unsigned kOldOverridePriority = 0x7FFFFFFE;
+
+unsigned override_priority() { return instance_layer() ? kOverridePriority : kOldOverridePriority; }
 
 std::vector<Outside> outside_folders() {
     std::vector<Outside> f;
@@ -154,12 +161,12 @@ std::vector<Outside> outside_folders() {
     return f;
 }
 
-int mount_guarded(void* filesystem, const std::vector<Outside>& folders, std::vector<Mounted>& outside, int& over,
-                  int& pc) {
+int mount_guarded(void* filesystem, const std::vector<Outside>& folders, std::vector<Mounted>& outside, unsigned priority,
+                  int& over, int& pc) {
     __try {
         mount_outside(filesystem, folders, outside);
-        over = mount_folder(filesystem, "game:\\mediaoverride\\", kOverridePriority);
-        pc   = mount_folder(filesystem, "game:\\mediapc\\", kOverridePriority - 1);
+        over = mount_folder(filesystem, "game:\\mediaoverride\\", priority);
+        pc   = mount_folder(filesystem, "game:\\mediapc\\", priority - 1);
         reinterpret_cast<Method>((*reinterpret_cast<void***>(filesystem))[0x1F8 / 8])(filesystem);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
@@ -176,7 +183,7 @@ std::string mount_all(void* filesystem) {
     int over = 0, pc = 0;
     std::vector<Mounted> outside;
     const auto folders = outside_folders();
-    const bool crashed = !mount_guarded(filesystem, folders, outside, over, pc);
+    const bool crashed = !mount_guarded(filesystem, folders, outside, override_priority(), over, pc);
     g_state.store(2);
     for (const auto& m : outside)
         plog("media overrides: " + m.label + " " + m.folder + (m.ok ? " mounted" : " NOT mounted"));
@@ -385,8 +392,13 @@ void wait_for_extra_options() {
 } // namespace
 
 void start_media_overrides() {
+    // Where the platform's files go is decided here, once for the whole session (instance_layer), before anything
+    // is written.
+    const bool layer = instance_layer();
     if (!extra_options_dir().empty()) {
         plog("media overrides: Extra Options is here, so mediaoverride is left to it");
+        plog("media overrides: the platform's files go to mediaoverride for this whole session");
+        move_old_overrides();
         car_packs_unavailable(later("Extra Options is loaded."));
         return;
     }
@@ -396,17 +408,25 @@ void start_media_overrides() {
         // at media_override_native_resolver"), so mediaoverride is left to it as when it's loaded.
         plog("media overrides: Extra Options' winmm.dll is next to azimuth.exe and Wine is set to load it, but the "
              "list of loaded DLLs can't be read to see whether it has; mediaoverride is left to it");
-        car_packs_unavailable("Extra Options is set to load");
+        plog("media overrides: the platform's files go to mediaoverride for this whole session");
+        move_old_overrides();
+        car_packs_unavailable(later("Extra Options is loaded."));   // counted as loaded; in each language on the title screen
         std::thread(wait_for_extra_options).detach();
         return;
     }
     plog("media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride and mediapc itself");
-    if (instance_layer()) {
-        plog("media overrides: this Azimuth folder's own files go to " + narrow(instance_media().wstring()) +
-             " (the game's " + temp_drive_spelling(instance_media()) + "), read ahead of mediaoverride");
+    if (layer) {
+        plog("media overrides: this Azimuth folder has data\\titles\\1A96545B (where Azimuth keeps the game's T:\\ drive), "
+             "so for this whole session its own files go to " + narrow(instance_media().wstring()) + " (the game's " +
+             temp_drive_spelling(instance_media()) + "), read ahead of mediaoverride");
+        move_old_overrides();   // first: the packs' merged zipmanifest.xml is built on what the game reads without them
         prepare_car_packs();
     } else {
-        car_packs_unavailable(later("This Azimuth is older than 1.0 (it has no data\\titles folder)."));
+        plog("media overrides: this Azimuth folder has no data\\titles\\1A96545B yet (Azimuth makes it the first time the "
+             "game starts), so for this whole session the platform's files go to mediaoverride, mounted as up to 2.8.0");
+        move_old_overrides();
+        car_packs_unavailable(later("This Azimuth folder has no data\\titles\\1A96545B folder yet: Azimuth makes it the first "
+                                    "time the game starts."));
     }
     std::thread(watch).detach();
 }

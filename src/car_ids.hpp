@@ -27,6 +27,7 @@ struct Outcome {
     std::vector<std::pair<std::string, int64_t>> ids;   // a pack's cars with their Ids, when it isn't left out
     std::vector<std::pair<std::string, int64_t>> given; // those of them given their Id just now, to record
     std::string problem;                                // why the pack is left out, or "" (a message from later())
+    bool base_unread = false;                           // left out only because `base` couldn't be read: that can pass
     std::vector<std::string> warnings;                  // what in its SQL or pack.ini could clash with packs' cars (later())
     std::vector<std::string> notes;                     // for the log only
 };

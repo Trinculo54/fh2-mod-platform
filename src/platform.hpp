@@ -131,10 +131,31 @@ void write_engine_synths();
 bool instance_layer();
 // Where overrides are written: instance_media(), else the game's mediaoverride.
 std::filesystem::path override_root();
+// The two places the platform writes files for the game (its roots): mediaoverride, and this Azimuth folder's own
+// layer. From 2.9.0 a line of fh2-mods\platform-files.txt or platform-tables.txt ends in the roots its file is in
+// ("mediaoverride", "layer", or both); a line without them is from 2.8.0 or older (which wrote mediaoverride) or a
+// 2.9.0 test build (which may have written the layer), so it counts as both.
+enum : unsigned { kRootOverride = 1, kRootLayer = 2, kRootBoth = 3 };
+unsigned current_root();                                // this session's (instance_layer)
+std::filesystem::path root_folder(unsigned root);       // one root's folder
+std::string root_names(unsigned roots);                 // as a manifest line ends
+std::string root_shown(unsigned root);                  // one root, for the log
+unsigned parse_roots(const std::string& text);          // the reverse; kRootBoth when it names none
+// At start, before anything is written: the platform's own files (platform-files.txt) and string tables
+// (platform-tables.txt) in the root this session doesn't write to (what 2.8.0 left in mediaoverride, or a
+// session with the other root), moved into fh2-mods\platform-old-overrides\<root>\, keeping their paths.
+// Nothing the manifests don't list is touched. files.cpp; the tables' part is move_old_tables (platform.cpp).
+void move_old_overrides();
+void move_old_tables();
+// Moves the platform's copy of `rel` (relative to the root's folder) to fh2-mods\platform-old-overrides\<root>\rel,
+// and lists it in moved.txt there: 1 moved, 0 nothing there, -1 couldn't be moved (`error` says why).
+int move_old_override(unsigned root, const std::filesystem::path& rel, std::string& error);
 const std::vector<CarPack>& car_packs();
 // Finds the packs, puts their files on the temp drive, and writes the merged zipmanifest.xml to
 // instance_media(). Their SQL goes into the database with the mods' (apply_database).
 void prepare_car_packs();
+// That merged zipmanifest.xml is in the layer this session (a pack has zips): set_file refuses a mod's.
+bool car_packs_manifest();
 // Once a pack's cars have their Ids (database.cpp): the part Ids of their own that their carbins
 // name (<car>.part-ids.txt), set in their zips on the temp drive.
 void place_car_ids(const CarPack& pack, const std::vector<std::pair<std::string, int64_t>>& cars);
@@ -142,6 +163,7 @@ void place_car_ids(const CarPack& pack, const std::vector<std::pair<std::string,
 void car_packs_unavailable(const std::string& why);   // why: a sentence, as a message from later() (text.hpp)
 // Why the packs in fh2-cars aren't read this session (for the MODS tab), or "".
 std::string car_packs_unread();
+std::string car_packs_unread_why();                 // and only the reason given to car_packs_unavailable
 // Why a pack (by folder name) isn't working this session, or "": the first reason given.
 void note_car_pack_problem(const std::string& pack, const std::string& why);   // why: a message from later() (text.hpp)
 std::string car_pack_problem(const std::string& pack);
@@ -157,6 +179,13 @@ std::map<uint16_t, std::wstring> database_strings();
 // other installs don't show it). Only looked for while a pack adds cars. For the MODS tab.
 std::string car_pack_sql_warning(const std::string& pack);
 std::string mod_sql_warning(const std::string& mod);
+// Cars fh2-mods\platform-car-ids.txt records (a save may have them) that the database the game reads this session
+// doesn't have: whether a pack's (by folder name) are, or those of the packs that aren't read (car_packs_unread), and
+// the title screen's lines saying so (messages from later()), from the last build. The first session one goes
+// missing, the saves are copied first (platform_save_snapshot).
+bool car_pack_cars_missing(const std::string& pack);
+bool unread_cars_missing();
+std::vector<std::string> car_pack_title_lines();
 // Where the database the game reads comes from, for the database guards (db_guards.hpp): the files as they are
 // now, told apart as apply_database tells them.
 struct DbFacts;
@@ -304,6 +333,11 @@ void write_session_crashed(const wchar_t* fh2mods_dir, const char* report);
 // returned (start_save_snapshot).
 int request_save_snapshot(FH2Mod* mod, const char* reason, uint32_t keep);
 void start_save_snapshot();
+// The platform's own copy of the saves, to fh2-mods\save-snapshots\car-packs-<session id>, started now on a thread of
+// its own, once a session; the newest 5 are kept, counted apart from the mods' copies. False when there's no saves
+// folder. And whether one was started this session or is kept from before.
+bool platform_save_snapshot(const std::string& why);
+bool platform_save_snapshots_kept();
 
 // crash.cpp
 struct LoadedDll {

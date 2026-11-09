@@ -178,12 +178,15 @@ typedef struct FH2ModApi {
        platform's own UI files are refused too (A_Hud, A_Splash,
        A_PauseMenu, A_PauseOptions, A_ModOptions and A_ModPage_NN in
        UI\Scenes\Anthem, stateflow\pause.xml and ui_screens.xml; api.md
-       lists them). */
+       lists them), and so is zipmanifest.xml while the platform writes its
+       own, with car packs' zips added to the game's. */
     int (*set_file)(FH2Mod* mod, const char* media_path, const void* data, size_t size);
     /* Stop replacing a file (or all of yours, if NULL): the override is
        deleted and the game reads its own copy again. Files a mod no longer
        replaces at all (because it was removed) are cleaned up shortly after
-       startup. */
+       startup, from every folder the platform wrote them to (from platform
+       2.9.0, mediaoverride and the layer; api.md says how what 2.8.0 left
+       in mediaoverride is moved aside). */
     void (*clear_file)(FH2Mod* mod, const char* media_path);
 
     /* ---- Game database -----------------------------------------------------
@@ -488,7 +491,9 @@ typedef struct FH2ModApi {
        that changes what gets saved. Call it from fh2mod_init. Once every mod's
        fh2mod_init has returned, the platform copies the folder (once, however
        many mods ask) to fh2-mods\save-snapshots\<session id>\, keeps the
-       newest `keep` copies (the most any mod asked for, at least 1), and says
+       newest `keep` copies (the most any mod asked for, at least 1; from
+       platform 2.9.0 the platform's own car-packs-<session id> copies aren't
+       counted), and says
        in the log which mods asked and why. The game reads the saves when A is
        pressed on the title screen, long after. The platform only reads the
        saves, never writes to them; to go back, copy a snapshot's contents

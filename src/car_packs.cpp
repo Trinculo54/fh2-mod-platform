@@ -52,6 +52,8 @@ namespace {
 
 std::vector<CarPack> g_packs;
 std::string g_unread;                         // why fh2-cars' packs aren't read this session
+std::string g_unread_why;                     // and the reason alone (a message from later())
+std::atomic<bool> g_merged{false};            // the layer's zipmanifest.xml is the platform's, with the packs' zips
 std::mutex g_problem_mu;
 std::map<std::string, std::string> g_problems; // pack -> why it isn't working
 
@@ -184,6 +186,7 @@ void write_manifest() {
         merged += line;
     }
     if (read_all(out) == merged) {
+        g_merged = true;
         plog("car packs: zipmanifest.xml unchanged (" + std::to_string(zips.size()) + " pack zip(s))");
         return;
     }
@@ -191,6 +194,7 @@ void write_manifest() {
         plog("car packs: couldn't write " + narrow(out.wstring()) + " (error " + std::to_string(GetLastError()) + ")");
         return;
     }
+    g_merged = true;
     plog("car packs: wrote zipmanifest.xml from " + narrow(base.wstring()) + " with " + std::to_string(zips.size()) +
          " pack zip(s) (" + std::to_string(replaced) + " of them replacing the game's line)");
     for (const auto& [p, d] : zips)
@@ -426,17 +430,45 @@ std::string temp_drive_spelling(const fs::path& folder) {
 fs::path instance_media() { return temp_drive() / L"fh2-platform" / L"media"; }
 
 bool instance_layer() {
-    std::error_code ec;
-    // Extra Options counted as loaded under Wine (extra_options_expected) mounts mediaoverride, not this layer.
-    return !game_mount().empty() && extra_options_dir().empty() && !extra_options_expected() &&
-           fs::is_directory(azimuth_dir() / L"data" / L"titles", ec);
+    // Worked out once, so every part of the platform goes by the same answer all session: start_media_overrides
+    // asks first, before anything is written, and logs it. data\titles\1A96545B is where Azimuth keeps the game's
+    // T:\ drive (its tmp folder); a fresh Azimuth folder only has it once the game has been started, so asking
+    // again later in the session could move later writes away from what was mounted.
+    static const bool layer = [] {
+        std::error_code ec;
+        // Extra Options counted as loaded under Wine (extra_options_expected) mounts mediaoverride, not this layer.
+        return !game_mount().empty() && extra_options_dir().empty() && !extra_options_expected() &&
+               fs::is_directory(temp_drive().parent_path(), ec);
+    }();
+    return layer;
 }
 
 fs::path override_root() {
     return instance_layer() ? instance_media() : game_mount() / "mediaoverride";
 }
 
+unsigned current_root() { return instance_layer() ? kRootLayer : kRootOverride; }
+
+fs::path root_folder(unsigned root) { return root == kRootLayer ? instance_media() : game_mount() / "mediaoverride"; }
+
+std::string root_names(unsigned roots) {
+    std::string s = roots & kRootOverride ? "mediaoverride" : "";
+    if (roots & kRootLayer) s += s.empty() ? "layer" : " layer";
+    return s;
+}
+
+std::string root_shown(unsigned root) { return root == kRootLayer ? "this Azimuth folder's own layer" : "mediaoverride"; }
+
+unsigned parse_roots(const std::string& text) {
+    unsigned roots = 0;
+    std::istringstream words{text};
+    for (std::string w; words >> w;) roots |= w == "mediaoverride" ? kRootOverride : w == "layer" ? kRootLayer : 0u;
+    return roots ? roots : kRootBoth;
+}
+
 const std::vector<CarPack>& car_packs() { return g_packs; }
+
+bool car_packs_manifest() { return g_merged.load(); }
 
 void car_packs_unavailable(const std::string& why) {
     std::error_code ec;
@@ -444,12 +476,15 @@ void car_packs_unavailable(const std::string& why) {
     for (const auto& e : fs::directory_iterator(azimuth_dir() / "fh2-cars", ec))
         n += e.is_directory(ec) && fs::is_directory(e.path() / "media", ec);
     if (!n) return;
+    g_unread_why = why;
     g_unread = later("The {0} car pack(s) in fh2-cars aren't read: {1} They need Azimuth 1.0 or later, without Extra Options.",
                      {std::to_string(n), why});
     plog("car packs: " + english(g_unread));
 }
 
 std::string car_packs_unread() { return g_unread; }
+
+std::string car_packs_unread_why() { return g_unread_why; }
 
 // A car's carbin names its upgradeable parts' models by their rows' Ids. Its body's are shared with
 // the base car, but its rear wing's rows are its own, which its SQL numbers <car Id> * 1000 + n, so

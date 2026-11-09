@@ -310,7 +310,8 @@ std::vector<Outcome> plan(sqlite3* base, const std::string& shown, const std::ve
             }
         }
         if (!problem.empty()) {
-            o.problem = problem;
+            o.problem     = problem;
+            o.base_unread = !readable;
             o.notes.clear();
             continue;
         }

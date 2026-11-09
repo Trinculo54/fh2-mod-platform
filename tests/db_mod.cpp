@@ -5,6 +5,7 @@
 //   BadSqlTest.dll  SQL that fails
 //   CarIdTest.dll   adds car 3000 itself (a copy of car 441), in the range car packs' cars are given
 //   CarIdLate.dll   adds engine 3003 itself (car pack cars' engines have their car's Id)
+//   ZipTest.dll     replaces zipmanifest.xml with set_file (refused while car packs' zips are in it), no SQL
 #include "fh2mod.h"
 #include <windows.h>
 
@@ -34,6 +35,11 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
                           : "UPDATE NoSuchTable SET X = 1;";
     FH2ModInfo info{sizeof info, g_name.c_str(), "1.0.0", nullptr, FH2MOD_PLATFORM_VERSION, 0};
     FH2Mod* m = api->register_mod(&info);
+    if (g_name == "ZipTest") {
+        const char manifest[] = "<ZipFiles>\r\n</ZipFiles>\r\n";
+        api->log(m, api->set_file(m, "zipmanifest.xml", manifest, sizeof manifest - 1) ? "zipmanifest.xml replaced" : "zipmanifest.xml refused");
+        return 0;
+    }
     api->add_sql(m, sql);
     return 0;
 }
