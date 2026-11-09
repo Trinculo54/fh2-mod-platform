@@ -605,6 +605,33 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(logged("[" + who + "] fh2-mods\\lang\\" + who + "\\" + other_name + " is Polish (pl) too, and pl.po is the one used, so it isn't read"));
     }
 
+    // ---- a mod that passes ever-changing English: past 20000 texts, tr() makes no more copies and gives the English
+    // back as it was passed, as before API 10; what it had already handed out still works
+    {
+        FH2Mod many;
+        many.name         = "ManyMod";
+        const char* first = l10n_tr(&many, "speed", "Speed 0");
+        char buf[32];
+        const char* got = nullptr;
+        for (int i = 1; i < 20000; ++i) {
+            std::snprintf(buf, sizeof buf, "Speed %d", i);
+            got = l10n_tr(&many, "speed", buf);
+        }
+        CHECK(got != buf && std::string(got) == "Speed 19999");   // the 20000th is still the platform's copy
+        CHECK(logged("[ManyMod] tr has handed out 20000 different texts, and the platform keeps each one for the session, so it stops there: "
+                     "from now on, English it hasn't been given before comes back as it is, untranslated and not copied, as before API 10. "
+                     "Pass the same English each time, and fill numbers and names in afterwards"));
+        std::snprintf(buf, sizeof buf, "Speed %d", 20000);
+        CHECK(l10n_tr(&many, "speed", buf) == buf);
+        std::snprintf(buf, sizeof buf, "Speed %d", 20001);
+        CHECK(l10n_tr(&many, "speed", buf) == buf);
+        CHECK(l10n_tr(&many, "speed", "Speed 0") == first);       // one it had already is still its copy
+        static const char one[] = "One lap", other[] = "{n} laps";
+        CHECK(l10n_tr_plural(&many, "laps", one, other, 3) == other && l10n_tr_plural(&many, "laps", one, other, 1) == one);
+        CHECK(l10n_tr_plural(&many, "laps", one, nullptr, 3) == one && std::strcmp(l10n_tr(&many, "x", nullptr), "") == 0);
+        CHECK(std::string(l10n_tr(&mod, "greeting", "Hello, {name}!")) == "Cześć, {name}!");   // other mods aren't affected
+    }
+
     // ---- the test language, and a first launch, each in a session of its own
     CHECK(run_phase(L"qps") == 0);
     CHECK(run_phase(L"first") == 0);

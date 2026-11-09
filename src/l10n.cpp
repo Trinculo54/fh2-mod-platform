@@ -763,11 +763,16 @@ std::string plural_class(int64_t n) {
     return s;
 }
 
-std::size_t ref_of(FH2Mod* m, const std::string& key, const std::string& one, const std::string& other, int64_t n, bool plural) {
+constexpr std::size_t kNoRef = static_cast<std::size_t>(-1);
+
+// What was asked's index in g_refs, made if it's new, unless `add` is false (then kNoRef).
+std::size_t ref_of(FH2Mod* m, const std::string& key, const std::string& one, const std::string& other, int64_t n, bool plural,
+                   bool add = true) {
     char id[64];
     std::snprintf(id, sizeof id, "%p\x1f%d\x1f", static_cast<void*>(m), plural ? 1 : 0);
     const std::string k = id + (plural ? plural_class(n) : std::string()) + '\x1f' + key + '\x1f' + one + '\x1f' + other;
     if (auto it = g_ref_ids.find(k); it != g_ref_ids.end()) return it->second;
+    if (!add) return kNoRef;
     g_refs.push_back({m, key, one, other, plural ? n : 0, plural});   // n: the first count of its class, which stands for them all
     g_ref_ids.emplace(k, g_refs.size() - 1);
     return g_refs.size() - 1;
@@ -811,10 +816,17 @@ const char* hand_out(std::size_t ref, const std::string& text, std::vector<std::
     if (++mt.texts >= kManyTexts && !mt.many_said) {
         mt.many_said = true;
         notes.push_back("tr has handed out " + std::to_string(kManyTexts) +
-                        " different texts, and the platform keeps each one for the session: pass the same English each time, and fill "
-                        "numbers and names in afterwards");
+                        " different texts, and the platform keeps each one for the session, so it stops there: from now on, English it "
+                        "hasn't been given before comes back as it is, untranslated and not copied, as before API 10. Pass the same "
+                        "English each time, and fill numbers and names in afterwards");
     }
     return p->c_str();
+}
+
+// Whether `m` has had kManyTexts texts: tr() and tr_plural() then make nothing new for it.
+bool full(FH2Mod* m) {
+    const auto it = g_mods.find(m);
+    return it != g_mods.end() && it->second.texts >= kManyTexts;
 }
 
 void say(FH2Mod* m, const std::vector<std::string>& notes) {
@@ -868,8 +880,9 @@ const char* l10n_tr(FH2Mod* m, const char* key, const char* english) {
     const char* out = nullptr;
     {
         std::scoped_lock lk{g_mu};
-        const std::size_t r = ref_of(m, key ? key : "", english ? english : "", "", 0, false);
-        out                 = hand_out(r, text_for(g_refs[r], tag, notes), notes);
+        // past kManyTexts, English not asked for before is the mod's own, as before API 10 (hand_out logged why)
+        const std::size_t r = ref_of(m, key ? key : "", english ? english : "", "", 0, false, !full(m));
+        out                 = r == kNoRef ? (english ? english : "") : hand_out(r, text_for(g_refs[r], tag, notes), notes);
     }
     say(m, notes);
     return out;
@@ -881,8 +894,9 @@ const char* l10n_tr_plural(FH2Mod* m, const char* key, const char* one, const ch
     const char* out = nullptr;
     {
         std::scoped_lock lk{g_mu};
-        const std::size_t r = ref_of(m, key ? key : "", one ? one : "", other ? other : (one ? one : ""), n, true);
-        out                 = hand_out(r, text_for(g_refs[r], tag, notes), notes);
+        const std::size_t r = ref_of(m, key ? key : "", one ? one : "", other ? other : (one ? one : ""), n, true, !full(m));
+        if (r != kNoRef) out = hand_out(r, text_for(g_refs[r], tag, notes), notes);
+        else out = plural_form("en", n) != 0 && other ? other : one ? one : "";   // the English form, as text_for picks it
     }
     say(m, notes);
     return out;

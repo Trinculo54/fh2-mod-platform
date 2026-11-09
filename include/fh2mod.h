@@ -615,7 +615,10 @@ typedef struct FH2ModApi {
        changed since) isn't used, so it never shows with the wrong meaning.
        Looks in the language's catalogue, then pt-BR -> pt, en-GB -> en,
        es-MX -> es-ES -> es, then English. The text stays valid for the
-       session: don't free it.
+       session: don't free it. Pass the same English each time: past 20000
+       different texts from one mod, English not given before comes back
+       as the pointer you passed, untranslated (the log says so), as on
+       platforms before API 10.
 
        tr_plural: the same for text with a count: `one` and `other` are the
        English forms (msgid and msgid_plural), and the form for `n` is picked
