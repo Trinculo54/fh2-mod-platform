@@ -29,7 +29,7 @@ bool page_guard_skipped(const FH2Mod* mod, const std::string& page);
 bool page_guard_retry(const FH2Mod* mod, const std::string& page);
 // Before the game loads a page of `mod`'s own design: the mark, in the file. page_guard_loaded when the page has
 // loaded takes the mark off 10 s later (unless another page has opened since); page_guard_closed, when the player
-// has left it (another page loaded, or the pause menu is back), takes it off at once.
+// has left it (another page loaded, the pause menu back, or the freeroam HUD shown again), takes it off at once.
 void page_guard_opening(const FH2Mod* mod, const std::string& page);
 void page_guard_loaded();
 void page_guard_closed();

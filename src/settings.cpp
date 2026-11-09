@@ -4700,23 +4700,34 @@ void hook_hub() {
         if (!g_find_button_ok) slog("the pause menu's tile lookup doesn't look as expected; a missing MODS tab won't be told to the player");
     }
     hook_tiles(m);
-    if (g_hud_notice) {
-        mod_notice_descriptor();   // made now, so the HUD hook knows there's a notice
-        hook_hud_shown(m);
+    // The freeroam HUD shown: for the HUD's notice, and for the crash guard when a mod's page is on a tile (its mark
+    // comes off once the player is back driving). The notice's property is made on the game's thread (d_hud_shown).
+    bool tile_page = false;
+    {
+        std::scoped_lock lk{g_mu};
+        for (const int j : g_tile_page) tile_page = tile_page || j >= 0;
     }
+    if (g_hud_notice || tile_page) hook_hud_shown(m);
     slog("MODS tab ready");
 }
 
 // The freeroam HUD page (Hud, vtable 0x142DEF9C8): +0x488 runs each time it's shown (in
 // freeroam, and again after every menu), +0x4F8 when it's hidden. The first time, the notice
-// about mods that didn't load plays (FH2Mod_ModNotice); the next, it's done.
+// about mods that didn't load plays (FH2Mod_ModNotice); the next, it's done. Every time, the
+// player is back from the menus, so no page of a mod's own design is opening (the crash guard).
 constexpr uintptr_t RVA_HUD_SHOWN_SLOT = 0x2DEFE50;   // Hud vtable +0x488
 constexpr uintptr_t RVA_HUD_SHOWN      = 0x0D38DD0;
 using HudShownFn = uint64_t (*)(void*, void*, void*, void*);
 HudShownFn o_hud_shown = nullptr;
 uint64_t d_hud_shown(void* page, void* b, void* c, void* d) {
     const uint64_t r = o_hud_shown(page, b, c, d);
-    if (!g_mod_notice_desc) return r;
+    page_guard_closed();
+    if (!g_hud_notice || g_mod_notice_done.load()) return r;
+    // The notice's property, made here on the game's UI thread (if the page's binding hasn't made it already): it
+    // runs game code (the model descriptor's first-time build, AVUI::Object's constructor), never on a thread of
+    // the platform's own.
+    uint8_t* const desc = mod_notice_descriptor();
+    if (!desc) return r;
     ULONGLONG none = 0;
     if (g_mod_notice_at.compare_exchange_strong(none, GetTickCount64())) {   // first shown: it plays
         if (g_notice_kind == kNoticeWelcome) {   // one of its sessions
@@ -4735,7 +4746,7 @@ uint64_t d_hud_shown(void* page, void* b, void* c, void* d) {
             slog("the title screen has said mod settings have moved; from the next start it says where they are");
     } else if (g_mod_notice_done.exchange(true))
         return r;                                                       // over already
-    notify_changed(page, g_mod_notice_desc);
+    notify_changed(page, desc);
     return r;
 }
 // The HUD layer and the pop-ups (their page tracking, API 10) hook this slot too, and their hooks can go
@@ -4751,7 +4762,9 @@ bool hud_shown_slot_ok(void** slot) {
 void hook_hud_shown(FH2Mod* m) {
     void** slot = reinterpret_cast<void**>(g_base + RVA_HUD_SHOWN_SLOT);
     if (!hud_shown_slot_ok(slot)) {
-        slog("the freeroam HUD's vtable doesn't look as expected; no notice about mods that didn't load");
+        slog(g_hud_notice ? "the freeroam HUD's vtable doesn't look as expected; no notice about the mods on the HUD"
+                          : "the freeroam HUD's vtable doesn't look as expected; a mod's page that was opening keeps its crash mark "
+                            "until the player opens another page or the page has been up for 10 s");
         return;
     }
     if (FH2Hook* k = g_api->hook_pointer(m, "freeroam HUD: shown", slot, reinterpret_cast<void*>(&d_hud_shown),
