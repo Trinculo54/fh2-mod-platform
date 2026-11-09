@@ -13,6 +13,11 @@
 # later without Extra Options (a data\titles folder), where they go to the folder's own layer.
 # EN.zip is copied as PL.zip and br.zip too, for the tables each language gets in its own words
 # (API 10), and the language last time is Polish (fh2-mods\platform-language.ini).
+# With the exe given, the phases that map it ("full" and "hud") have it in the game folder too, as
+# a real install does, so the platform checks the game's code against it and its hooks go in (pop-ups,
+# UI sounds, the database guards; the HUD layer's too with FH2_MEDIA); without it, they stay out and say
+# why. The test's copy of the game can't run game code, so with FH2_MEDIA it keeps the MODS menus out
+# (tests/platform_test.cpp, map_game).
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 b=$root/build-test
@@ -35,6 +40,8 @@ run_layout() {   # run_layout mediaoverride|own
     cp "$b/platform_test.exe" "$dir/azimuth.exe"
     cp "$b/d3dcompiler_47.dll" "$b/database_test.exe" "$b/DbMod.dll" "$b/fh2mod.exe" "$dir/"
     cp "$b/AaaMod.dll" "$b/HelloMod.dll" "$b/TestMod.dll" "$b/Legacy.dll" "$dir/fh2-mods/"
+    # the game exe where Azimuth has it, for the phases that map it (the platform reads its code from there)
+    [ -n "$game_exe" ] && ln -s "$game_exe" "$dir/FH2/Mount/forza_durango_release_final.exe"
     cp "$en" "$dir/FH2/Mount/media/Stripped/StringTables/EN.zip"
     cp "$en" "$dir/FH2/Mount/media/Stripped/StringTables/PL.zip"
     cp "$en" "$dir/FH2/Mount/media/Stripped/StringTables/br.zip"
@@ -117,9 +124,9 @@ run_layout() {   # run_layout mediaoverride|own
     printf 'fh2mp.dll\n' > fh2-mods/platform-disabled.txt
     # The HUD layer preview: a mod that adds a layer (tests/hud_mod.cpp). The phases above have none, so
     # they also check that the build behaves as 2.8.0 without one. With the exe given, this phase maps all
-    # of it and has it in the game folder, as the hook test does, so the layer's code checks and hooks run.
+    # of it (and has it in the game folder, as above), as the hook test does, so the layer's code checks and
+    # hooks run.
     cp "$b/HudTestMod.dll" fh2-mods/
-    [ -n "$game_exe" ] && ln -s "$game_exe" FH2/Mount/forza_durango_release_final.exe
     wine azimuth.exe hud "${exe[@]}"
     cd - >/dev/null
 }
