@@ -217,10 +217,38 @@ int main() {
         check(!seen_has("A.dll", "One") && logged("platform-seen.txt couldn't be read"), "locked at the start: nothing seen, and said");
         CloseHandle(lock);
         seen_set("A.dll", "Later");
+        check(seen_get("A.dll", "One") == "3" && seen_has("A.dll", "WhileLocked") && seen_has("A.dll", "Later") &&
+                  logged("platform-seen.txt could be read now, so the hints and tips seen before count again"),
+              "free at the next change: read again then, so what was seen counts again");
         check(seen_flush(3000), "flushed");
         const std::string t = slurp(file);
         check(has(t, "A.dll\tLater\tseen") && has(t, "A.dll\tOne\t3") && has(t, "A.dll\tWhileLocked"),
               "the next write keeps what was in the file");
+    }
+
+    // ---- still locked at "Show tips again": the file's tips are forgotten when it's written, the rest is kept
+    {
+        put(file, "A.dll\ttip.One\tseen\r\nB.dll\ttip.Two\t2\r\nA.dll\tmod.new\tseen\r\n*\thome\tseen\r\n*\ttip.Own\tseen\r\n");
+        const HANDLE lock = CreateFileW(file.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        clear_log();
+        seen_open(file, log_line);
+        const auto tips = [](const std::string& who, const std::string& key, const std::string&) {
+            return who != kSeenPlatform && key.rfind("tip.", 0) == 0;
+        };
+        check(seen_clear_if(tips) == 0 && logged("platform-seen.txt still couldn't be read, so what it holds is forgotten as asked when it's next written"),
+              "Show tips again while it's locked: kept for the write, and said");
+        check(!seen_clear("A.dll", "mod.new"), "a clear while it's locked: not known to have been set");
+        seen_set("C.dll", "tip.New");
+        check(!seen_flush(1500), "still locked: not written");
+        CloseHandle(lock);
+        check(seen_flush(4000), "free again: written");
+        const std::string t = slurp(file);
+        check(!has(t, "tip.One") && !has(t, "tip.Two") && !has(t, "mod.new"), "the file's tips, and the key cleared, are forgotten in the file");
+        check(has(t, "*\thome\tseen") && has(t, "*\ttip.Own\tseen") && has(t, "C.dll\ttip.New\tseen"),
+              "the platform's own entries are kept, and the tip set afterwards is in");
+        seen_set("C.dll", "Next");
+        check(seen_has("*", "home") && !seen_has("A.dll", "tip.One") && !seen_has("A.dll", "mod.new") && seen_has("C.dll", "tip.New"),
+              "the next change reads it: the store agrees with the file");
     }
 
     // ---- from many threads at once
