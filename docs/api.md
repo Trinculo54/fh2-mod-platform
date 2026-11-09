@@ -863,7 +863,7 @@ int show_page_hint(FH2Mod* mod, const char* page_key, int index, uint32_t kind);
 
 Ready-made pieces of the game's own UI that you fill with text: pop-ups on the game's own HUD notification, tips that show once, the game's message box, UI sounds, and the help bar and hint line of your pages. The platform draws them in the game's look, decides when they show, and never takes XAML from you, so nothing you pass can break the game's screens.
 
-> **Being built.** Platform 2.9.0 is still being written. Every member below is in `FH2ModApi` already, so you can build against it, but the ones marked **(being built)** don't work yet: they return 0 (`ui_status` returns no bits, which says that nothing works) and the first call of each says in `platform.log` that it "isn't in this build yet". `ui_uses` works. This section describes them as they're designed, and loses each mark as its member is done.
+> **Being built.** Platform 2.9.0 is still being written. Every member below is in `FH2ModApi` already, so you can build against it, but the ones marked **(being built)** don't work yet: they return 0 and the first call of each says in `platform.log` that it "isn't in this build yet". `ui_status`, `ui_uses`, the pop-ups and the tips work. This section describes them as they're designed, and loses each mark as its member is done.
 
 **Which one for what:**
 
@@ -890,12 +890,12 @@ Ready-made pieces of the game's own UI that you fill with text: pop-ups on the g
 
 ### ui_status and ui_uses
 
-- **`ui_status`** **(being built)** says what works now, as `FH2_UI_` bits. It's cheap, so ask it whenever it matters:
+- **`ui_status`** says what works now, as `FH2_UI_` bits. It's cheap, so ask it whenever it matters:
 
   | Bit | Means |
   |---|---|
-  | `FH2_UI_TOASTS` | Pop-ups and tips can show this session: the game's notification code is as expected, and the platform's hooks for them are in. |
-  | `FH2_UI_TOASTS_OFF` | The player turned mod pop-ups off: the platform's "Mod pop-ups" row, your mod's "Pop-ups" row, or the game's Minor notifications option, which the platform follows. |
+  | `FH2_UI_TOASTS` | Pop-ups and tips can show this session: the game's notification code is as expected, and the platform's hooks for them are in. Not set until the game's code is ready, a few seconds after start-up: pop-ups and tips sent before then wait, as they do for the first drive. |
+  | `FH2_UI_TOASTS_OFF` | The player turned mod pop-ups off: the platform's "Mod pop-ups" row, your mod's "Pop-ups" row, or the game's Notifications setting (Pause > Settings > HUD, the "Minor notifications" option inside the game), which the platform follows. |
   | `FH2_UI_TIPS_OFF` | The player turned tips off. |
   | `FH2_UI_ON_SCREEN` | The free-roam HUD page is on screen now. |
   | `FH2_UI_GAME_HUD_HIDDEN` | The game has suspended its HUD (a car meet, a Rivals event). |
@@ -926,7 +926,7 @@ Plays one of the game's own UI sounds, wherever the player is. From a page, titl
 
 The release notes say which of the others have been tested and play. The same numbers are the HUD layer preview's sounds ([hud-layer-preview.md](hud-layer-preview.md)).
 
-### show_toast and clear_toast (being built)
+### show_toast and clear_toast
 
 ```c
 typedef struct FH2Toast {
@@ -943,14 +943,17 @@ typedef struct FH2Toast {
 
 A pop-up on the game's own HUD notification: one of its pictures, a title and a line, at the bottom centre of the driving view for about 5 seconds, exactly as the game shows a discovered road or an unlocked achievement.
 
-- **One queue for every mod**, spaced around the game's own notifications. One with the same `key` as one of yours that is waiting replaces it (a second F8 press replaces the first's pop-up); one already on screen runs its 5 seconds. Up to `FH2_TOAST_MAX_WAITING` (4) of yours wait at once, and a 5th drops your oldest waiting one.
-- **The player decides** whether mod pop-ups show: the game's Minor notifications option, the platform's "Mod pop-ups" row and your mod's "Pop-ups" row (`FH2_UI_TOASTS_OFF`).
-- **Flags.** `FH2_TOAST_FLAG_URGENT`: a fault the player must know about and act on; it goes first in the queue, twice a session per mod (later ones are treated as normal). `FH2_TOAST_FLAG_REPLY`: it answers the player's own press, honoured when it comes within 1 s of your hotkey, command or callback being called, and dropped if it can't show within 6 s. `FH2_TOAST_FLAG_PRIVATE`: the text may name people, so the log gets your mod's name and the key only, and "Recent pop-ups" shows "(private)".
+- **One queue for every mod**, spaced around the game's own notifications: one starts only once nothing has shown for 5 seconds, whether it was the game's (a road discovered, a barn find), another mod's or yours. One with the same `key` as one of yours that is waiting replaces it where it stands (a second F8 press replaces the first's pop-up); one already on screen runs its 5 seconds, and the same one again isn't queued. Up to `FH2_TOAST_MAX_WAITING` (4) of yours wait at once, and a 5th drops your oldest waiting one that isn't urgent.
+- **The player decides** whether mod pop-ups show: the game's Notifications setting (Pause > Settings > HUD), the platform's "Mod pop-ups" row and your mod's "Pop-ups" row (`FH2_UI_TOASTS_OFF`). With the game's setting off, the game draws no notification at all, so `show_toast` returns 0 and the ones waiting are dropped.
+- **Waiting.** A pop-up waits while the player is in a menu, photo mode, a replay, loading or a cutscene, and while the game has its HUD suspended (a car meet, a Rivals event). `expire_s` counts only the time it could have shown, waiting behind other pop-ups included, so one sent from `fh2mod_init` waits for the first drive.
+- **Flags.** `FH2_TOAST_FLAG_URGENT`: a fault the player must know about and act on; it goes first in the queue, twice a session per mod (later ones are treated as normal), and waits up to 10 minutes of time it could have shown. `FH2_TOAST_FLAG_REPLY`: it answers the player's own press, honoured when it comes within 1 s of the platform calling your hotkey, command, page, setting or title-screen callback (otherwise it's a normal pop-up, and the log says so once), goes before the normal ones, and is dropped if it couldn't show within 6 s of such time: a late answer confuses more than it helps. `FH2_TOAST_FLAG_PRIVATE`: the text may name people, so the log gets your mod's name and the key only, and "Recent pop-ups" shows "(private)".
+- **Text.** The title is shown in capitals made in the player's language, cut at 28 characters; the line as given, cut at 45. Until the platform's wide text has been seen working in game, text beyond ASCII reaches the game's notification with plain letters ("ł" as "l", "ß" as "ss", "…" as "..."), and letters with no plain form (Cyrillic, Japanese, Korean, Chinese) as "?": the game's own way in for text takes the Windows code page. `fh2-mods\platform-popups.ini` with `[popups]` and `WideText=1` turns the wide text on, for testing it.
+- **Sounds.** None by default: the game's notification chimes by itself, so `FH2_SOUND_NOTIFY` is never played with one. Any other sound plays as the pop-up appears.
 - **Icons** are the game's own nine pictures, which always show: `FH2_ICON_TROPHY` (an achievement), `_ROADS` (a road discovered), `_PHOTO`, `_BOARDS` (a bonus board), `_BUCKET` (a bucket list challenge), `_CARMEET`, `_CLUB` (a club payout), `_PAYOUT` (a Drivatar payout) and `_BARNFIND`; or `FH2_ICON_NONE`.
-- **Returns** 1 if queued (it can still expire or be dropped), 0 if not: pop-ups off, no title, a bad key; the log says which.
+- **Returns** 1 if queued (it can still expire or be dropped), 0 if not: pop-ups off, no title, a bad key; the log says which. Lines about replacing, dropping and queuing are written at most once per 10 s for each key, with a count of the rest.
 - **`clear_toast`** takes down your waiting pop-up `key`, or all your waiting ones for `NULL`. One already on screen runs its 5 seconds.
 
-### show_tip, tip_seen and set_tip_seen (being built)
+### show_tip, tip_seen and set_tip_seen
 
 ```c
 typedef struct FH2Tip {
@@ -964,10 +967,10 @@ typedef struct FH2Tip {
 } FH2Tip;
 ```
 
-A hint with a button in it, "Press {button} to keep it", shown once rather than every session: a pop-up with your mod's name as its title and the tip as its line, after `delay_s` seconds of driving and at least 3 minutes after any other mod's tip. One tip per mod a session, and three from every mod together.
+A hint with a button in it, "Press {button} to keep it", shown once rather than every session: a pop-up with your mod's name as its title and the tip as its line, after `delay_s` seconds of driving with nothing else showing and at least 3 minutes after any other mod's tip, never in the first 12 seconds the driving view is up (the platform's own notice), and after every waiting pop-up. One tip per mod a session (a second `show_tip` takes the waiting one's place), and three from every mod together.
 
-- **The button** is written for the device the player used last: "(A)" on a controller, "[SPACE]" on the keyboard, a chord as "(LB) + (RB) + (X)". Set `button.hotkey` to one of your hotkeys' keys (API 9) and it shows the player's current binding.
-- **Seen.** The platform remembers which tips were seen, in `fh2-mods\platform-seen.txt`, by your DLL's file name and the tip's `key`. A tip counts as seen only once it was really drawn: with the game's Minor notifications off, `show_tip` returns 0 and the tip isn't used up. With `FH2_TIP_FLAG_UNTIL_DONE` it's seen only when you call `set_tip_seen(mod, key, 1)`, once the player has done the thing, and `max_sessions` caps how many sessions it shows in until then.
+- **The button** is written for the device the player used last, as it is when the tip shows: "(A)" on a controller, "[SPACE]" on the keyboard, a chord as "(LB) + (RB) + (X)", a key with modifiers as "[CTRL] + [Z]". Set `button.vk` and `button.glyph` both, so it's right on either; one without the other is used on both. The space bar and the arrow keys are named in the player's language ("[SPACJA]" in Polish), the other keys as their keycaps print them ("[ENTER]", "[F9]"). Set `button.hotkey` to one of your hotkeys' keys (API 9) and it shows the player's current binding; a tip whose hotkey is bound to nothing then isn't shown.
+- **Seen.** The platform remembers which tips were seen, in `fh2-mods\platform-seen.txt`, by your DLL's file name and the tip's `key` (written there as `tip.<key>`). A tip counts as seen only once it was really drawn: with the game's Minor notifications off, `show_tip` returns 0 and the tip isn't used up. With `FH2_TIP_FLAG_UNTIL_DONE` it's seen only when you call `set_tip_seen(mod, key, 1)`, once the player has done the thing, and `max_sessions` caps how many sessions it shows in until then.
 - **`tip_seen`** returns 1 if the tip `key` has been seen. **`set_tip_seen`** marks it seen (1), which also drops it if it's waiting, or not seen (0), to show it again.
 - **The player** can turn tips off ("Tips" on the platform's page) and bring every mod's tips back ("Show tips again"). Deleting `platform-seen.txt` brings them back too, which is also how to test yours.
 - **Returns** 1 if queued, 0 if it was seen, tips or the game's Minor notifications are off, or a button is set but the text has no `{button}` (the log says which).

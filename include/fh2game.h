@@ -220,24 +220,29 @@
 #define FH2_GAME_SETSTAT_AT 0x2F7977
 #define FH2_GAME_SETSTAT_AT_BYTES "\x45\x33\xC9\x45\x8D\x41\x20"
 
-/* An instruction in the HUD notification's constructor. Achievements. */
+/* An instruction in the HUD notification's constructor. Shared, chained by the platform (its pop-ups, API 10)
+ * and Achievements; new mods use show_toast. */
 #define FH2_GAME_HUD_NOTIFICATION_CTOR_AT 0x73E0B1
 #define FH2_GAME_HUD_NOTIFICATION_CTOR_AT_BYTES "\x48\x8D\x8B\xA0\x01\x00\x00"
 
-/* An instruction in the HUD notification's destructor. Achievements. */
+/* An instruction in the HUD notification's destructor. Shared, chained by the platform (its pop-ups, API 10)
+ * and Achievements; new mods use show_toast. */
 #define FH2_GAME_HUD_NOTIFICATION_DTOR_AT 0x73F046
 #define FH2_GAME_HUD_NOTIFICATION_DTOR_AT_BYTES "\x48\x89\x41\x28\x48\x81\xC1\xA0\x01\x00\x00"
 
-/* An instruction in the AchievementsModule's tick. Achievements; also the platform's HUD layer pump, when
- * a mod has a layer (instruction hooks there chain). */
+/* An instruction in the AchievementsModule's tick. Shared, chained by the platform (its pop-ups' tick, API 10,
+ * and the HUD layer's pump) and Achievements: instruction hooks there chain. */
 #define FH2_GAME_ACHIEVEMENTSMODULE_TICK_AT 0x3FCD84
 #define FH2_GAME_ACHIEVEMENTSMODULE_TICK_AT_BYTES "\x8B\x81\xA8\x00\x00\x00"
 
-/* MakeDisplayString. Achievements. */
+/* MakeDisplayString. Achievements, FH2MP; new mods use show_toast. Its first 16 bytes must stay unpatched:
+ * Achievements 1.0.x checks 15 of them in memory, FH2MP 1.2.0 all 16. */
 #define FH2_GAME_MAKE_DISPLAY_STRING 0x323310
 #define FH2_GAME_MAKE_DISPLAY_STRING_BYTES "\x40\x57\x48\x83\xEC\x30\x48\xC7\x44\x24\x28\xFE"
 
-/* Shows a HUD notification. Achievements. */
+/* Shows a HUD notification. Achievements; new mods use show_toast, which shares the game's notification with
+ * every mod and paces it with the game's own. Its first 16 bytes must stay unpatched: Achievements 1.0.x checks 15
+ * of them in memory. */
 #define FH2_GAME_SHOW_NOTIFICATION 0x755330
 #define FH2_GAME_SHOW_NOTIFICATION_BYTES "\x4C\x89\x4C\x24\x20\x4C\x89\x44\x24\x18\x48\x89"
 
@@ -329,8 +334,12 @@
  * 0xD9FC10, 0xDC8A60, 0xDC6C40, 0xDC6E30 and 0xD9F9F0; the HUD options page 0xB3A3E0 and
  * 0xB0B990; the Marketplace handlers 0xDBD720, 0xDBDD00, 0xDBDD60 and 0xDBFE40; the
  * Achievements tile's calls 0xDBD635 and 0xDBF185; and the title screen's buttons (Splash vtable
- * +0x578, game+0x2E53940); and, when a mod has a HUD layer (preview), the free-roam HUD's vtable slots
- * +0x488, +0x4F8 and 0 (game+0x2DEFE50, 0x2DEFEC0, 0x2DEF9C8). Don't hook them: use the platform's
- * settings, pages and title-screen entries instead. */
+ * +0x578, game+0x2E53940); the HUD options page's vtable slots game+0x2DF06C0 and 0x2DF07B0; the
+ * Marketplace tab's five byte patches; the media resolver's slot game+0x2E6EF28 (without Extra
+ * Options); the pad layer's game+0x10768D0; when a mod has a HUD layer (preview) or uses pop-ups or tips
+ * (API 10), the free-roam HUD's vtable slots +0x488, +0x4F8 and 0 (game+0x2DEFE50, 0x2DEFEC0,
+ * 0x2DEF9C8); and for pop-ups and tips, the three calls of the minor-notification gate game+0x754920
+ * at game+0x75542C, 0x7555A5 and 0x750FB1. Don't hook them: use the platform's settings, pages,
+ * title-screen entries and pop-ups instead. */
 
 #endif /* FH2GAME_H */
