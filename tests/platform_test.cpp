@@ -460,6 +460,25 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "wrote LoadingMessages.str for 3 languages (2 key edits, 1 of them in each language's own words, "));
         CHECK(has(log, "[TestMod] set_setting_text: Button has 3 choices, not 2") &&
               has(log, "[TestMod] set_setting_text: there's no row called Nope"));
+        // the UI templates (API 10): every member there; ui_uses records what a mod uses, from fh2mod_init only; the
+        // others are being built: each returns 0 (ui_status: nothing works yet) and says so once, whoever calls it
+        CHECK(has(log, "[TestMod] ui templates: all 12 members there"));
+        CHECK(has(log, "[TestMod] ui_uses: 0x100 isn't a bit this platform knows, so it's ignored"));
+        CHECK(has(log, "[TestMod] UI templates: it uses pop-ups, tips\n") || has(log, "[TestMod] UI templates: it uses pop-ups, tips\r\n"));
+        CHECK(has(log, "[TestMod] UI templates: it uses pop-ups, tips, a pop-ups row of its own"));
+        CHECK(has(log, "[TestMod] ui templates: ui_uses 1, ui_status 0, the others 0"));
+        CHECK(has(log, "[TestMod] ui_uses wasn't called from fh2mod_init, so it's ignored"));
+        for (const char* m : {"ui_status", "play_ui_sound", "show_toast", "clear_toast", "show_tip", "tip_seen", "set_tip_seen",
+                              "show_message_box", "set_page_help", "set_page_hints", "show_page_hint"}) {
+            const std::string line = std::string("[TestMod] ") + m + " isn't in this build yet, ";
+            const std::size_t at   = log.find(line);
+            const bool once = at != std::string::npos && log.find(line, at + 1) == std::string::npos;
+            std::printf("%s ui templates: %s says once that it isn't in this build yet\n", once ? "ok  " : "FAIL", m);
+            if (!once) ++fails;
+        }
+        CHECK(has(log, "[TestMod] Test pop-up: from the helper") && has(log, "[TestMod] ui helpers ok"));
+        // nothing was seen, so the platform hasn't written platform-seen.txt
+        CHECK(!fs::exists("fh2-mods\\platform-seen.txt"));
         // commands (API 9): through fh2mod.exe, as a tool would
         {
             const std::wstring pid = L"--pid " + std::to_wstring(GetCurrentProcessId()) + L" ";
