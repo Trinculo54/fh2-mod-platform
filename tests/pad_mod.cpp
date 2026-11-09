@@ -18,8 +18,8 @@ void on_press(void*, const char* key, uint32_t button) {
     char line[96];
     std::snprintf(line, sizeof line, "press %s 0x%04X (buttons %d 0x%04X)", key, button, ok, held);
     g_api->log(g_mod, line);
-    // API 10: a pop-up from a mod that never declared pop-ups, sent mid-session; the platform's hooks for them are
-    // in all the same, so ui_status has FH2_UI_TOASTS
+    // API 10: a pop-up from a mod that declared tips but not pop-ups, sent mid-session: the platform's hooks are in
+    // (a mod declared tips), so it's queued with a line asking for the declaration, and ui_status has FH2_UI_TOASTS
     static bool toasted = false;
     if (toasted || g_api->api_version < 10) return;
     toasted    = true;
@@ -44,6 +44,7 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     info.platform_version = FH2MOD_PLATFORM_VERSION;
     g_mod                 = api->register_mod(&info);
     if (!g_mod) return 1;
+    if (api->api_version >= 10) api->ui_uses(g_mod, FH2_UI_USES_TIPS);   // so the pop-up hooks go in (against the real exe)
     g_pad = static_cast<const FH2PadInterface*>(api->get_interface(FH2_PAD_INTERFACE, 1));
     if (!g_pad) {
         api->log(g_mod, "no pad interface");

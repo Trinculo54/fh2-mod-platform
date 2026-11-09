@@ -940,7 +940,7 @@ Ready-made pieces of the game's own UI that you fill with text: pop-ups on the g
   - `FH2_UI_USES_OWN_SWITCH`: you have a pop-ups row of your own, so the platform adds none.
   - `FH2_UI_USES_TIPS`: you show tips. The platform then watches the controller as well as the keyboard, to know which the player used last.
 
-  A mod that shows pop-ups without saying so still has them shown, but gets no row, and the log asks it to declare them.
+  Declare them: the platform hooks the game's notification only in a session where a mod declared pop-ups or tips, as soon as the game's code is ready, since it has to see the notification being made long before the first pop-up. Its sites are shared with other mods' hooks (Achievements, CommunityGarage), so a session without such a mod leaves them alone. In that session `show_toast` and `show_tip` return 0 and the log says why. When another mod declared them, an undeclared mod's pop-ups still show, but it gets no row, and the log asks it to declare them.
 
 ### play_ui_sound (being built)
 

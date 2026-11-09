@@ -842,6 +842,8 @@ int wmain(int argc, wchar_t** argv) {
         // no fault of the layer's in any case
         CHECK(!has(log, "crashed in the game's code") && !has(log, "[HUD layer] notify crashed"));
     } else if (online_phase) {
+        // no mod here declares pop-ups or tips, so the platform leaves the game's notification alone (2.9.0)
+        CHECK(has(log, "[Pop-ups] pop-ups and tips are off this session: no mod declared pop-ups or tips in fh2mod_init"));
         const auto known = slurp("fh2-mods\\platform-mods.txt");
         const bool pages = fs::exists(L"FH2\\Mount\\media\\UI.zip") && argc <= 2;
         const auto installed = pages ? slurp(layer() / L"UI\\Scenes\\Anthem\\A_ModPage_01.xaml") : std::string();

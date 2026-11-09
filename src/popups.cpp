@@ -24,10 +24,12 @@
 //    fh2-mods\platform-popups.ini until it has been seen working in game (T10).
 // Every game address is checked against the exe on disk before use; a group that doesn't match turns off only what
 // needs it, with a log line. Game calls go through one SEH-guarded helper that holds no object with a destructor.
-// The hooks go in every session the game is FH2, whether or not a mod declared pop-ups or tips: the notification
-// component is made, and the HUD page first shown, long before a mod may send its first pop-up (a hotkey's reply,
-// a fault), and only these hooks see either. They're read-only and chained, and S5 found every released mod's
-// in-memory checks clear of them.
+// The hooks go in only in a session where a mod declared pop-ups or tips in fh2mod_init (ui_uses), as soon as the
+// game's code is ready: the notification component is made, and the HUD page first shown, long before a mod may send
+// its first pop-up (a hotkey's reply, a fault), and only these hooks see either, so they can't wait for the first
+// call. A session with no such mod leaves the game's notification code alone (its sites are shared with
+// Achievements' and CommunityGarage's hooks), and an undeclared show_toast or show_tip returns 0 with a log line.
+// They're read-only and chained, and S5 found every released mod's in-memory checks clear of them.
 #include "popups.hpp"
 
 #include "hud_layer.hpp"
@@ -49,6 +51,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -235,6 +238,8 @@ bool check_group(const char* group, const char* what_goes, const std::vector<Ent
 // ---- the session's state ----------------------------------------------------------------------------------------
 
 std::once_flag g_start_once;
+std::atomic<bool> g_started{false};      // a mod declared pop-ups or tips in fh2mod_init, so the hooks are on their way
+std::atomic<bool> g_prepared{false};     // every mod's fh2mod_init has returned, so the declarations are known
 std::atomic<bool> g_track_wanted{false}; // the page tracking hooks are asked for (F1)
 std::atomic<bool> g_ready{false};        // the tick, the component hooks and their code checks are in
 std::atomic<bool> g_watch{false};        // all three gate calls are watched
@@ -688,6 +693,7 @@ void start_thread() {
 void start() {
     if (!g_api.load()) return;   // popups_prepare starts it
     std::call_once(g_start_once, [] {
+        g_started      = true;
         g_track_wanted = true;
         std::thread(start_thread).detach();
     });
@@ -749,13 +755,28 @@ uint32_t popups_status(FH2Mod* m) {
     return b;
 }
 
+// A pop-up or tip from a session where no mod declared them: said once a mod.
+static void undeclared_note(FH2Mod* m, const char* what) {
+    static std::mutex mu;
+    static std::set<FH2Mod*> told;
+    {
+        std::scoped_lock lk{mu};
+        if (!told.insert(m).second) return;
+    }
+    log_line(m->name, std::string(what) + ": no mod declared pop-ups or tips in fh2mod_init (ui_uses with FH2_UI_USES_TOASTS or " +
+                          "FH2_UI_USES_TIPS), so the platform left the game's notification alone this session and this doesn't show");
+}
+
 int popups_show_toast(FH2Mod* m, const FH2Toast* t) {
     if (!m) return 0;
     if (stopped_online(m)) {
         log_line(m->name, "show_toast: this mod was stopped for online play, so its pop-ups don't show");
         return 0;
     }
-    want(false);
+    if (g_prepared.load() && !g_started.load()) {   // no mod declared pop-ups, so the game's notification was left alone
+        undeclared_note(m, "show_toast");
+        return 0;
+    }
     return queue().show_toast(mod_ref(m), t, now_ms());
 }
 
@@ -769,7 +790,11 @@ int popups_show_tip(FH2Mod* m, const FH2Tip* t) {
         log_line(m->name, "show_tip: this mod was stopped for online play, so its tips don't show");
         return 0;
     }
-    want(true);
+    if (g_prepared.load() && !g_started.load()) {
+        undeclared_note(m, "show_tip");
+        return 0;
+    }
+    want(true);   // tips' controller poll, if no mod asked for tips at start
     return queue().show_tip(mod_ref(m), t, now_ms());
 }
 
@@ -788,8 +813,13 @@ void popups_prepare(const FH2ModApi* api) {
         plog_f("WideText=1 (fh2-mods\\platform-popups.ini): pop-up text goes to the game as UTF-16, untested in game until T10 passes");
     }
     g_api = api;
-    // the hooks always (see the top of this file); the controller poll only once a mod has said or sent tips
-    want(any_mod_uses(FH2_UI_USES_TIPS));
+    // The hooks only in a session where a mod declared pop-ups or tips (see the top of this file); the controller
+    // poll only for tips.
+    // A pop-up or tip sent from fh2mod_init waited in the queue until now; without a declaration it's dropped here.
+    const bool declared = any_mod_uses(FH2_UI_USES_TOASTS | FH2_UI_USES_TIPS);
+    if (declared) want(any_mod_uses(FH2_UI_USES_TIPS));
+    g_prepared = true;
+    if (!declared) off("no mod declared pop-ups or tips in fh2mod_init, so the game's notification code is left alone");
 }
 
 bool popups_track_page() { return g_track_wanted.load(); }

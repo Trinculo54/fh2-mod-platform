@@ -160,7 +160,8 @@ int wmain(int argc, wchar_t** argv) {
     for (std::size_t at = 0; (at = log.find("[PadMod] press ", at)) != std::string::npos; ++at) ++presses;
     CHECK(presses == 4);
     CHECK(!has(log, "crashed in its on_press"));
-    // its pop-up, sent mid-session without declaring pop-ups: queued, and ui_status says they can show
+    // its pop-up, sent mid-session without declaring pop-ups (it declared tips, so the hooks are in): queued, with a
+    // line asking it to declare them, and ui_status says they can show
     CHECK(has(log, "[PadMod] shows pop-ups without saying so"));
     CHECK(has(log, "[PadMod] pop-up queued: Pad layer / A press (key Press)"));
     CHECK(has(log, "[PadMod] show_toast 1, then ui_status has pop-ups: yes"));

@@ -670,7 +670,10 @@ typedef struct FH2ModApi {
        FH2_UI_USES_TOASTS the platform adds a "Pop-ups" row to your mod's
        page, unless you also pass FH2_UI_USES_OWN_SWITCH because you have a
        row of your own; FH2_UI_USES_TIPS starts the controller poll that tells
-       which device the player used last. Returns 1, or 0 after fh2mod_init. */
+       which device the player used last. Declare pop-ups and tips here: the
+       platform hooks the game's notification only in a session where a mod
+       did, and otherwise show_toast and show_tip return 0. Returns 1, or 0
+       after fh2mod_init. */
     int (*ui_uses)(FH2Mod* mod, uint32_t uses);
     /* Plays one of the game's UI sounds (FH2_SOUND_), wherever the player
        is. From a page, title or box callback it plays at once; from any other
