@@ -3735,15 +3735,19 @@ constexpr uintptr_t RVA_BACK_SOUNDS = 0x3684B90;
 constexpr uintptr_t RVA_BACK_SOUND_CODE = 0x0CEC418;   // checked: the page's B playing it
 const char* const kSoundBack = "/Master/UI/PopUpMenu/HZ2_SFX_HUD_PopUpMenu_Back_01";
 
-void play_sound_inner(const char* name, uintptr_t player_rva) {
-    void* player = *reinterpret_cast<void**>(g_base + player_rva);
-    if (!player) return;
+// `base`: the game's (settings.cpp's g_base, or play_ui_sound's own, which doesn't wait for the MODS tab's hooks).
+// False when the player isn't up yet.
+bool play_sound_at(uintptr_t base, const char* name, uintptr_t player_rva) {
+    void* player = *reinterpret_cast<void**>(base + player_rva);
+    if (!player) return false;
     GameString str{};
     str.cap = 15;
-    reinterpret_cast<void (*)(GameString*, const char*, std::size_t)>(g_base + RVA_STRING_ASSIGN)(&str, name, std::strlen(name));
+    reinterpret_cast<void (*)(GameString*, const char*, std::size_t)>(base + RVA_STRING_ASSIGN)(&str, name, std::strlen(name));
     void** vt = *reinterpret_cast<void***>(player);
     reinterpret_cast<void (*)(void*, GameString*)>(vt[1])(player, &str);
+    return true;
 }
+void play_sound_inner(const char* name, uintptr_t player_rva) { play_sound_at(g_base, name, player_rva); }
 
 void play_sound(const char* name, uintptr_t player_rva = RVA_UI_SOUNDS) {
     if (!g_sounds_ok) return;
@@ -6046,6 +6050,7 @@ FH2Mod* settings_owner() { return &g_owner_mod; }
 namespace {
 void __cdecl hud_set(void*, void*, uint8_t*) {}
 __attribute__((noinline)) void hud_play_sound_inner(const char* name) { play_sound_inner(name, RVA_UI_SOUNDS); }
+__attribute__((noinline)) bool ui_play_sound_inner(uintptr_t base, const char* name) { return play_sound_at(base, name, RVA_UI_SOUNDS); }
 } // namespace
 
 uint8_t* settings_hud_descriptor(const char* name, void* getter, int kind) {
@@ -6085,13 +6090,13 @@ bool settings_play_sound(const char* name, uint32_t* code) {
         return false;
     }
 }
-// play_ui_sound's way in (ui_sounds.hpp): its own checks are made, so not the MODS tab's.
-bool settings_play_sound_unchecked(const char* name, uint32_t* code) {
+// play_ui_sound's way in (ui_sounds.hpp): its own checks are made, so not the MODS tab's, and it brings its own base,
+// so it plays in a session where the MODS tab's hooks never went in.
+bool settings_play_sound_unchecked(uintptr_t base, const char* name, uint32_t* code) {
     *code = 0;
-    if (!g_base) return false;
+    if (!base) return false;
     __try {
-        hud_play_sound_inner(name);
-        return true;
+        return ui_play_sound_inner(base, name);
     } __except (*code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }

@@ -17,8 +17,9 @@ bool ui_sound_play_direct(uint32_t sound, uint32_t* code);
 void ui_sounds_prepare(const FH2ModApi* api);
 
 // settings.cpp: the MODS tab's own way of playing a sound by its FMOD name (the GameString to the player at
-// game+0x365A298, its vtable +0x08), without the MODS tab's checks, which ui_sounds.cpp makes its own. False if not
-// played: `code` is 0 when the game's code isn't known yet, else the exception it raised.
-bool settings_play_sound_unchecked(const char* name, uint32_t* code);
+// game+0x365A298, its vtable +0x08), without the MODS tab's checks, which ui_sounds.cpp makes its own, at the game's
+// `base` (ui_sounds.cpp's, from wait_for_code: nothing of the MODS tab's hooking is needed). False if not played:
+// `code` is 0 when the player isn't up yet, else the exception it raised.
+bool settings_play_sound_unchecked(uintptr_t base, const char* name, uint32_t* code);
 
 } // namespace fh2platform

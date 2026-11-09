@@ -170,7 +170,7 @@ Played play(uint32_t sound, uint32_t* code) {
         if (rdp(b + i.slot) != b + i.text_rva || !safe_copy(got, reinterpret_cast<const void*>(b + i.text_rva), n) || std::memcmp(got, i.text, n) != 0)
             return Played::shape;
     }
-    if (settings_play_sound_unchecked(i.text, code)) return Played::yes;
+    if (settings_play_sound_unchecked(b, i.text, code)) return Played::yes;
     if (!*code) return Played::not_up;
     g_code = -1;
     char line[160];
