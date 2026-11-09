@@ -1728,22 +1728,14 @@ bool write_custom_page(const char* file, const std::string& resources, const std
 void hub_rows_text();   // with the MODS tab's rows, below
 void follow_language();
 
-// The Mods page (Settings > Mods, and the MODS tab's All settings): every mod's rows.
-bool write_mods_page() {
-    hotkeys_refresh_text();
-    hud_layer_refresh_text();
-    std::vector<PageItem> items;
-    {
-        std::scoped_lock lk{g_mu};
-        hub_rows_text();
-        follow_language();
-        for (std::size_t i = 0; i < g_rows.size(); ++i)
-            if (g_rows[i].mod != &g_hub_owner) items.push_back({static_cast<int>(i), "", ""});
-    }
-    return write_list_page("A_ModOptions.xaml", tr("ALL SETTINGS"), items);
-}
+bool write_mods_page();   // the list that stands in for the MODS tab, with the tab's pages below
+std::string xaml_block(const std::string& text, const std::string& key, const std::string& open, const std::string& close);   // below
+bool swap_all(std::string& s, const std::string& from, const std::string& to);
 
-// Pause > Settings: a sixth column with a tall MODS tile.
+// Pause > Settings: a sixth column with a tall MODS tile, a door to YOUR MODS: "MODS", and under it "Same as
+// Pause > MODS" (FH2Mod_HubTile_<kHubLineSettings>, in the game's language as the page shows it). The tile is the
+// game's own A_ControlTemplate_VerticalIconTile (Shared_TiledMenus.xaml) with that line under the title; if the
+// game's template doesn't look as expected, it's the game's, without the line.
 bool write_settings_page() {
     std::string page = read_ui("Scenes/Anthem/A_PauseOptions.xaml");
     if (page.empty()) return false;
@@ -1755,6 +1747,20 @@ bool write_settings_page() {
         slog("A_PauseOptions.xaml doesn't look as expected; no Mods tile");
         return false;
     }
+    std::string tile = xaml_block(read_ui("Resources/Anthem/Shared_TiledMenus.xaml"), "A_ControlTemplate_VerticalIconTile", "<ControlTemplate",
+                                  "</ControlTemplate>");
+    const std::string heading = "<local:FZTextBlock Name=\"Heading\"";
+    const std::size_t h0 = tile.find(heading), h1 = h0 == std::string::npos ? h0 : tile.find("/>", h0);
+    const bool line = h1 != std::string::npos && tile.find(heading, h1) == std::string::npos &&
+                      swap_all(tile, "x:Key=\"A_ControlTemplate_VerticalIconTile\"", "x:Key=\"FH2Mod_Template_ModsTile\"");
+    if (line) {
+        const std::string title = tile.substr(h0, h1 + 2 - h0);
+        tile.replace(h0, h1 + 2 - h0, "<StackPanel>" + title + "<local:FZTextBlock Text=\"{Binding FH2Mod_HubTile_" + std::to_string(kHubLineSettings) +
+                                          ", RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type Page}}}\" "
+                                          "Style=\"{StaticResource A_Style_FZTextBlock_TileText}\" Margin=\"0,12,0,0\" /></StackPanel>");
+    } else {
+        slog("the game's tall tile template doesn't look as expected; the Settings page's MODS tile has no second line");
+    }
     page.insert(c,
                 "\r\n                                <Button x:Name=\"PART_Button_Mods\"\r\n"
                 "                                        local:TileMenuNavigationManager.TileState=\"Enabled\"\r\n"
@@ -1764,13 +1770,15 @@ bool write_settings_page() {
                 "                                        Style=\"{DynamicResource A_Style_Button_Tile_1x2}\"\r\n"
                 "                                        Canvas.Left=\"{StaticResource A_Double_TileCoord_X_5}\"\r\n"
                 "                                        Canvas.Top=\"{StaticResource A_Double_TileCoord_Y_0}\"\r\n"
-                "                                        Template=\"{StaticResource A_ControlTemplate_VerticalIconTile}\"\r\n"
+                "                                        Template=\"{StaticResource " + std::string(line ? "FH2Mod_Template_ModsTile" : "A_ControlTemplate_VerticalIconTile") +
+                "}\"\r\n"
                 "                                        local:UIPageTransitionManager.TransitionIndex=\"6\"\r\n"
                 "                                        local:BindingProxy.C=\"DisableMotionBlur\"/>\r\n"
                 "                            ");
     page.insert(i_end + 1,
                 "            <local:TileMenuDataItem x:Key=\"FH2Mod_MenuDataItem_Mods\" Heading=\"MODS\" "
-                "Icon=\"/ForzaUI;component/Textures/Anthem/Icons/TiledMenus/Tuning1x1.png\" />\r\n");
+                "Icon=\"/ForzaUI;component/Textures/Anthem/Icons/TiledMenus/Tuning1x1.png\" />\r\n" +
+                    (line ? "            " + tile + "\r\n" : std::string()));
     return set_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseOptions.xaml", page.data(), page.size()) != 0;
 }
 
@@ -2313,6 +2321,40 @@ std::vector<PageItem> mod_page_items(std::size_t i, int& focus) {
     items.push_back({g_entry_row[i], tr("Load this mod"), tr("Off leaves it in fh2-mods, but the game doesn't load it.")});
     if (i < g_entry_online_row.size() && g_entry_online_row[i] >= 0) items.push_back({g_entry_online_row[i], "", ""});
     return items;
+}
+
+// The list that stands in for the MODS tab when its hooks don't go in (Pause > Settings > MODS then opens it),
+// A_ModOptions.xaml, "SETTINGS / MODS": a heading with each mod's name, its rows in its order, and its Load switch;
+// then where the rest is. Only B Back on its help bar (changes are saved as they're made).
+bool write_mods_page() {
+    hotkeys_refresh_text();
+    hud_layer_refresh_text();
+    std::vector<PageItem> items;
+    {
+        std::scoped_lock lk{g_mu};
+        hub_rows_text();
+        follow_language();
+    }
+    for (std::size_t i = 0; i < g_entries.size(); ++i) {
+        const ModEntry& e = g_entries[i];
+        PageItem heading  = info(e.name, about_mod(e));
+        heading.style     = FH2_ROW_HEADING;
+        heading.skip      = true;
+        items.push_back(heading);
+        if (e.mod) {
+            std::scoped_lock lk{g_mu};
+            for (std::size_t r = 0; r < g_rows.size(); ++r)
+                if (g_rows[r].mod == e.mod) items.push_back({static_cast<int>(r), "", ""});
+        }
+        items.push_back({g_entry_row[i], tr("Load this mod"), tr("Off leaves it in fh2-mods, but the game doesn't load it.")});
+    }
+    if (g_entries.empty())
+        items.push_back(info(tr("No mods installed"), trf("Mods go in the fh2-mods folder next to azimuth.exe. See {0} for some to try.", {tr("GET MODS")})));
+    else
+        items.push_back(info(tr("More for each mod"), tr("Each mod's own page, under Pause > MODS > YOUR MODS, also has its links and pages. When the "
+                                                       "MODS tab isn't there, fh2-mods\\platform.log says why.")));
+    return write_list_page("A_ModOptions.xaml", "MODS", items, true, nullptr, nullptr, nullptr, "{local:Loc ScreenTitles.IDS_MyProfile}",
+                           kPanelLegend);
 }
 
 // Updates: the mods with a newer version out (in yellow), then how the checks work (only that,
@@ -2869,19 +2911,39 @@ using SceneRecFn   = uint8_t* (*)(uint8_t* out);
 WireTilesFn o_wire_tiles = nullptr;
 SceneRecFn o_hud_scene   = nullptr;
 
-std::atomic<uint64_t> g_mods_asked{0};   // GetTickCount64() when the tile was pressed
-bool g_in_mods = false;                  // on the Mods page (UI thread only)
+std::atomic<uint64_t> g_mods_asked{0};   // GetTickCount64() when the tile opened the stand-in list
 std::string g_asked_values;              // the values the restart popup last asked about
 bool g_popup_ok = false;
 
-void hub_reset();
+// One home, two doors: Pause > Settings > MODS and Pause > MODS > YOUR MODS open the same list. Which door the
+// player came in by (UI thread only): the parent page's wiring hook (d_wire_tiles, d_pause_menu_wire) asks
+// about a restart as the player comes back through it, and Go back goes in again by the same door.
+enum Route { kRouteNone, kRouteSettings, kRouteTab };
+int g_route      = kRouteNone;
+int g_route_page = 1;                    // the MODS tab's page the player was on (HubPage)
+bool g_go_back   = false;                // the next page opens where the player left it (Go back)
+std::atomic<bool> g_hub_ready{false};    // the MODS tab's hooks are in: the Settings door opens YOUR MODS
 
+void hub_reset();
+void prepare_hub(int which, bool resume);   // with the MODS tab's tiles, below
+
+// The Settings page's MODS tile: YOUR MODS, through the HUD tile's handler, so B comes back to Settings. Without
+// the MODS tab's hooks, the list that stands in for it.
 void mods_tile_pressed(void* page) {
     hub_reset();
-    write_mods_page();   // up to date: the mods may have changed their rows' text (set_setting_text)
-    g_in_mods    = true;
-    g_mods_asked = GetTickCount64();
+    g_route = kRouteSettings;
+    if (g_hub_ready.load()) {
+        prepare_hub(1, std::exchange(g_go_back, false));   // kHubInstalled
+    } else {
+        g_go_back = false;
+        write_mods_page();   // up to date: the mods may have changed their rows' text (set_setting_text)
+        g_mods_asked = GetTickCount64();
+    }
     reinterpret_cast<TileFn>(g_base + RVA_HUD_TILE)(page);
+}
+void settings_go_back(void* page) {
+    g_go_back = true;
+    mods_tile_pressed(page);
 }
 
 void wire_mods_tile(void* page) {
@@ -2927,7 +2989,10 @@ std::atomic<int> g_hub_page{0};
 std::atomic<uint64_t> g_hub_asked{0};
 std::atomic<int> g_hub_builds{0};
 std::atomic<int> g_hub_shown{0};         // the tab's page being opened, for wiring its rows
-bool g_in_hub = false;                   // on one of the MODS tab's pages (UI thread only)
+// The mod's page (a view of YOUR MODS) and row the player last left with B, for Go back; g_resume: the YOUR
+// MODS being opened shows that view, and focuses that row once it's loaded (UI thread only).
+int g_last_view = 0, g_last_row = 0;
+bool g_resume   = false;
 
 void hub_reset() {
     g_hub_builds = 0;
@@ -3208,14 +3273,17 @@ void d_wire_tiles(void* page) {
     }
     o_wire_tiles(page);
     wire_mods_tile(page);
-    // back from the Mods page with a change that needs a restart, not asked about yet?
-    const bool from_mods = g_in_mods;
-    g_in_mods            = false;
+    // the tile's second line, in the game's language now
+    if (page && g_hub_tile_desc[kHubLineSettings] && g_hub_tile_obj[kHubLineSettings].load() == page)
+        notify_changed(page, g_hub_tile_desc[kHubLineSettings]);
+    // back through the Settings door with a change that needs a restart, not asked about yet?
+    const bool from_mods = g_route == kRouteSettings;
+    if (from_mods) g_route = kRouteNone;
     if (from_mods && g_popup_ok && restart_pending()) {
         std::string now = current_values();
         if (now != g_asked_values) {
             g_asked_values = now;
-            g_popup_back   = &mods_tile_pressed;
+            g_popup_back   = &settings_go_back;
             if (show_popup(page)) slog("asked about restarting");
         }
     }
@@ -3241,7 +3309,9 @@ constexpr uintptr_t RVA_MARKETPLACE_HIDE[] = {0x0DDACAD, 0x0DDAE1F, 0x0DDB2F5, 0
 WireTilesFn o_pause_menu_wire = nullptr;
 TileFn o_car_packs = nullptr, o_expansions = nullptr, o_extras = nullptr, o_vip = nullptr;
 
-void open_hub_page(void* page, int which) {
+// Before one of the MODS tab's pages opens, from either door: up to date, and asked for. `resume`: YOUR MODS
+// opens on the mod's page and row the player last left (Go back).
+void prepare_hub(int which, bool resume) {
     // the mods' pages on it get to set their rows first
     if (which == kHubInstalled) {
         pages_opening();
@@ -3259,11 +3329,23 @@ void open_hub_page(void* page, int which) {
         if (j >= 0) pages_opening(j);
     }
     write_hub_page(which);   // up to date (update checks finish after the game starts)
-    g_in_hub     = true;
-    g_view       = 0;   // before the page's bindings first read it
-    g_view_back  = false;
+    g_view_back = false;
+    g_resume    = resume && which == kHubInstalled && g_last_view > 0 && view_kind(g_last_view) == kViewMod;
+    if (!g_resume) g_last_view = 0;
+    g_view = g_resume ? g_last_view : 0;   // before the page's bindings first read it
     hub_ask(which);
+}
+
+// A MODS tab tile: its page, through the Car Packs handler (see pause.xml), so B comes back to the tab.
+void open_hub_page(void* page, int which) {
+    prepare_hub(which, std::exchange(g_go_back, false));
+    g_route      = kRouteTab;
+    g_route_page = which;
     o_car_packs(page);
+}
+void tab_go_back(void* page) {
+    g_go_back = true;
+    open_hub_page(page, g_route_page);
 }
 // The menus' sounds, played as the HUD page plays SubMenuOpen when it's shown (0x140C7AD40):
 // a std::string of the sound's name, made with the game's own assign (0x14022C300) and handed
@@ -3365,7 +3447,11 @@ void switch_view(void* page, int k, bool back, int row) {
     g_view_back = back;
     std::string name;
     if (k == 0) {
-        // back on the mod's own row in the list
+        // back on the mod's own row in the list; Go back comes back to the page and row left
+        if (view_kind(old) == kViewMod) {
+            g_last_view = old;
+            g_last_row  = g_view_selected.load();
+        }
         g_view_selected = 0;
         name = old <= 1 ? "FirstItem" : "PART_Button_FH2Mod_" + std::to_string(old - 1);
     } else {
@@ -3392,6 +3478,31 @@ void switch_view(void* page, int k, bool back, int row) {
     } else if (static_cast<std::size_t>(k) <= g_entries.size()) {
         slog("showing " + g_entries[k - 1].name + "'s settings");
     }
+}
+
+// Go back from the restart popup: YOUR MODS has just loaded showing the mod's page the player left; the focus
+// goes to the row they were on. If it can't, the list shows, as when YOUR MODS opens.
+void resume_view(void* page) {
+    const int k = g_view.load();
+    const std::size_t v = static_cast<std::size_t>(k - 1);
+    if (k <= 0 || v >= g_view_acts.size() || g_view_acts[v].empty()) return;
+    const int row = g_last_row >= 0 && static_cast<std::size_t>(g_last_row) < g_view_acts[v].size() ? g_last_row : view_focus(k);
+    const std::string name = !g_view_acts[v][row].name.empty() ? g_view_acts[v][row].name : "FH2Mod_First_" + std::to_string(k);
+    g_view_selected = row;
+    if (focus_named(page, name.c_str())) {
+        g_focus_again = name;   // once more on the button's release, as switch_view does
+        slog("back on the page the player left");
+        return;
+    }
+    slog("couldn't focus " + name + "; back to the list");
+    g_view = 0;
+    notify_view(k);
+    notify_view(0);
+    if (void* obj = g_view_obj.load())
+        for (uint8_t* d : g_bar_desc)
+            if (d) notify_changed(obj, d);
+    notify_panel(nullptr);
+    focus_named(page, "FirstItem");
 }
 
 // A on a row of a mod's page that has a key: the mod's on_select.
@@ -3456,8 +3567,7 @@ void d_hud_page_loaded(void* page) {
     if (was_shown == kHubInstalled) {
         g_installed_page = page;
         g_selected       = 0;
-        g_view           = 0;
-        g_view_back      = false;
+        g_view_back      = false;   // g_view is as prepare_hub set it: the list, or the mod's page for Go back
     } else if (g_installed_page.load() == page) {
         g_installed_page = nullptr;
     }
@@ -3475,6 +3585,7 @@ void d_hud_page_loaded(void* page) {
         g_custom_shown = -1;
     }
     o_hud_page_loaded(page);
+    if (was_shown == kHubInstalled && std::exchange(g_resume, false)) resume_view(page);
 }
 
 
@@ -3764,13 +3875,13 @@ void d_pause_menu_wire(void* page) {
         for (uint8_t* d : g_badge_descs)
             if (d) notify_changed(page, d);
     // back from the MODS tab with a change that needs a restart?
-    const bool from_hub = g_in_hub;
-    g_in_hub            = false;
+    const bool from_hub = g_route == kRouteTab;
+    if (from_hub) g_route = kRouteNone;
     if (from_hub && g_popup_ok && restart_pending()) {
         std::string now = current_values();
         if (now != g_asked_values) {
             g_asked_values = now;
-            g_popup_back   = &tile_installed;
+            g_popup_back   = &tab_go_back;   // the page (and row) the player left
             if (show_popup(page)) slog("asked about restarting");
         }
     }
@@ -3884,6 +3995,7 @@ void hook_hub() {
     }
     if (!show_marketplace_tab(m)) slog("the code that hides the Marketplace tab doesn't look as expected; MODS shows only with Extra Options' EnableMarketplace");
     g_sounds_ok = true;
+    g_hub_ready = true;   // Pause > Settings > MODS opens YOUR MODS from now on
     hook_tiles(m);
     if (g_hud_notice) {
         mod_notice_descriptor();   // made now, so the HUD hook knows there's a notice
@@ -5095,19 +5207,20 @@ void settings_start(const FH2ModApi* api) {
         clear_file(&g_owner_mod, "stateflow/pause.xml");
         clear_file(&g_owner_mod, "stateflow/ui_screens.xml");
     }
-    // Settings > Mods (also the tab's All settings)
-    bool mods_page = write_mods_page();
-    g_settings_tile = n && mods_page && write_settings_page();
+    // Pause > Settings > MODS, a door to YOUR MODS whenever a mod is installed, and the list that stands in for the
+    // MODS tab (written now, in case the tab's hooks don't go in)
+    bool mods_page = !g_entries.empty() && write_mods_page();
+    g_settings_tile = mods_page && write_settings_page();
     if (!g_settings_tile) {
-        // No rows this time (the mods that had some were removed): take the tile back out
-        // before the game reads its menus, rather than with the clean-up later.
+        // No mods this time (they were removed): take the tile back out before the game reads its
+        // menus, rather than with the clean-up later.
         remove_leftover_file("UI/Scenes/Anthem/A_PauseOptions.xaml");
         clear_file(&g_owner_mod, "UI/Scenes/Anthem/A_PauseOptions.xaml");
     }
     if (!mods_page) remove_leftover_file("UI/Scenes/Anthem/A_ModOptions.xaml");
     if (!write_hud_notice()) remove_leftover_file("UI/Scenes/Anthem/A_Hud.xaml");
     write_title_page();
-    slog(std::to_string(n) + " row(s) on the Mods page, " + std::to_string(g_entries.size()) + " mod(s) on the MODS tab" +
+    slog(std::to_string(n) + " row(s) from mods, " + std::to_string(g_entries.size()) + " mod(s) on the MODS tab" +
          (g_hub_files ? "" : " (not shown)"));
     if (g_hub_files || g_settings_tile || g_title_page || hud_layer_wants_page()) std::thread(hook_game).detach();
     hud_layer_start();
