@@ -1005,12 +1005,11 @@ void online_off(std::vector<FH2Mod*>& mods, std::vector<std::wstring>& others) {
     }
 }
 
-// Under g_mu: the game counts as online from now on, and `g` says what finish_online stops. False if
-// it already did. The mods are marked stopped before playing_online turns 1, so a mod that sees it turn
-// finds itself stopped.
+// Under g_mu: the game counts as online from now on, and finish_online stops `g`'s mods (online_off's,
+// from the same hold of the lock). False if it already did. The mods are marked stopped before
+// playing_online turns 1, so a mod that sees it turn finds itself stopped.
 bool begin_online(GoingOnline& g) {
     if (g_online) return false;
-    online_off(g.stop, g.others);
     for (FH2Mod* m : g.stop) {
         stop_online(m);
         // its text and SQL go: the tables it edits are written again, and the database built again
@@ -1067,7 +1066,9 @@ void go_online(const std::string& why) {
     GoingOnline g;
     {
         std::scoped_lock lk{g_mu};
-        if (!begin_online(g)) return;
+        if (g_online) return;
+        online_off(g.stop, g.others);
+        begin_online(g);
     }
     finish_online(why, g);
 }
@@ -1092,12 +1093,11 @@ int online_going(char* names, size_t size) {
         if (g_online) {
             ran = g_started_offline;
         } else {
-            std::vector<FH2Mod*> mods;
-            std::vector<std::wstring> others;
-            online_off(mods, others);
+            // One list, both to count and to stop: the player's "Load when playing online" read again could differ
+            online_off(g.stop, g.others);
             hooks_locked([&] {
                 return files_locked([&] {
-                    for (FH2Mod* m : mods)
+                    for (FH2Mod* m : g.stop)
                         if (const uint32_t r = ran_bits(m)) {
                             ran.push_back(m->name);
                             what += (what.empty() ? "" : "; ") + m->name + " (" +
@@ -1106,7 +1106,7 @@ int online_going(char* names, size_t size) {
                                                                         : "its game text, files or database changes were written") +
                                     ")";
                         }
-                    for (const auto& f : others) {
+                    for (const auto& f : g.others) {
                         ran.push_back(narrow(f));
                         what += (what.empty() ? "" : "; ") + narrow(f) + " (a mod from before the platform, already loaded)";
                     }
