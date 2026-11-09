@@ -272,12 +272,18 @@ void page_guard_loaded() {
         if (std::none_of(g_guard.begin(), g_guard.end(), [](const GuardEntry& e) { return e.state == "opening"; })) return;
         gen = g_opening;
     }
-    // 10 s on screen, as the HUD layer's marker has it: a missing image only fails once it's drawn
-    std::thread([gen] {
-        Sleep(10000);
-        std::scoped_lock lk{g_guard_mu};
-        if (g_opening == gen) clear_marks();
-    }).detach();
+    // 10 s on screen, as the HUD layer's marker has it: a missing image only fails once it's drawn. This runs in the
+    // game's page-loaded hook, so nothing may be thrown into the game's frames: without a thread (Windows out of
+    // them), the mark stays until the player leaves the page, as page_guard_closed takes it off then.
+    try {
+        std::thread([gen] {
+            Sleep(10000);
+            std::scoped_lock lk{g_guard_mu};
+            if (g_opening == gen) clear_marks();
+        }).detach();
+    } catch (...) {
+        plog("pages: the page's 10-second timer couldn't be started; its mark comes off when the player leaves it");
+    }
 }
 
 void page_guard_closed() {
