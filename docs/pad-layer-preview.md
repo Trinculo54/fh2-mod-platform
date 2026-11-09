@@ -2,7 +2,7 @@
 
 A pad layer lets your mod use some controller buttons while the player holds a modifier, without the game also acting on them. While LB is held, say, the d-pad is yours: the game doesn't change the radio station or open telemetry, and your mod is told about each press. Let go of LB and the d-pad is the game's again.
 
-This is a preview. It isn't part of an API version yet, and its shape can still change before it becomes one, so never make it the only way your mod can be used.
+This is a preview. Platform 2.9.0 is the first release with it, as the interface `FH2Platform.PadLayer` version 1. It isn't part of an API version yet, and its shape can still change before it becomes one, so never make it the only way your mod can be used.
 
 ## Getting it
 
@@ -16,7 +16,7 @@ if (!pad) {
 }
 ```
 
-It's there from `fh2mod_init` on. On a platform without the preview you get `NULL`, so your mod still loads.
+It's there from `fh2mod_init` on. On platform 2.8.0 and older you get `NULL`, so your mod still loads.
 
 ## Adding a layer
 

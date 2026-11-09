@@ -1,12 +1,12 @@
 /*
  * fh2mod_hud.h -- the HUD layer, a preview (MIT licensed, see LICENSE).
  *
- * PREVIEW. This isn't part of the API in fh2mod.h. Only the "2.8.0 + HUD
- * layer preview 3" build of the FH2 Mod Platform offers it, to a few testers
- * of a mod that needs it; released platforms, 2.8.0 among them, don't. When
- * the layer moves into the API, its names, limits and behaviour may all
- * change, and this interface may go. Never make it the only way your mod
- * works.
+ * PREVIEW. This isn't part of the API in fh2mod.h: it's an interface the
+ * platform publishes. Platform 2.9.0 offers version 2 (with the feed); the
+ * "2.8.0 + HUD layer preview 3" test build offered version 1, and released
+ * 2.8.0 and older don't offer it. When the layer moves into the API, its
+ * names, limits and behaviour may all change, and this interface may go.
+ * Never make it the only way your mod works.
  *
  * The layer is a heads-up display of your own, drawn by the game's own UI
  * inside its free-roam HUD page, in the game's look and fonts:
@@ -24,7 +24,7 @@
  * nothing you set can break the game's HUD page. Prompts follow the device
  * the player used last: the game's own controller pictures, or key names on
  * key caps. The player can fix either with the "Button prompts" row on the
- * Mods page.
+ * first layer mod's page under MODS > YOUR MODS.
  *
  * Getting it, in fh2mod_init after register_mod. The platform offers it
  * before any mod starts, so unlike other mods' interfaces it's there in
@@ -322,7 +322,7 @@ typedef struct FH2HudInterface {
        the HUD page is written once every mod's fh2mod_init has returned, so
        a layer can't be added later (it returns 0). One layer per mod,
        FH2_HUD_MAX_LAYERS from every mod together. The first mod to add one
-       also gets the "Button prompts" row in its part of the Mods page
+       also gets the "Button prompts" row on its page under MODS > YOUR MODS
        (Automatic, Controller, Keyboard and mouse). Returns 1 if added, 0 if
        not (the log says why). Even then, check hud_status for
        FH2_HUD_AVAILABLE before relying on the layer: the platform leaves it
