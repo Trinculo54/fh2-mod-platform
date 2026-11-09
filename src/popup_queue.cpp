@@ -755,6 +755,7 @@ void PopupQueue::note_shown(const Item& it, double now, bool private_title) {
     r.when  = env_.clock_text ? env_.clock_text() : "";
     r.title = private_title ? "(private)" : it.tip ? it.shown_line : it.shown_title;
     r.tip   = it.tip;
+    r.priv  = private_title;
     recent_.insert(recent_.begin(), r);
     if (recent_.size() > kRecent) recent_.resize(kRecent);
     on_screen_items_.erase(std::remove_if(on_screen_items_.begin(), on_screen_items_.end(), [&](const OnScreen& s) { return now - s.at >= kOnScreenMs; }),
@@ -960,6 +961,23 @@ std::string PopupQueue::describe(double now) const {
     if (items_.empty()) s += "nothing waiting\n";
     s += std::to_string(tips_shown_) + " of 3 tips shown this session\n";
     return s;
+}
+
+// ---- the Recent pop-ups page -------------------------------------------------------------------------------------
+
+std::vector<RecentRow> recent_page(const std::vector<PopupRecent>& recent, const std::function<std::string(const char*)>& tr) {
+    std::vector<RecentRow> rows;
+    for (const PopupRecent& r : recent) {
+        RecentRow row;
+        row.label       = r.priv ? tr("(private)") : r.title;
+        row.value       = r.when;
+        row.description = fill(r.tip ? tr("A tip from {0}.") : tr("A pop-up from {0}."), {r.mod});
+        rows.push_back(row);
+    }
+    if (rows.empty())
+        rows.push_back({tr("No pop-ups yet"), "", tr("The pop-ups and tips mods show while you drive are listed here, newest first, with the mod "
+                                                       "that sent each.")});
+    return rows;
 }
 
 } // namespace fh2platform

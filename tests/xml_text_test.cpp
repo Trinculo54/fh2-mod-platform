@@ -30,6 +30,16 @@ int main() {
     same("line one\nline two", "line one line two", "a line break becomes a space");
     same("", "", "empty text stays empty");
 
+    // the game reads a value that starts with { and ends with } as a markup extension, and one it doesn't know
+    // stops the page loading: a no-break space on the end keeps it text (the game has no "{}" escape)
+    same("{0}", "{0}&#160;", "a placeholder left unfilled stays text");
+    same("{local:Loc ScreenTitles.IDS_MyProfile}", "{local:Loc ScreenTitles.IDS_MyProfile}&#160;", "a mod's text can't be markup");
+    same("{}", "{}&#160;", "{} alone stays text too");
+    same("{0} joined", "{0} joined", "a { at the start alone isn't markup to the game, so it's left as it is");
+    same("Score {0}", "Score {0}", "nor is a } at the end alone");
+    same("{0}\n", "{0} ", "nor a value that ends in a line break (a space here)");
+    same("{x} & {y}", "{x} &amp; {y}&#160;", "escaped as before, then the space");
+
     // UTF-8, as fh2mod.h says the text is
     same("Circle \xC2\xB7 closer", "Circle &#183; closer", "a middle dot (2 bytes) is one reference, not \"\xC3\x82\xC2\xB7\"");
     same("Pr\xC3\xA9" "f\xC3\xA9r\xC3\xAA" "ncias", "Pr&#233;f&#233;r&#234;ncias", "accented letters (Brazilian Portuguese)");

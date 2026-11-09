@@ -38,6 +38,7 @@
 #include "seen.hpp"
 #include "text.hpp"
 #include "ui_sounds.hpp"
+#include "ui_player.hpp"
 #include "ui_templates.hpp"
 #include "updates.hpp"
 
@@ -235,6 +236,13 @@ std::atomic<bool> g_wide{false};         // WideText=1, and the wide constructor
 std::atomic<bool> g_tips_poll{false};    // the controller poll was started for tips
 std::atomic<DWORD> g_tick_thread{0};
 std::atomic<int> g_option{-1};           // 1 on, 0 off, -1 not known
+std::atomic<int> g_force_device{-1};     // "fh2mod Platform ui keyboard | pad": 1 keys, 0 the pad, -1 as last used
+
+// The device used last (1 the keyboard or mouse), or the one a developer forced.
+bool keyboard_last() {
+    const int forced = g_force_device.load();
+    return forced >= 0 ? forced == 1 : device_auto_kbd() == 1;
+}
 double g_option_at = -1e18;              // the tick only
 bool g_option_unread_logged = false;     // the tick only
 int g_option_logged         = -2;        // the tick only: the value last logged
@@ -536,7 +544,7 @@ void on_tick(FH2Context*, void*) {
     in.on_screen = !g_tracking.load() || g_on_screen.load();   // untracked: as if always on screen
     in.suspended = suspended_now(now);
     in.option    = g_option.load();
-    in.keyboard  = device_auto_kbd() == 1;
+    in.keyboard  = keyboard_last();
     in.ready     = have_component();
     in.wide      = g_wide.load();
     const PopupShow s = queue().tick(in);
@@ -736,7 +744,7 @@ PopupQueue& queue() {
 // ---- the API's members ------------------------------------------------------------------------------------------
 
 uint32_t popups_status(FH2Mod* m) {
-    uint32_t b = queue().status(m, device_auto_kbd() == 1) & ~static_cast<uint32_t>(FH2_UI_ON_SCREEN);
+    uint32_t b = queue().status(m, keyboard_last()) & ~static_cast<uint32_t>(FH2_UI_ON_SCREEN);
     if (g_tracking.load() && g_on_screen.load()) b |= FH2_UI_ON_SCREEN;
     return b;
 }
@@ -802,10 +810,14 @@ void popups_prepare(const FH2ModApi* api) {
     // The hooks only in a session where a mod declared pop-ups or tips (see the top of this file); the controller
     // poll only for tips.
     // A pop-up or tip sent from fh2mod_init waited in the queue until now; without a declaration it's dropped here.
-    const bool declared = any_mod_uses(FH2_UI_USES_TOASTS | FH2_UI_USES_TIPS);
-    if (declared) want(any_mod_uses(FH2_UI_USES_TIPS));
+    // Developer=1 counts as a declaration of both (ui_player.cpp): the test page and commands need the hooks.
+    const bool developer = ui_developer();
+    const bool declared  = developer || any_mod_uses(FH2_UI_USES_TOASTS | FH2_UI_USES_TIPS);
+    if (declared) want(developer || any_mod_uses(FH2_UI_USES_TIPS));
     g_prepared = true;
     if (!declared) off("no mod declared pop-ups or tips in fh2mod_init, so the game's notification code is left alone");
+    else if (developer && !any_mod_uses(FH2_UI_USES_TOASTS | FH2_UI_USES_TIPS))
+        plog_f("no mod declared pop-ups or tips, but Developer=1 (fh2-mods\\platform-popups.ini) has the hooks go in for the UI templates' tests");
 }
 
 bool popups_track_page() { return g_track_wanted.load(); }
@@ -826,5 +838,8 @@ void popups_set_tips(bool on) { queue().set_tips(on); }
 int popups_tips_again() { return queue().tips_again(); }
 std::vector<PopupRecent> popups_recent() { return queue().recent(); }
 std::string popups_describe() { return queue().describe(now_ms()); }
+void popups_force_device(int keyboard) { g_force_device = keyboard < 0 ? -1 : keyboard ? 1 : 0; }
+int popups_device() { return g_force_device.load() >= 0 ? g_force_device.load() : device_auto_kbd(); }
+bool popups_started() { return g_started.load(); }
 
 } // namespace fh2platform

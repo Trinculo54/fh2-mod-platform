@@ -60,6 +60,13 @@ std::string xml_escape(const std::string& s) {
         o += "&#" + std::to_string(cp) + ";";
         i += n;
     }
+    // The game's XAML reader takes a value that starts with { and ends with } as a markup extension
+    // (the two property setters at game+0x156B1F0 and game+0x156C080 check exactly that, with no trimming, then
+    // call the parser at game+0x1558A40), and one
+    // it doesn't know, such as "{0}" from a pop-up whose placeholder was never filled, stops the page from
+    // loading. It has no "{}" escape (WPF's), so a no-break space goes on the end instead: every font the game
+    // picks has one, and it can't be seen.
+    if (s.size() >= 2 && s.front() == '{' && s.back() == '}') o += "&#160;";
     return o;
 }
 

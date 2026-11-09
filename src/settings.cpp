@@ -45,6 +45,7 @@
 #include "text.hpp"
 #include "ui_rules.hpp"
 #include "ui_sounds.hpp"
+#include "ui_player.hpp"
 #include "ui_templates.hpp"
 #include "updates.hpp"
 #include "xml_text.hpp"
@@ -461,13 +462,13 @@ uint8_t* view_selected_descriptor() {
 }
 
 // FH2Mod_View_<k>: whether view k of Installed mods is showing (0: the list, 1..64: a mod's
-// settings, then the mods' pages). Showing another view hides the rest; see switch_view.
-// FH2Mod_ViewIn_<k> is the same, but only when the view came forwards (A, from the list or a
+// settings, then the platform's own page, then the mods' pages). Showing another view hides the
+// rest; see switch_view. FH2Mod_ViewIn_<k> is the same, but only when the view came forwards (A, from the list or a
 // mod's row), FH2Mod_ViewBack_<k> only when it came back (B); their DataTriggers play the
 // switch's "in" and "back" animations. FH2Mod_Bar_<b>: which help bar shows (kBarList and so on).
 constexpr int kMaxModViews  = 64;
 constexpr int kMaxPageViews = 64;
-constexpr int kMaxViews     = 1 + kMaxModViews + kMaxPageViews;
+constexpr int kMaxViews     = 1 + kMaxModViews + 1 + kMaxPageViews;   // the list, the mods, the platform's page, pages
 enum ViewKind { kViewList = 0, kViewMod, kViewPage, kViewPageSelect, kViewKinds };
 std::atomic<int> g_view{0};
 std::atomic<bool> g_view_back{false};       // the view showing came back (B), not forwards
@@ -1976,6 +1977,13 @@ bool write_settings_page() {
 std::vector<ModEntry> g_entries;     // fh2-mods, in load order (set once, before the hooks)
 std::vector<int> g_entry_row;        // each entry's switch row in g_rows
 std::vector<int> g_entry_online_row; // each entry's "Load when playing online" row in g_rows, or -1
+// The UI templates' player controls (ui_player.cpp, platform 2.9.0): each entry's "Pop-ups" row in g_rows (or -1),
+// the platform's own "Mod pop-ups" and "Tips" rows, and the platform's line and page on YOUR MODS as last written
+// (its row in the list, and its view).
+std::vector<int> g_entry_popups_row;
+int g_platform_rows[2] = {-1, -1};
+std::atomic<int> g_platform_list_row{-1};
+std::atomic<int> g_platform_view{0};
 std::mutex g_page_mu;                // one page written at a time
 
 // The MODS tab's pages, A_ModPage_<n>.xaml: YOUR MODS (every mod's page is a view of it), UPDATES, ABOUT and
@@ -2001,6 +2009,115 @@ void hub_online_changed(void* user, const char*, int v) {
     if (i < g_entries.size()) set_mod_online(g_entries[i].dll, v != 0);
 }
 
+void hub_popups_changed(void* user, const char*, int v) {
+    const auto i = reinterpret_cast<std::uintptr_t>(user);
+    if (i < g_entries.size() && g_entries[i].mod) mod_popups_changed(g_entries[i].mod, g_entries[i].dll, v);
+}
+
+void platform_row_changed(void* user, const char*, int v) {
+    player_row_changed(user ? PlayerRow::tips : PlayerRow::mod_popups, v);
+}
+
+// One of the UI templates' rows: its text in the game's language now (ui_player.cpp). A choice row keeps its
+// number of choices.
+void player_text_into(Row& r, const PlayerText& t) {
+    r.label       = t.label;
+    r.description = t.description;
+    if (!t.choices.empty() && t.choices.size() == r.choices.size()) r.choices = t.choices;
+}
+
+// The platform's "Mod pop-ups" (a choice) and "Tips" (On/Off) rows, and a "Pop-ups" row for each mod that declared
+// pop-ups without a row of its own (under g_mu, after the Load switches).
+void add_player_rows() {
+    for (int k = 0; k < 2; ++k) {
+        const PlayerRow which = k ? PlayerRow::tips : PlayerRow::mod_popups;
+        const PlayerText t    = player_row_text(which);
+        Row& r        = g_rows.emplace_back();
+        r.mod         = &g_hub_owner;
+        r.key         = k ? "PlatformTips" : "PlatformModPopups";
+        r.label       = t.label;
+        r.description = t.description;
+        r.prop        = "FH2Mod_" + std::to_string(g_rows.size() - 1);
+        r.value       = player_row_value(which);
+        r.boot        = r.value;
+        r.on_change   = &platform_row_changed;
+        r.user        = reinterpret_cast<void*>(static_cast<std::uintptr_t>(k));
+        if (!t.choices.empty()) {   // as settings_add makes a choice row: a slider over the choices' numbers
+            r.choices = t.choices;
+            r.slider  = true;
+            r.fmin    = 0;
+            r.fmax    = static_cast<float>(t.choices.size() - 1);
+            r.fstep   = 1;
+            r.fvalue  = static_cast<float>(r.value.load());
+            r.fboot   = r.fvalue;
+        }
+        g_platform_rows[k] = static_cast<int>(g_rows.size() - 1);
+    }
+    g_entry_popups_row.assign(g_entries.size(), -1);
+    for (std::size_t i = 0; i < g_entries.size(); ++i) {
+        const ModEntry& e = g_entries[i];
+        if (!e.enabled || !e.mod || !mod_gets_popups_row(e.mod)) continue;
+        const PlayerText t = mod_popups_text(e.name);
+        Row& r        = g_rows.emplace_back();
+        r.mod         = &g_hub_owner;
+        r.key         = "ModPopups_" + std::to_string(i);
+        r.label       = t.label;
+        r.description = t.description;
+        r.prop        = "FH2Mod_" + std::to_string(g_rows.size() - 1);
+        r.value       = mod_popups_start(e.mod, e.dll);
+        r.boot        = r.value;
+        r.on_change   = &hub_popups_changed;
+        r.user        = reinterpret_cast<void*>(static_cast<std::uintptr_t>(i));
+        g_entry_popups_row[i] = static_cast<int>(g_rows.size() - 1);
+    }
+}
+
+} // namespace
+
+// "fh2mod Platform ui set" (Developer=1): one of the rows above changed as the player would change it, so what's kept
+// in fh2-mods\platform-popups.ini can be tried without the game's menus.
+std::string settings_player_set(const std::string& which, bool on) {
+    FH2SettingChangedFn fn = nullptr;
+    void* user             = nullptr;
+    std::string key, what;
+    int v = 0;
+    {
+        std::scoped_lock lk{g_mu};
+        int row = -1;
+        if (_stricmp(which.c_str(), "ModPopups") == 0) {
+            row  = g_platform_rows[0];
+            v    = on ? 0 : 1;   // the choice's index: Same as Notifications, Off
+            what = std::string("Mod pop-ups: ") + (on ? "Same as Notifications" : "Off");
+        } else if (_stricmp(which.c_str(), "Tips") == 0) {
+            row  = g_platform_rows[1];
+            v    = on;
+            what = std::string("Tips: ") + (on ? "On" : "Off");
+        } else {
+            for (std::size_t i = 0; i < g_entries.size(); ++i) {
+                if (_stricmp(g_entries[i].name.c_str(), which.c_str()) != 0) continue;
+                if (i >= g_entry_popups_row.size() || g_entry_popups_row[i] < 0)
+                    return "error: " + g_entries[i].name + " has no Pop-ups row (it didn't declare pop-ups, or has a row of its own)\n";
+                row  = g_entry_popups_row[i];
+                v    = on;
+                what = g_entries[i].name + "'s Pop-ups: " + (on ? "On" : "Off");
+                break;
+            }
+            if (row < 0) return "error: \"" + which + "\" isn't ModPopups, Tips or an installed mod's name\n";
+        }
+        if (row < 0 || static_cast<std::size_t>(row) >= g_rows.size()) return "error: the platform's rows aren't there yet\n";
+        Row& r = g_rows[static_cast<std::size_t>(row)];
+        r.value = v;
+        if (r.slider) r.fvalue = static_cast<float>(v);
+        fn   = r.on_change;
+        user = r.user;
+        key  = r.key;
+    }
+    if (fn) call_on_change(fn, user, key.c_str(), v);   // the platform's own: ui_player.cpp keeps it
+    return what + ", and kept in fh2-mods\\platform-popups.ini\n";
+}
+
+namespace {
+
 // A mod's "Load when playing online" row's text, in the game's language now (English before it has one).
 void online_row_text(Row& o, const ModEntry& e) {
     o.label       = tr("Load when playing online");
@@ -2014,6 +2131,7 @@ void online_row_text(Row& o, const ModEntry& e) {
 
 void add_hub_rows() {
     g_entries = mod_entries();
+    ui_player_pages();   // the platform's own pages (Recent pop-ups, UI templates), before the views are made
     // "Load when playing online" (platform 2.8.0), only where FH2MP is installed, and not for FH2MP
     const bool fh2mp = fh2mp_installed();
     std::scoped_lock lk{g_mu};
@@ -2045,6 +2163,7 @@ void add_hub_rows() {
         o.user       = reinterpret_cast<void*>(static_cast<std::uintptr_t>(i));
         g_entry_online_row.push_back(static_cast<int>(g_rows.size() - 1));
     }
+    add_player_rows();
 }
 
 // The rows that wait for a restart, by name, for the panel under YOUR MODS: up to three, then how many more. A
@@ -2146,6 +2265,13 @@ void hub_rows_text() {
         if (g_entry_online_row[i] < 0) continue;
         online_row_text(g_rows[g_entry_online_row[i]], g_entries[i]);
     }
+    // the UI templates' rows, and the platform's own pages (ui_player.cpp)
+    for (int k = 0; k < 2; ++k)
+        if (g_platform_rows[k] >= 0) player_text_into(g_rows[g_platform_rows[k]], player_row_text(k ? PlayerRow::tips : PlayerRow::mod_popups));
+    for (std::size_t i = 0; i < g_entries.size() && i < g_entry_popups_row.size(); ++i)
+        if (g_entry_popups_row[i] >= 0) player_text_into(g_rows[g_entry_popups_row[i]], mod_popups_text(g_entries[i].name));
+    for (ModPage& pg : g_pages)
+        if (pg.mod == platform_self()) platform_page_text(pg.key, pg.title, pg.label, pg.description);
 }
 
 
@@ -2510,8 +2636,65 @@ std::vector<PageItem> installed_items() {
     }
     if (g_entries.empty())
         items.push_back(info(tr("No mods installed"), trf("Mods go in the fh2-mods folder next to azimuth.exe. See {0} for some to try.", {tr("GET MODS")})));
+    // the platform's own page (the UI templates' player controls, ui_player.cpp), after the mods
+    const PlayerText pt = platform_line();
+    PageItem platform   = info(pt.label, pt.description);
+    platform.value      = std::string(FH2MOD_PLATFORM_VERSION) + "  >";
+    platform.hint       = pt.hint;
+    platform.button     = static_cast<int>(std::min(g_entries.size(), static_cast<std::size_t>(kMaxModViews)));
+    g_platform_list_row = static_cast<int>(items.size());
+    items.push_back(platform);
     const std::vector<PageItem> packs = car_pack_items();
     items.insert(items.end(), packs.begin(), packs.end());
+    return items;
+}
+
+// The platform's own page, "MODS / FH2 MOD PLATFORM" (the UI templates' player controls, ui_player.cpp): its rows as
+// ui_player.cpp orders them; its pages (Recent pop-ups, and UI templates with Developer=1) open as views of their own.
+// `focus`: the first row that changes something.
+std::vector<PageItem> platform_page_items(int& focus) {
+    std::vector<PageItem> items;
+    focus = -1;
+    const std::vector<PlatformLine> lines = platform_page_lines();
+    std::scoped_lock lk{g_mu};
+    for (const PlatformLine& l : lines) {
+        switch (l.kind) {
+            case PlatformLine::heading: {
+                PageItem h = info(l.text.label, l.text.description);
+                h.style    = FH2_ROW_HEADING;
+                h.skip     = true;
+                items.push_back(h);
+                break;
+            }
+            case PlatformLine::mod_popups:
+            case PlatformLine::tips: {
+                const int r = g_platform_rows[l.kind == PlatformLine::tips ? 1 : 0];
+                if (r < 0) break;
+                if (focus < 0) focus = static_cast<int>(items.size());
+                items.push_back({r, "", ""});
+                break;
+            }
+            case PlatformLine::action: {   // A runs it (player_select), and the page stays
+                PageItem a = info(l.text.label, l.text.description);
+                a.hint     = l.text.hint;
+                a.select   = l.key;
+                items.push_back(a);
+                break;
+            }
+            case PlatformLine::page:   // A shows the page (a view of its own)
+                for (std::size_t j = 0; j < g_pages.size(); ++j)
+                    if (g_pages[j].mod == platform_self() && g_pages[j].key == l.key) {
+                        PageItem it  = info(g_pages[j].label, g_pages[j].description);
+                        it.value     = tr("Open");
+                        it.hint      = tr("Press A to open it.");
+                        it.open_view = j < g_page_view.size() ? g_page_view[j] : 0;
+                        it.name      = "PART_Button_FH2Mod_Page_" + std::to_string(j);
+                        items.push_back(it);
+                    }
+                break;
+        }
+    }
+    if (focus < 0) focus = 0;
     return items;
 }
 
@@ -2616,6 +2799,7 @@ std::vector<PageItem> mod_page_items(std::size_t i, int& focus) {
     }
     if (focus < 0) focus = static_cast<int>(items.size());
     items.push_back(what);
+    if (i < g_entry_popups_row.size() && g_entry_popups_row[i] >= 0) items.push_back({g_entry_popups_row[i], "", ""});   // UI templates
     items.push_back({g_entry_row[i], tr("Load this mod"), tr("Off leaves it in fh2-mods, but the game doesn't load it.")});
     if (i < g_entry_online_row.size() && g_entry_online_row[i] >= 0) items.push_back({g_entry_online_row[i], "", ""});
     return items;
@@ -2644,7 +2828,16 @@ bool write_mods_page() {
             for (std::size_t r = 0; r < g_rows.size(); ++r)
                 if (g_rows[r].mod == e.mod) items.push_back({static_cast<int>(r), "", ""});
         }
+        if (i < g_entry_popups_row.size() && g_entry_popups_row[i] >= 0) items.push_back({g_entry_popups_row[i], "", ""});   // UI templates
         items.push_back({g_entry_row[i], tr("Load this mod"), tr("Off leaves it in fh2-mods, but the game doesn't load it.")});
+    }
+    if (!g_entries.empty() && g_platform_rows[0] >= 0) {   // the platform's own rows (ui_player.cpp)
+        const PlayerText pt = platform_line();
+        PageItem heading    = info(pt.label, pt.description);
+        heading.style       = FH2_ROW_HEADING;
+        heading.skip        = true;
+        items.push_back(heading);
+        for (int r : g_platform_rows) items.push_back({r, "", ""});
     }
     if (g_entries.empty())
         items.push_back(info(tr("No mods installed"), trf("Mods go in the fh2-mods folder next to azimuth.exe. See {0} for some to try.", {tr("GET MODS")})));
@@ -2764,6 +2957,8 @@ std::vector<PageItem> help_items() {
                                                        "NEW: a mod you haven't looked at yet.")));
     items.push_back(info(tr("Turning a mod off"), tr("Load this mod, at the bottom of its page. It takes effect the next time you start the game. Outside "
                                                    "the game, move its DLL out of the fh2-mods folder.")));
+    items.push_back(info(tr("Pop-ups and tips"), tr("FH2 Mod Platform, after the mods in YOUR MODS, turns every mod's pop-ups or tips off. "
+                                                  "Recent pop-ups, on its page, says which mod sent each one.")));
     items.push_back(info(tr("Installing and updating"), tr("Extract the mod's zip into your Azimuth folder, then start the game again.")));
     items.push_back(info(tr("If MODS is missing"), tr("The MODS menus come from files the game has to read. If you use Extra Options, update it and keep "
                                                     "EnableMediaOverrides=1. fh2-mods\\platform.log says why.")));
@@ -2797,21 +2992,23 @@ bool write_hub_page(int p) {
     follow_descriptions();
     switch (p) {
         case kHubInstalled: {
-            // views 1..nmods: each mod's settings; then the mods' pages, each from its mod's
+            // views 1..nmods: each mod's settings; then the platform's own page; then the mods' pages, each from its
+            // mod's (the platform's own from the platform's)
             const std::size_t nmods = std::min(g_entries.size(), static_cast<std::size_t>(kMaxModViews));
+            const std::size_t pview = nmods + 1;   // the platform's page
             std::vector<int> pages, owners;   // the page views: which page, and its mod's view
             {
                 std::scoped_lock lk2{g_mu};
                 g_page_view.assign(g_pages.size(), 0);
                 for (std::size_t j = 0; j < g_pages.size() && pages.size() < static_cast<std::size_t>(kMaxPageViews); ++j) {
                     if (g_pages[j].custom && g_pages[j].rows.empty()) continue;   // only on its tile
-                    for (std::size_t i = 0; i < nmods; ++i)
-                        if (g_entries[i].mod && g_entries[i].mod == g_pages[j].mod) {
-                            g_page_view[j] = static_cast<int>(nmods + 1 + pages.size());
-                            pages.push_back(static_cast<int>(j));
-                            owners.push_back(static_cast<int>(i + 1));
-                            break;
-                        }
+                    int owner = g_pages[j].mod == platform_self() ? static_cast<int>(pview) : 0;
+                    for (std::size_t i = 0; i < nmods && !owner; ++i)
+                        if (g_entries[i].mod && g_entries[i].mod == g_pages[j].mod) owner = static_cast<int>(i + 1);
+                    if (!owner) continue;
+                    g_page_view[j] = static_cast<int>(pview + 1 + pages.size());
+                    pages.push_back(static_cast<int>(j));
+                    owners.push_back(owner);
                 }
             }
             std::vector<std::vector<PageItem>> views;
@@ -2823,16 +3020,23 @@ bool write_hub_page(int p) {
                 names.push_back({g_entries[i].name, true});
                 focus.push_back(f);
             }
+            {
+                int f = 0;
+                views.push_back(platform_page_items(f));
+                names.push_back({platform_line().label, true});
+                focus.push_back(f);
+            }
+            g_platform_view = static_cast<int>(pview);
             std::vector<int> kinds(kMaxViews, kViewList);
-            for (std::size_t i = 1; i <= nmods; ++i) kinds[i] = kViewMod;
-            std::vector<ViewHelp> helps(nmods);   // the mods' own pages have the platform's bars; their pages, maybe their own
-            g_view_page.assign(1 + nmods + pages.size(), -1);
-            g_view_owner.assign(1 + nmods + pages.size(), 0);
+            for (std::size_t i = 1; i <= pview; ++i) kinds[i] = kViewMod;
+            std::vector<ViewHelp> helps(pview);   // the mods' own pages and the platform's have the platform's bars; their pages, maybe their own
+            g_view_page.assign(1 + pview + pages.size(), -1);
+            g_view_owner.assign(1 + pview + pages.size(), 0);
             {
                 std::scoped_lock lk2{g_mu};
                 for (std::size_t n = 0; n < pages.size(); ++n) {
                     const ModPage& pg = g_pages[pages[n]];
-                    const std::size_t k = nmods + 1 + n;
+                    const std::size_t k = pview + 1 + n;
                     views.push_back(page_items(pg));
                     names.push_back({pg.title, false});
                     focus.push_back(0);
@@ -3867,7 +4071,9 @@ void switch_view(void* page, int k, bool back, int row) {
             g_last_row  = g_view_selected.load();
         }
         g_view_selected = 0;
-        name = old <= 1 ? "FirstItem" : "PART_Button_FH2Mod_" + std::to_string(old - 1);
+        // view k's row is button k - 1, and the list's first row is FirstItem; but with no mods installed the first
+        // row is "No mods installed", and the platform's line (view 1) is the second, as button 0
+        name = old <= 1 && old != g_platform_view.load() ? "FirstItem" : "PART_Button_FH2Mod_" + std::to_string(old - 1);
     } else {
         const std::size_t v = static_cast<std::size_t>(k - 1);
         if (v >= g_view_acts.size() || row < 0 || static_cast<std::size_t>(row) >= g_view_acts[v].size()) row = 0;
@@ -3889,6 +4095,8 @@ void switch_view(void* page, int k, bool back, int row) {
         std::scoped_lock lk{g_mu};
         const ModPage& pg = g_pages[g_view_page[k]];
         slog("showing " + pg.mod->name + "'s page " + pg.key);
+    } else if (k == g_platform_view.load()) {
+        slog("showing the platform's own page");
     } else if (static_cast<std::size_t>(k) <= g_entries.size()) {
         slog("showing " + g_entries[k - 1].name + "'s page");
         mark_page_opened(static_cast<std::size_t>(k - 1));
@@ -4170,6 +4378,10 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
                 if (pressed && static_cast<std::size_t>(view) < g_view_page.size()) select_on_page(g_view_page[view], act->select, page);
                 return true;
             }
+            if (!on_page && !act->select.empty() && view == g_platform_view.load()) {   // an action on the platform's page
+                if (pressed && player_select(act->select)) play_sound(kSoundSelect);
+                return true;
+            }
         }
         if (on_page) {
             // B: back to the mod's settings, on the page's row; A does nothing else here
@@ -4192,6 +4404,9 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
                 if (n >= 0 && static_cast<std::size_t>(n) < g_entries.size() && n < kMaxModViews) {
                     play_sound(kSoundSelect);   // A selects, as on the tiles
                     switch_view(page, n + 1, false, view_focus(n + 1));
+                } else if (n >= 0 && n == g_platform_list_row.load() && g_platform_view.load() > 0) {   // the platform's page
+                    play_sound(kSoundSelect);
+                    switch_view(page, g_platform_view, false, view_focus(g_platform_view));
                 }
             } else {   // B: back to the list, on the mod's row (the game's back, with the swoosh)
                 play_sound(kSoundBack, RVA_BACK_SOUNDS);
