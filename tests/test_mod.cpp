@@ -53,6 +53,18 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     pg.key = "Stats"; pg.title = "Test stats"; pg.label = "Test stats & more"; pg.description = "What TestMod counted.";
     pg.tile = "achievements";
     pg.on_select = [](void*, const char*, const char*) {};
+    // on its tile, a page of its own design (below): Y asks in a message box, X changes its hint line (API 10)
+    pg.on_button = [](void*, const char* page, int button) {
+        static const char* const choices[] = {"Keep", "Clear"};
+        FH2MessageBox box{sizeof box};
+        box.key = "Ask"; box.title = "Clear the test stats?"; box.message = "Only TestMod's own counts go."; box.choices = choices; box.choice_count = 2;
+        box.on_choose = [](void*, const char*, uint32_t choice) {
+            g_api->show_page_hint(g_mod, "Stats", choice == 1 ? 1 : 0, choice == 1 ? FH2_HINT_FAULT : FH2_HINT_INFO);
+        };
+        if (button == FH2_BUTTON_Y) return g_api->show_message_box(g_mod, &box) ? FH2_PAGE_HANDLED : FH2_PAGE_IGNORED;
+        if (button == FH2_BUTTON_X) return g_api->show_page_hint(g_mod, page, 0, FH2_HINT_ATTENTION) ? FH2_PAGE_HANDLED_SELECT : FH2_PAGE_IGNORED;
+        return FH2_PAGE_IGNORED;
+    };
     api->add_page(g_mod, &pg);
     FH2PageRow rows[4] = {};
     for (FH2PageRow& r : rows) r.size = sizeof r;
@@ -136,7 +148,14 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->add_title_entry(g_mod, &te);
     te.key = "Fourth"; te.label = "Fourth & <last>"; te.button = 0;
     te.choices = many; te.choice_count = 20;              // a list in pages: 3 of 8
-    te.on_choose = [](void*, const char*, uint32_t) { return FH2_TITLE_HANDLED; };
+    // a pick from its list asks again in a message box (a title entry's callback, API 10)
+    te.on_choose = [](void*, const char*, uint32_t) {
+        static const char* const ok[] = {"OK"};
+        FH2MessageBox box{sizeof box};
+        box.key = "Picked"; box.title = "Track picked"; box.choices = ok; box.choice_count = 1;
+        g_api->show_message_box(g_mod, &box);
+        return FH2_TITLE_HANDLED;
+    };
     api->add_title_entry(g_mod, &te);
     te.choices = nullptr; te.choice_count = 0; te.on_choose = nullptr;
     te.key = "Fifth"; te.label = "No room";
@@ -196,8 +215,8 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     // UI templates (API 10): all twelve members are there. ui_uses is real (an unknown bit is ignored, a second call
     // adds to the first). Pop-ups and tips queue with no game (their hooks wait for it): a pop-up taken down while
     // waiting, a private one, a bad key refused; a tip queued, marked seen (which drops it), then refused as seen,
-    // and one whose text has no {button}. The others are being built, so each returns 0 and says so in the log
-    // once. Then the same through fh2mod_ui.h.
+    // and one whose text has no {button}. play_ui_sound and show_message_box, with no game and outside a callback,
+    // return 0 with the reason in the log. Then the same through fh2mod_ui.h.
     {
         const bool all = api->size >= offsetof(FH2ModApi, show_page_hint) + sizeof api->show_page_hint && api->ui_status &&
                          api->ui_uses && api->play_ui_sound && api->show_toast && api->clear_toast && api->show_tip &&
@@ -230,14 +249,79 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
         FH2Tip no_slot{sizeof no_slot};
         no_slot.key = "NoSlot"; no_slot.text = "Press the button"; no_slot.button.glyph = FH2_GLYPH_X;
         const int tips_again = api->show_tip(g_mod, &tip) + api->show_tip(g_mod, &no_slot);
-        const int others = api->play_ui_sound(g_mod, FH2_SOUND_SELECT) + api->show_message_box(g_mod, &box) +
-                           api->set_page_help(g_mod, "Stats", &help, 1) + api->set_page_hints(g_mod, "Stats", hints, 1) +
-                           api->show_page_hint(g_mod, "Stats", 0, FH2_HINT_INFO);
+        // from fh2mod_init, not a callback, with no game: no sound and no box
+        const int others = api->play_ui_sound(g_mod, FH2_SOUND_SELECT) + api->show_message_box(g_mod, &box);
         api->show_toast(g_mod, &toast);   // queued again
         api->log(g_mod, ("ui templates: ui_uses " + std::to_string(uses) + ", ui_status " + std::to_string(status) + ", show_toast " +
                          std::to_string(toasted) + " then " + std::to_string(toasts) + ", show_tip " + std::to_string(tipped) + ", tip_seen " +
                          std::to_string(seen0) + " then " + std::to_string(seen1) + ", show_tip again " + std::to_string(tips_again) +
                          ", the others " + std::to_string(others))
+                            .c_str());
+        // Pages' help bars and hint lines: Stats (of its own design on its tile, with on_button) takes A, X and Y, not LT,
+        // and its help fragment gives way; Tools (rows with on_select) takes A and B, not X. Hints: Tools' third is cut
+        // to 80 characters; one shown from here shows when the page opens; a hint or kind that isn't there is refused.
+        FH2Prompt stats_help[4] = {};
+        stats_help[0].glyph = FH2_GLYPH_A; stats_help[0].word = FH2_WORD_SELECT;
+        stats_help[1].glyph = FH2_GLYPH_X; stats_help[1].label = "Hint";
+        stats_help[2].glyph = FH2_GLYPH_Y; stats_help[2].label = "Ask {first}";
+        stats_help[3].glyph = FH2_GLYPH_LT; stats_help[3].label = "Zoom";
+        FH2Page tools{sizeof tools};
+        tools.key = "Tools"; tools.title = "Test tools"; tools.description = "Message boxes, help and hints.";
+        // on_open runs as YOUR MODS opens, for every page: a box from it is refused
+        tools.on_open = [](void*, const char*) {
+            static const char* const yes[] = {"Yes"};
+            FH2MessageBox box{sizeof box};
+            box.key = "Early"; box.title = "Too early?"; box.choices = yes; box.choice_count = 1;
+            g_api->show_message_box(g_mod, &box);
+        };
+        // A on a row: a box in pages (12 choices), whose answer changes the hint and plays a sound; the hint; a sound
+        tools.on_select = [](void*, const char* page, const char* row) {
+            const std::string r = row;
+            if (r == "box") {
+                static std::string names[12];
+                static const char* choices[12];
+                for (int i = 0; i < 12; ++i) {
+                    names[i]   = "Choice " + std::to_string(i + 1);
+                    choices[i] = names[i].c_str();
+                }
+                FH2MessageBox box{sizeof box};
+                box.key = "Many"; box.title = "Pick one of twelve"; box.message = "Eight a page, with Previous and Next.";
+                box.choices = choices; box.choice_count = 12; box.focus = 9;
+                box.on_choose = [](void*, const char*, uint32_t choice) {
+                    g_api->show_page_hint(g_mod, "Tools", choice == FH2_BOX_BACK ? -1 : 1, FH2_HINT_INFO);
+                    g_api->play_ui_sound(g_mod, choice == FH2_BOX_BACK ? FH2_SOUND_BACK : FH2_SOUND_SELECT);
+                    FH2MessageBox again{sizeof again};
+                    again.title = "Again?"; again.choices = &again.title; again.choice_count = 1;
+                    g_api->show_message_box(g_mod, &again);   // refused: not from a box's on_choose
+                };
+                g_api->show_message_box(g_mod, &box);
+            } else if (r == "hint") {
+                g_api->show_page_hint(g_mod, page, 2, FH2_HINT_FAULT);
+            } else {
+                g_api->play_ui_sound(g_mod, FH2_SOUND_SHUTTER);
+            }
+        };
+        api->add_page(g_mod, &tools);
+        FH2PageRow tool_rows[3] = {};
+        for (FH2PageRow& r : tool_rows) r.size = sizeof r;
+        tool_rows[0].label = "Show a box"; tool_rows[0].key = "box";
+        tool_rows[1].label = "Change the hint"; tool_rows[1].key = "hint";
+        tool_rows[2].label = "Play a sound"; tool_rows[2].key = "sound";
+        api->set_page_rows(g_mod, "Tools", tool_rows, 3);
+        FH2Prompt tools_help[3] = {};
+        tools_help[0].glyph = FH2_GLYPH_A; tools_help[0].label = "Run it";
+        tools_help[1].glyph = FH2_GLYPH_B; tools_help[1].word = FH2_WORD_BACK;
+        tools_help[2].glyph = FH2_GLYPH_X; tools_help[2].label = "Sort";
+        static const char* const stats_hints[] = {"Saved.", "Cleared."};
+        static const std::string long_hint = "A hint far too long for the hint line under the list, which takes eighty characters at most";
+        static const char* const tools_hints[] = {"Ready.", "Picked.", long_hint.c_str()};
+        const int helped = api->set_page_help(g_mod, "Stats", stats_help, 4) * 10 + api->set_page_help(g_mod, "Tools", tools_help, 3);
+        const int hinted = api->set_page_hints(g_mod, "Stats", stats_hints, 2) + api->set_page_hints(g_mod, "Tools", tools_hints, 3);
+        const int shown  = api->show_page_hint(g_mod, "Tools", 0, FH2_HINT_ATTENTION);
+        const int wrong  = api->show_page_hint(g_mod, "Tools", 9, FH2_HINT_INFO) + api->show_page_hint(g_mod, "Tools", 0, 7) +
+                          api->set_page_help(g_mod, "Missing", tools_help, 1) + api->set_page_hints(g_mod, "Missing", tools_hints, 1);
+        api->log(g_mod, ("ui templates: set_page_help " + std::to_string(helped) + ", set_page_hints " + std::to_string(hinted) + ", show_page_hint " +
+                         std::to_string(shown) + ", the wrong ones " + std::to_string(wrong))
                             .c_str());
         api->ui_uses(g_mod, FH2_UI_USES_OWN_SWITCH);
         fh2_helpers_init(api, g_mod);
@@ -290,6 +374,8 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
         g_api->apply_strings(g_mod);
         g_api->clear_file(g_mod, "UI/temp.xml");
         g_api->ui_uses(g_mod, FH2_UI_USES_TOASTS);   // refused: after fh2mod_init
+        // a sound from a thread of the mod's own: it would wait for the game's tick; with no game, none
+        g_api->log(g_mod, ("sound from a thread: " + std::to_string(g_api->play_ui_sound(g_mod, FH2_SOUND_SHUTTER))).c_str());
         g_api->log(g_mod, "late edit applied");
         return 0;
     }, nullptr, 0, nullptr);

@@ -126,9 +126,10 @@ run_layout() {   # run_layout mediaoverride|own
 
 # Mods' text in the pages (src/xml_text.cpp), the platform's text in any language (src/text.cpp), car packs'
 # car Ids (src/car_ids.cpp), mods' translations (src/l10n.cpp), what the player has already seen (src/seen.cpp), the
-# pop-up queue's rules (src/popup_queue.cpp) and what's different under Wine and Proton (src/wine.cpp) on their own,
-# then the platform. With Python 3, TestMod's translation files are checked to be up to date with tools/l10n (its .pot
-# from its source, its built-in .inc from tests/l10n/*.po).
+# pop-up queue's rules (src/popup_queue.cpp), the rules of message boxes, sounds and pages' help and hints
+# (src/ui_rules.cpp) and what's different under Wine and Proton (src/wine.cpp) on their own, then the platform. With
+# Python 3, TestMod's translation files are checked to be up to date with tools/l10n (its .pot from its source, its
+# built-in .inc from tests/l10n/*.po).
 wine "$b/xml_text_test.exe"
 wine "$b/text_test.exe"
 # Every English text the code translates is in src/lang.cpp's table, with its placeholders kept (and with
@@ -142,6 +143,7 @@ wine "$b/car_ids_test.exe"
 wine "$b/l10n_test.exe"
 wine "$b/seen_test.exe"
 wine "$b/ui_queue_test.exe"
+wine "$b/ui_rules_test.exe"
 # The platform's own UI files, the check on pages of a mod's own design and the page crash guard's state
 # (src/xaml_safety.cpp), against fake zips; with FH2_MEDIA set, against the install's UI.zip and textures as well.
 if [ -n "${FH2_MEDIA:-}" ]; then

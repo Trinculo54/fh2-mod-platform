@@ -28,6 +28,9 @@ void popups_prepare(const FH2ModApi* api);
 // notice's own hook then accepts the slot as the exe on disk has it, S5's F1). True from popups_prepare on, before
 // the hooks go in.
 bool popups_track_page();
+// Whether the free-roam HUD page is on screen now: 1 or 0 while the pop-ups' page tracking is in, -1 when the platform
+// doesn't know (no mod declared pop-ups or tips, or the tracking didn't go in). play_ui_sound's world-only sounds.
+int popups_hud_on_screen();
 
 // The platform is about to call one of the mod's callbacks (REPLY's 1 s window), or caught a crash in one (its
 // waiting pop-ups and tip go). Any thread.

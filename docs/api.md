@@ -611,7 +611,7 @@ An entry is a line of your own on the title screen, under "PRESS (A) TO START" a
 - **Buttons.** Each entry has its own: Y, X, RB, then LB, in the order mods add them. Ask for one with `button` and you get it if it's free; if it's taken, you get the next free one and the log says so. There are four at most, from every mod together, so add one entry, not one per option.
 - **When.** Add entries from `fh2mod_init`. The title screen is written once every mod's `fh2mod_init` has returned, so an entry added later only shows from the next launch.
 - **The label.** UTF-8, shown in capitals in the game's small title-screen text, the way the game's language writes them (so "Żółw" shows as "ŻÓŁW"; platform 2.9.0, before that only a-z). About 24 characters fit beside the button; anything past 32 characters is cut, and the log says so. Before 2.9.0 the cut was at 32 bytes, which is fewer characters in Polish or Russian.
-- **`on_press`** runs on the game's UI thread when the player presses the entry's button while the title screen waits for A. Keep it short: set a flag, or start a thread of your own. Return `FH2_TITLE_HANDLED` to stay on the title screen, or `FH2_TITLE_START` for the platform to press A for the player straight after. The game then signs in, loads the save and loads the world as it always does. A press while the game is already signing in goes to the game, not to you.
+- **`on_press`** runs on the game's UI thread when the player presses the entry's button while the title screen waits for A. Keep it short: set a flag, or start a thread of your own. Return `FH2_TITLE_HANDLED` to stay on the title screen, or `FH2_TITLE_START` for the platform to press A for the player straight after (not after showing a message box: the box stays and the game doesn't start). The game then signs in, loads the save and loads the world as it always does. A press while the game is already signing in goes to the game, not to you.
 - **Lists.** Give `choices` (and `choice_count`, `on_choose`) and the press shows the game's message box over the title screen instead, titled `list_title` (or the label), with `list_message` over the choices and a Back under them. Picking a choice calls `on_choose` with its position from 0, on the UI thread, with the same return values as `on_press`; Back just closes the box. `on_press` isn't called for a list and can be `NULL`. The choices are copied when you add the entry, so they're fixed until the next launch. Up to 10 fit in the box at once, and about 30 characters of each. A longer list (up to 100) comes in pages of 8, with Previous above them and Next below, and the box's title says which page it is ("PICK A TRACK  2/5"). `on_choose` still gets the choice's position in the whole list.
 - **`title_started_by`** returns the key of your entry that started the game, or `NULL` if the player pressed A, another mod's entry started it, or it hasn't started yet. Pressing A on the title screen later (after going back to it) sets it back to `NULL`. Call it from any thread, typically from a hook on the world or save loading, to know whether this start is yours.
 
@@ -897,8 +897,6 @@ int show_page_hint(FH2Mod* mod, const char* page_key, int index, uint32_t kind);
 
 Ready-made pieces of the game's own UI that you fill with text: pop-ups on the game's own HUD notification, tips that show once, the game's message box, UI sounds, and the help bar and hint line of your pages. The platform draws them in the game's look, decides when they show, and never takes XAML from you, so nothing you pass can break the game's screens.
 
-> **Being built.** Platform 2.9.0 is still being written. Every member below is in `FH2ModApi` already, so you can build against it, but the ones marked **(being built)** don't work yet: they return 0 and the first call of each says in `platform.log` that it "isn't in this build yet". `ui_status`, `ui_uses`, the pop-ups and the tips work. This section describes them as they're designed, and loses each mark as its member is done.
-
 **Which one for what:**
 
 | You want to | Use |
@@ -919,6 +917,7 @@ Ready-made pieces of the game's own UI that you fill with text: pop-ups on the g
 - **When they show.** Pop-ups and tips wait while the player is in the pause menu, photo mode, a replay, loading or a cutscene, and show once the driving view is back. Time spent waiting there doesn't count toward a pop-up's `expire_s`.
 - **Everything shown is logged**, its text included, because testers attach `platform.log` to bug reports. Flag text that can name people (a gamertag, an account name) `FH2_TOAST_FLAG_PRIVATE`.
 - **Faults.** When the platform catches a crash in one of your callbacks, it drops your waiting pop-ups and tip. A message box of yours that's open stays until the player answers it, and your `on_choose` isn't called.
+- **Your callbacks** are where the page templates work best. The platform knows when it's calling one of your page, setting, title-screen or message box callbacks (on the game's UI thread): a message box shows only from there, a sound from there plays at once, and a hint changed from one of the page's own shows at once.
 - **Nothing works by itself on an older platform**: use [`include/fh2mod_ui.h`](../include/fh2mod_ui.h) (below), and it does nothing there instead of crashing.
 - **Don't hook the game's notification code yourself** (`Show`, `MakeDisplayString`, the notification component's constructor and destructor, the achievements tick): the platform chains them with the mods that already do, and Achievements 1.0.x checks `Show`'s first bytes in memory.
 
@@ -942,23 +941,28 @@ Ready-made pieces of the game's own UI that you fill with text: pop-ups on the g
 
   Declare them: the platform hooks the game's notification only in a session where a mod declared pop-ups or tips, as soon as the game's code is ready, since it has to see the notification being made long before the first pop-up. Its sites are shared with other mods' hooks (Achievements, CommunityGarage), so a session without such a mod leaves them alone. In that session `show_toast` and `show_tip` return 0 and the log says why. When another mod declared them, an undeclared mod's pop-ups still show, but it gets no row, and the log asks it to declare them.
 
-### play_ui_sound (being built)
+### play_ui_sound
 
-Plays one of the game's own UI sounds, wherever the player is. From a page, title-screen or message box callback it plays at once; from anywhere else, at the game's next tick, or not at all if none comes within half a second. The same sound plays at most once per 100 ms from your mod. Never make a sound the only cue: some players have the sound off. It returns 1, or 0 for an unknown sound, one not yet tested on this platform, a repeat within 100 ms, or before the game's sound is up.
+Plays one of the game's own UI sounds, wherever the player is. You don't need a HUD layer for it. Never make a sound the only cue: some players have the sound off.
 
-| Sound | What it is | |
+| Sound | What it is | Where it plays |
 |---|---|---|
-| `FH2_SOUND_SELECT` | the menus' select | plays everywhere |
-| `FH2_SOUND_BACK` | the menus' back | plays everywhere |
-| `FH2_SOUND_OPEN` | a menu opening | plays everywhere |
-| `FH2_SOUND_CLOSE` | a menu closing | plays everywhere |
-| `FH2_SOUND_ERROR` | the menus' "can't do that" | returns 0 until tested |
-| `FH2_SOUND_NOTIFY` | the game's notification chime, for a milestone | returns 0 until tested |
-| `FH2_SOUND_INFO` | a pop-up opening | returns 0 until tested |
-| `FH2_SOUND_TICK`, `_TICK_LOW`, `_TICK_END` | the race countdown's beeps | return 0 until tested |
-| `FH2_SOUND_SHUTTER` | the photo shutter | returns 0 until tested |
+| `FH2_SOUND_SELECT` | the menus' select | everywhere |
+| `FH2_SOUND_BACK` | the menus' back | everywhere |
+| `FH2_SOUND_OPEN` | a menu opening | everywhere |
+| `FH2_SOUND_CLOSE` | a menu closing | everywhere |
+| `FH2_SOUND_ERROR` | the menus' "can't do that" | everywhere; only a low thump over the driving view |
+| `FH2_SOUND_NOTIFY` | the game's notification chime, for a milestone | over the driving view only |
+| `FH2_SOUND_INFO` | a pop-up opening | everywhere; very faint over the driving view |
+| `FH2_SOUND_TICK`, `_TICK_LOW`, `_TICK_END` | the race countdown's beeps | over the driving view only |
+| `FH2_SOUND_SHUTTER` | the photo shutter | everywhere |
 
-The release notes say which of the others have been tested and play. The same numbers are the HUD layer preview's sounds ([hud-layer-preview.md](hud-layer-preview.md)).
+All eleven were heard in game, through the same player the game itself uses for them (the HUD layer preview's tests). The same numbers are the HUD layer preview's sounds ([hud-layer-preview.md](hud-layer-preview.md)).
+
+- **When.** From one of your page, setting, title-screen or message box callbacks it plays at once. From anywhere else (a hotkey, a command, a thread of your own) it plays at the game's next tick, on the game's thread: the game's sound player isn't safe to call from other threads. Four can wait for your mod at once (a fifth drops your oldest), one plays a tick, and one that waited half a second is dropped. The first time a mod plays a sound from outside its callbacks, the platform hooks the game's tick for it, so it may take a moment the first time.
+- **The world-only four.** NOTIFY and the three countdown beeps are silent under the game's menus, so they're refused from your callbacks (a menu or the title screen is up) and while the driving view is known to be off screen. For an answer the player can hear to a hotkey press while driving, use SHUTTER, SELECT or BACK.
+- **The same sound** plays at most once per 100 ms from your mod.
+- **Returns** 1 if it played or is on its way, 0 if not: an unknown sound, a repeat, a world-only sound where it can't be heard, before the game's sound is up, or the game's sound code not as expected this session. Each reason is said once in the log, and each sound's first play too ("UI sound SELECT played").
 
 ### show_toast and clear_toast
 
@@ -1009,7 +1013,7 @@ A hint with a button in it, "Press {button} to keep it", shown once rather than 
 - **The player** can turn tips off ("Tips" on the platform's page) and bring every mod's tips back ("Show tips again"). Deleting `platform-seen.txt` brings them back too, which is also how to test yours.
 - **Returns** 1 if queued, 0 if it was seen, tips or the game's Minor notifications are off, or a button is set but the text has no `{button}` (the log says which).
 
-### show_message_box (being built)
+### show_message_box
 
 ```c
 typedef void (*FH2BoxChooseFn)(void* user, const char* key, uint32_t choice);
@@ -1029,13 +1033,18 @@ typedef struct FH2MessageBox {
 
 The game's own message box over the page the player is on: the screen behind blurred, a title, a message, your choices and Back, which the platform adds last.
 
-- **Only from your callbacks**: a page's `on_open`, `on_select`, `on_button` or `on_slot`, a setting's `on_change`, or a title-screen entry's `on_press` or `on_choose`. From anywhere else (a hotkey, a command, while driving), or from a box's own `on_choose`, it returns 0 and the log says so: send the player to your page instead.
-- **One box at a time**, and nothing is queued, so a box never appears later over a page the player didn't ask on.
-- **`on_choose`** gets the choice (from 0) or `FH2_BOX_BACK`, on the game's UI thread: keep it short, and don't call into the game from it. It may never be called if the player leaves the box another way (B, for now), so never rely on it being called. From it, `show_toast`, `set_tip_seen`, `show_page_hint` and `play_ui_sound` work.
-- **Writing one:** ask a question in the title; say in the message what happens and what's kept; put the safe answer first, where the focus starts; add no Back of your own.
-- **Returns** 1 if shown, 0 if not: not from a callback, a box already open, no choices (the log says why).
+- **Only from your callbacks**: a page's `on_select`, `on_button`, `on_slot` or `on_open`, a setting's `on_change` (or a slider's `on_slide`), or a title-screen entry's `on_press` or `on_choose`. From anywhere else (a hotkey, a command, while driving), or from a box's own `on_choose`, it returns 0 and the log says so: send the player to your page instead.
+- **`on_open`**: a page on a tile runs it as the tile opens it, and the box shows as soon as the page has loaded. A page under YOUR MODS runs it as YOUR MODS opens, for every mod's pages at once, before any of them is shown, so a box from there is refused: show it from the page's `on_select` instead.
+- **One box at a time**, and nothing is queued, so a box never appears later over a page the player didn't ask on. A callback shows one box at most, and that includes the callbacks it sets off and is called from (an `on_slot` that `set_page_slot` runs inside your `on_button` counts as the same callback). A box is also refused while another is waiting for its page to open, or has only just been shown: two in the same moment would leave the game with one it can't answer.
+- **A box or the game, not both**: a title-screen entry's `on_press` or `on_choose` that shows a box and returns `FH2_TITLE_START` keeps the box, and the game doesn't start (the log says so). Return `FH2_TITLE_HANDLED` whenever you show one.
+- **Text.** The title is shown in capitals made in the player's language, cut at 30 characters; the message at 200, wrapped; each choice at 32. Cut text ends in an ellipsis, and the log says what was cut. The text reaches the game's box as UTF-16, so any letter its fonts have shows.
+- **Choices.** 1 to 99, and the platform adds the game's Back as the last item. Over 10, they're shown 8 at a time, with Previous and Next items and the page's number after the title, as the title screen's lists are. The box opens on the page holding `focus`; the game's box puts the cursor on that page's first item.
+- **`on_choose`** gets the choice (from 0) or `FH2_BOX_BACK`, for the Back item or the B button, on the game's UI thread: keep it short, and don't call into the game from it. Previous and Next don't call it. It may never be called if the player leaves the box another way (and B calls nothing in a session where the game's code for it isn't as expected, which the log says), so never rely on it being called. From it, `show_toast`, `set_tip_seen`, `show_page_hint` and `play_ui_sound` work; `show_message_box` doesn't.
+- **Writing one:** ask a question in the title; say in the message what happens and what's kept; put the safe answer first, where the cursor starts; add no Back of your own.
+- **Logged**: the box shown, with its title and key, and the answer ("message box answered: RESET YOUR PROGRESS? -> Keep my progress").
+- **Returns** 1 if shown (or, from a tile page's `on_open`, on its way), 0 if not: not from a callback, `on_open` as YOUR MODS opens, a box already shown from this callback or still coming up, no title or no choices (the log says why).
 
-### set_page_help, set_page_hints and show_page_hint (being built)
+### set_page_help, set_page_hints and show_page_hint
 
 ```c
 typedef struct FH2Prompt {
@@ -1050,11 +1059,12 @@ typedef struct FH2Prompt {
 } FH2Prompt;
 ```
 
-- **`set_page_help`** sets your page's help bar: these prompts (copied), beside the platform's own (B) Back and, when the page has `on_select`, (A) Select, in the game's order. Only buttons a callback of the page can handle are accepted: A and B on a page of rows; A, B, X, Y, LB and RB on a page of your own design (`on_button`). It returns how many prompts were accepted, and the log says why any weren't.
-- **`set_page_hints`** gives the texts your page's hint line can show (copied; up to 8, each up to 80 characters), written into the page each time it opens. Call it from `fh2mod_init` or the page's `on_open`. It returns 1, or 0 for no such page.
-- **`show_page_hint`** shows hint `index` in `kind`, or none for -1: `FH2_HINT_INFO` (white), `FH2_HINT_ATTENTION` (orange, with the info glyph) or `FH2_HINT_FAULT` (red, with a warning glyph). When the page opens, or from its own callbacks, it changes on screen at once; at any other time it shows the next time the page opens. It returns 1, or 0 for no such page or hint.
+- **`set_page_help`** sets your page's help bar: these prompts (copied), beside the platform's own (B) Back and, when the page has `on_select`, (A) Select, in the game's order (A, B, X, Y, LB, RB, whatever order you give them in). A prompt for A or B relabels the platform's. Only buttons a callback of the page can handle are accepted: A (with `on_select`) and B on a page of rows; A, B, X, Y, LB and RB on a page of your own design with `on_button`, and only B without it. The last prompt you give for a button wins. A label is cut at 24 characters; `vk`, `modifiers`, `hotkey` and `hold` mean nothing on pages, which the controller drives. On a page of your own design, the help bar replaces the help fragment you gave `set_page_xaml`. A page that's both (rows under YOUR MODS, your own design on its tile) shows only its A and B prompts as rows. It returns how many prompts were accepted, and the log says why any weren't. The bar changes the next time the page opens.
+- **`set_page_hints`** gives the texts your page's hint line can show (copied; up to 8, each up to 80 characters, cut with an ellipsis). Call it from `fh2mod_init` or the page's `on_open`; it takes effect the next time the page opens. Pass `tr()` results: they follow the game's language, as rows do. It returns 1, or 0 for no such page.
+- **`show_page_hint`** shows hint `index` in `kind`, or none for -1: `FH2_HINT_INFO` (in the grey of the platform's own hints), `FH2_HINT_ATTENTION` (orange, with the game's info icon) or `FH2_HINT_FAULT` (red, with its alert icon). Yellow is never used: on the platform's pages yellow means an update. From the page's own callbacks while it's up (its `on_select`, `on_button` or `on_slot`, or the `on_choose` of a box shown from them) it changes on screen at once, when the page has its hint line; from `on_open`, or at any other time, it shows the next time the page opens. A page on its tile gets the hint line only if it had hints when it opened, so call `set_page_hints` from `fh2mod_init` or `on_open`, not first from a callback while the page is up. It returns 1, or 0 for no such page, hint or kind.
+- **Where the hint line is**: under the list on a page of rows (YOUR MODS' own hint and the restart notice use the same place), and under your content on a page of your own design. It's there only while a hint is shown, and takes no room on a page that has no hints. On a page of your own design with hints, your content gets the height above the hint line (the "*" row of a Grid, the hint line in an "Auto" row under it), so star-sized rows and scrolling lists in it work as they do without hints.
 - **Glyphs** (`FH2_GLYPH_`) are the game's own controller pictures, 0 to 24: A, B, X, Y, LB, RB (1 to 6, the same numbers as `FH2_BUTTON_A` to `FH2_BUTTON_RB`, so a page's button code is its glyph), LT, RT, Menu, View, the d-pad's four directions and its up/down and left/right pairs, L3, R3, and each stick with its up/down and left/right. The HUD layer preview uses the same numbers.
-- **Words** (`FH2_WORD_`) are the game's own, in the player's language with no translation work: `SELECT`, `BACK`, `ACCEPT`, `TOGGLE`, `ON`, `OFF`, `PREVIOUS` and `NEXT`.
+- **Words** (`FH2_WORD_`) are in the player's language with no translation work: `SELECT`, `BACK`, `ACCEPT`, `TOGGLE`, `PREVIOUS` and `NEXT` are the game's own help-bar words, and `ON` and `OFF` the platform's (in the same 12 languages as its own text).
 - `FH2Prompt` is embedded in `FH2Tip` and passed in arrays, so it's frozen: it never grows, and `reserved` must be zero. `FH2Toast`, `FH2Tip` and `FH2MessageBox` start with `size`, and the platform reads only that many bytes of them, so a mod built against a later header still works here, and one built against this header works on a later platform.
 
 ### fh2mod_ui.h: the same calls on any platform

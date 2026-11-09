@@ -25,6 +25,7 @@
 #include "hud_template.hpp"
 #include "lang.hpp"
 #include "platform.hpp"
+#include "ui_rules.hpp"
 #include "updates.hpp"
 
 #include <windows.h>
@@ -247,21 +248,16 @@ bool check_group(const char* group, const char* what_goes, const std::vector<Ent
     return false;
 }
 
-// The seven sounds play_ui_sound plays (FH2_SOUND_ERROR to _SHUTTER): the game's name slots and texts.
+// The seven sounds play_ui_sound plays (FH2_SOUND_ERROR to _SHUTTER): the game's name slots and texts, from the table
+// the API 10 play_ui_sound uses too (ui_rules.cpp).
 struct Sound {
     uintptr_t slot;       // the game's qword pointing at the name
     uintptr_t text_rva;   // where it points
     const char* text;
 };
-const Sound kSounds[7] = {
-    {0x2C5EFB8, 0x1E0A350, "/Master/UI/PauseMenu/HZ2_SFX_UI_PauseMenu_Fail_01"},
-    {0x2C5F008, 0x1E0A5F8, "/Master/UI/Notification/HZ2_SFX_HUD_Notification_GenericOn_01"},
-    {0x2C5F068, 0x1E0A568, "/Master/UI/PopUpInfo/HZ2_SFX_HUD_PopUpInfo_Open_01"},
-    {0x2C5F208, 0x1E0B018, "/Master/UI/Countdown/HZ2_SFX_HUD_Countdown_High_01"},
-    {0x2C5F210, 0x1E0B050, "/Master/UI/Countdown/HZ2_SFX_HUD_Countdown_Low_01"},
-    {0x2C5F218, 0x1E0B088, "/Master/UI/Countdown/HZ2_SFX_HUD_Countdown_End_01"},
-    {0x2C5F0C0, 0x1E0A9E8, "/Master/UI/Promo/HZ2_SFX_HUD_Promo_TakePhoto_01"},
-};
+Sound sound_of(uint32_t s) { return {kUiSounds[s].slot, kUiSounds[s].text_rva, kUiSounds[s].text}; }
+const Sound kSounds[7] = {sound_of(FH2_SOUND_ERROR), sound_of(FH2_SOUND_NOTIFY),   sound_of(FH2_SOUND_INFO),    sound_of(FH2_SOUND_TICK),
+                          sound_of(FH2_SOUND_TICK_LOW), sound_of(FH2_SOUND_TICK_END), sound_of(FH2_SOUND_SHUTTER)};
 
 // ---- the session's state ----------------------------------------------------------------------------
 

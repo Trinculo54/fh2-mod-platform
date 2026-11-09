@@ -1,17 +1,17 @@
-// The UI templates (API 10, platform 2.9.0): the members of fh2mod.h's "UI templates" block.
-//
-// Being built. Each member is in g_api from the start, so the header, docs/api.md and the platform test agree on
-// them while the templates are written. Until a member is done its body here does nothing: it returns 0 and says
-// once in platform.log, in the name of the first mod to call it, that it isn't in this build yet. Replace a stub
-// with the real call (in a file of its own if it's big: the pop-up queue, tips, boxes, page help) and take its line
-// out of kStubs; docs/api.md drops its "(being built)" at the same time.
-//
-// ui_uses is real: it records what each mod said it uses, for the "Pop-ups" rows and the controller poll. So are
-// ui_status, the pop-ups (show_toast, clear_toast) and the tips (show_tip, tip_seen, set_tip_seen): popups.cpp.
+// The UI templates (API 10, platform 2.9.0): the members of fh2mod.h's "UI templates" block, each passed on to the
+// file that does it:
+//  - ui_status, the pop-ups (show_toast, clear_toast) and the tips (show_tip, tip_seen, set_tip_seen): popups.cpp,
+//    with their rules in popup_queue.cpp;
+//  - play_ui_sound: ui_sounds.cpp;
+//  - show_message_box, set_page_help, set_page_hints and show_page_hint: settings.cpp, where the pages and the game's
+//    message box are; their rules are ui_rules.cpp's.
+// ui_uses is here: it records what each mod said it uses, for the "Pop-ups" rows and the controller poll. So is the
+// callback scope (UiCallback) that tells the others which of a mod's callbacks the platform is in.
 #include "ui_templates.hpp"
 
 #include "platform.hpp"
 #include "popups.hpp"
+#include "ui_sounds.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -27,33 +27,6 @@ namespace {
 static_assert(sizeof(FH2Prompt) == 56 && offsetof(FH2Prompt, hotkey) == 16 && offsetof(FH2Prompt, reserved) == 36,
               "FH2Prompt is frozen");
 static_assert(offsetof(FH2Tip, button) == 24, "FH2Tip's members before the prompt");
-
-// The members still being built, and what the log says each does meanwhile.
-enum Stub {
-    kPlayUiSound,
-    kShowMessageBox,
-    kSetPageHelp,
-    kSetPageHints,
-    kShowPageHint,
-    kStubCount
-};
-struct StubInfo {
-    const char* name;
-    const char* meanwhile;
-};
-constexpr StubInfo kStubs[kStubCount] = {
-    {"play_ui_sound", "so no sound plays and it returns 0"},
-    {"show_message_box", "so no box shows and it returns 0"},
-    {"set_page_help", "so the help bar stays as it was and it returns 0"},
-    {"set_page_hints", "so it returns 0"},
-    {"show_page_hint", "so it returns 0"},
-};
-std::atomic<bool> g_said[kStubCount];
-
-void not_built(FH2Mod* m, Stub s) {
-    if (g_said[s].exchange(true)) return;
-    log_line(m ? m->name : std::string(), std::string(kStubs[s].name) + " isn't in this build yet, " + kStubs[s].meanwhile);
-}
 
 // ---- ui_uses -------------------------------------------------------------------------------------------------
 
@@ -100,28 +73,19 @@ int api_show_tip(FH2Mod* m, const FH2Tip* t) { return popups_show_tip(m, t); }
 int api_tip_seen(FH2Mod* m, const char* key) { return popups_tip_seen(m, key); }
 void api_set_tip_seen(FH2Mod* m, const char* key, int seen) { popups_set_tip_seen(m, key, seen); }
 
-// ---- the stubs -----------------------------------------------------------------------------------------------
+// ---- play_ui_sound (ui_sounds.cpp), message boxes, page help and hint lines (settings.cpp) -------------------
 
-int api_play_ui_sound(FH2Mod* m, uint32_t) {
-    not_built(m, kPlayUiSound);
-    return 0;
-}
-int api_show_message_box(FH2Mod* m, const FH2MessageBox*) {
-    not_built(m, kShowMessageBox);
-    return 0;
-}
-int api_set_page_help(FH2Mod* m, const char*, const FH2Prompt*, uint32_t) {
-    not_built(m, kSetPageHelp);
-    return 0;
-}
-int api_set_page_hints(FH2Mod* m, const char*, const char* const*, uint32_t) {
-    not_built(m, kSetPageHints);
-    return 0;
-}
-int api_show_page_hint(FH2Mod* m, const char*, int, uint32_t) {
-    not_built(m, kShowPageHint);
-    return 0;
-}
+int api_play_ui_sound(FH2Mod* m, uint32_t sound) { return ui_sounds_play(m, sound); }
+int api_show_message_box(FH2Mod* m, const FH2MessageBox* box) { return settings_show_box(m, box); }
+int api_set_page_help(FH2Mod* m, const char* key, const FH2Prompt* prompts, uint32_t count) { return pages_set_help(m, key, prompts, count); }
+int api_set_page_hints(FH2Mod* m, const char* key, const char* const* texts, uint32_t count) { return pages_set_hints(m, key, texts, count); }
+int api_show_page_hint(FH2Mod* m, const char* key, int index, uint32_t kind) { return pages_show_hint(m, key, index, kind); }
+
+// ---- the callback scope and faults -------------------------------------------------------------------------------
+
+thread_local UiCallbackState* g_callback = nullptr;
+std::mutex g_faults_mu;
+std::map<const FH2Mod*, uint32_t> g_faults;
 
 } // namespace
 
@@ -138,6 +102,7 @@ void fill_ui_api(FH2ModApi& api) {
     api.set_page_help    = api_set_page_help;
     api.set_page_hints   = api_set_page_hints;
     api.show_page_hint   = api_show_page_hint;
+    ui_sounds_prepare(&api);
 }
 
 uint32_t ui_uses_of(const FH2Mod* mod) {
@@ -154,6 +119,30 @@ bool any_mod_uses(uint32_t bits) {
 }
 
 void ui_note_callback(FH2Mod* mod) { popups_note_callback(mod); }
-void ui_mod_faulted(FH2Mod* mod) { popups_mod_faulted(mod); }
+void ui_mod_faulted(FH2Mod* mod) {
+    {
+        std::scoped_lock lk{g_faults_mu};
+        ++g_faults[mod];
+    }
+    popups_mod_faulted(mod);
+}
+
+uint32_t ui_mod_faults(const FH2Mod* mod) {
+    std::scoped_lock lk{g_faults_mu};
+    const auto it = g_faults.find(mod);
+    return it == g_faults.end() ? 0 : it->second;
+}
+
+UiCallback::UiCallback(FH2Mod* mod, UiCb kind, void* page, int page_index) {
+    state.mod        = mod;
+    state.kind       = kind;
+    state.page       = page;
+    state.page_index = page_index;
+    state.outer      = g_callback;
+    g_callback       = &state;
+}
+UiCallback::~UiCallback() { g_callback = state.outer; }
+
+UiCallbackState* ui_callback_now() { return g_callback; }
 
 } // namespace fh2platform
