@@ -3786,7 +3786,9 @@ void switch_view(void* page, int k, bool back, int row) {
             g_last_row  = g_view_selected.load();
         }
         g_view_selected = 0;
-        name = old <= 1 ? "FirstItem" : "PART_Button_FH2Mod_" + std::to_string(old - 1);
+        // view k's row is button k - 1, and the list's first row is FirstItem; but with no mods installed the first
+        // row is "No mods installed", and the platform's line (view 1) is the second, as button 0
+        name = old <= 1 && old != g_platform_view.load() ? "FirstItem" : "PART_Button_FH2Mod_" + std::to_string(old - 1);
     } else {
         const std::size_t v = static_cast<std::size_t>(k - 1);
         if (v >= g_view_acts.size() || row < 0 || static_cast<std::size_t>(row) >= g_view_acts[v].size()) row = 0;
