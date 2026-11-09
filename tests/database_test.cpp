@@ -820,7 +820,9 @@ static void car_ids() {
     CHECK(has(c.log, "copied to fh2-mods\\save-snapshots\\car-packs-") &&
           has(c.log, "(the newest 5 kept), for the FH2 Mod Platform (cars a save may have aren't in the game database: TEST_Pack01 (car 3003))"));
     CHECK(listed(missing) == "TEST_Pack01\t3003\n");
-    CHECK(has(slurp(title), "Car pack {0}'s cars aren't in the game this time: {1}") && has(slurp(title), "Test pack") &&
+    // the pack, and why on a line of its own (each a message each language's Main.str gets in its own words)
+    CHECK(has(slurp(title), "Car pack {0}'s cars aren't in the game this time.") && has(slurp(title), "Test pack") &&
+          has(slurp(title), "is taken now: {2}'s SQL adds {3}.") &&
           has(slurp(title), "A copy of your saves from before is in fh2-mods\\save-snapshots."));
     bool copied = false;
     for (const auto& e : fs::directory_iterator(c.dir / "fh2-mods" / "save-snapshots"))
@@ -828,7 +830,7 @@ static void car_ids() {
     CHECK(copied);
     c.launch();
     CHECK(has(c.log, "TEST_Pack01 (car 3003), which a save may have, isn't in the game database this session") &&
-          !has(c.log, "save snapshot:") && has(slurp(title), "Car pack {0}'s cars aren't in the game this time: {1}"));
+          !has(c.log, "save snapshot:") && has(slurp(title), "Car pack {0}'s cars aren't in the game this time."));
 
     // That mod gone: the pack is back with the same Id, and nothing is said about it.
     c.mods({});
@@ -884,7 +886,7 @@ static void car_ids() {
     c.launch(L"eo");
     CHECK(has(c.log, "database: TEST_Pack01 (car 3003), which a save may have, isn't in the game database this session: The 4 car "
                      "pack(s) in fh2-cars aren't read: Extra Options is loaded. They need Azimuth 1.0 or later, without Extra Options."));
-    CHECK(has(slurp(title), "The car packs in fh2-cars aren't read this time: {0}") && has(slurp(title), "Extra Options is loaded."));
+    CHECK(has(slurp(title), "The car packs in fh2-cars aren't read this time.") && has(slurp(title), "Extra Options is loaded."));
     CHECK(has(listed(missing), "MORE_Pack01\t3600\n"));
 }
 

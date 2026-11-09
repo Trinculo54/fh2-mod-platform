@@ -1145,11 +1145,16 @@ void check_recorded_cars(const Files& f) {
                 if (car_pack_problem(pack->name).empty()) note_car_pack_problem(pack->name, later("Its cars aren't in the game database this time."));
                 const std::string why = car_pack_problem(pack->name);
                 log_line("car pack " + pack->name, what + english(why));
-                if (packs.insert(pack->name).second)
-                    lines.push_back(later("Car pack {0}'s cars aren't in the game this time: {1}", {pack->title.empty() ? pack->name : pack->title, why}));
+                if (packs.insert(pack->name).second) {   // the reason on a line of its own: the title screen doesn't wrap them
+                    lines.push_back(later("Car pack {0}'s cars aren't in the game this time.", {pack->title.empty() ? pack->name : pack->title}));
+                    lines.push_back(why);
+                }
             } else if (!car_packs_unread().empty()) {
                 plog(what + english(car_packs_unread()));
-                if (!unread) lines.push_back(later("The car packs in fh2-cars aren't read this time: {0}", {car_packs_unread_why()}));
+                if (!unread) {
+                    lines.push_back(later("The car packs in fh2-cars aren't read this time."));
+                    if (!car_packs_unread_why().empty()) lines.push_back(car_packs_unread_why());
+                }
                 unread = true;
             } else {
                 plog(what + "no car pack in fh2-cars adds it now.");
