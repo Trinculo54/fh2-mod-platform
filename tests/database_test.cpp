@@ -943,7 +943,8 @@ static void upgrade() {
     write(mo / tables_en / "Other.str", "another mod's table");
     Case::put(g_traffic, c.T);
     write(files, "UI\\keep.xml\tTestMod\nUI\\gone.xml\tGoneMod\n");
-    write(tables, "Main.str\nAIPlayers.str\n");
+    // AIPlayers.str twice, as 2.8.0 leaves it after a short session following a 2.9.0 one: its own line, then 2.9.0's
+    write(tables, "AIPlayers.str\nAIPlayers.str\tlayer\nMain.str\n");
     c.mods({});
 
     // keep.xml is open in another program: it stays where it is, listed in both roots, and is tried again next launch

@@ -281,7 +281,8 @@ std::set<std::string> read_manifest() {
         if (!name.empty()) {
             t.insert(lower(name));
             g_table_names.emplace(lower(name), name);
-            g_table_roots[lower(name)] = tab == std::string::npos ? kRootBoth : parse_roots(line.substr(tab + 1));
+            // every root its lines name: 2.8.0 can leave a table's 2.9.0 line and its own one both in the file
+            g_table_roots[lower(name)] |= tab == std::string::npos ? kRootBoth : parse_roots(line.substr(tab + 1));
         }
     }
     return t;
