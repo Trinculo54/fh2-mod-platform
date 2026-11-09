@@ -26,10 +26,12 @@
 // media\UI.zip's Scenes\....
 //
 // When this Azimuth folder has data\titles\1A96545B, where Azimuth keeps the
-// game's T:\ drive (1.0 does, and so does 0.9.10), it also mounts this Azimuth
-// folder's own folders ahead of mediaoverride (car_packs.cpp): its layer, where
-// the platform's files go, and the car packs, both on T:\. Whether it does is
-// decided once, at start (instance_layer). The game reads only through
+// game's T:\ drive (1.0 does, and so does 0.9.10), with the Turn10Temp.scratch
+// folder the game makes on T:\ in its tmp folder (so T:\ is there), it also
+// mounts this Azimuth folder's own folders ahead of mediaoverride
+// (car_packs.cpp): its layer, where the platform's files go, and the car
+// packs, both on T:\. Whether it does is decided once, at start
+// (instance_layer), and the log says why not. The game reads only through
 // Azimuth's drives: a game:\ path with ".." stops the game, and a host path
 // isn't found. Without the layer, mediaoverride and mediapc keep the
 // priorities they had up to 2.8.0.
@@ -421,6 +423,17 @@ void start_media_overrides() {
              temp_drive_spelling(instance_media()) + "), read ahead of mediaoverride");
         move_old_overrides();   // first: the packs' merged zipmanifest.xml is built on what the game reads without them
         prepare_car_packs();
+    } else if (instance_layer_missing() == NoLayer::no_game) {
+        // Nothing the platform writes for the game can be used, and there's no MODS tab: nothing for the player here.
+        plog("media overrides: the game's Mount folder wasn't found, so the platform writes nothing for the game this session "
+             "(to this Azimuth folder's own layer or anywhere else), and car packs aren't read");
+    } else if (instance_layer_missing() == NoLayer::no_scratch) {
+        plog("media overrides: this Azimuth folder has data\\titles\\1A96545B, but no tmp\\Turn10Temp.scratch in it (the game makes "
+             "that folder on its T:\\ drive the first time it starts), so it can't be told that the game's T:\\ is there; for this "
+             "whole session the platform's files go to mediaoverride, mounted as up to 2.8.0");
+        move_old_overrides();
+        car_packs_unavailable(later("This Azimuth folder has no data\\titles\\1A96545B\\tmp\\Turn10Temp.scratch folder yet: the game "
+                                    "makes it the first time it starts."));
     } else {
         plog("media overrides: this Azimuth folder has no data\\titles\\1A96545B yet (Azimuth makes it the first time the "
              "game starts), so for this whole session the platform's files go to mediaoverride, mounted as up to 2.8.0");

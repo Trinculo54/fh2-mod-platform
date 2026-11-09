@@ -127,8 +127,12 @@ std::filesystem::path instance_media(); // temp_drive()\fh2-platform\media
 // fh2-mods\platform-engine-synths.txt: the car packs' own engine sounds (car_packs.cpp).
 void write_engine_synths();
 // The platform mounts its own folders (no Extra Options, Azimuth 1.0 or later): what it writes goes
-// to instance_media(), which only this Azimuth folder's game sees.
+// to instance_media(), which only this Azimuth folder's game sees. Decided once, as the platform starts: the game
+// folder found, no Extra Options, and temp_drive()\Turn10Temp.scratch there (the game makes it on its T:\ drive).
 bool instance_layer();
+// Why instance_layer() is false, decided with it: the first of those it didn't find (none when it's true).
+enum class NoLayer { none, no_game, extra_options, no_titles, no_scratch };
+NoLayer instance_layer_missing();
 // Where overrides are written: instance_media(), else the game's mediaoverride.
 std::filesystem::path override_root();
 // The two places the platform writes files for the game (its roots): mediaoverride, and this Azimuth folder's own

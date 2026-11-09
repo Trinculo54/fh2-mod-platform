@@ -10,7 +10,8 @@
 # folder, with other mods' databases in mediaoverride and mediapc.
 # The phases run twice, each time in a fresh folder (platform 2.9.0): first as an Azimuth before
 # 1.0 (no data\titles), where the platform's files go to mediaoverride; then as Azimuth 1.0 or
-# later without Extra Options (a data\titles folder), where they go to the folder's own layer.
+# later without Extra Options (a data\titles folder, with the tmp\Turn10Temp.scratch folder the game
+# makes on its T:\ drive), where they go to the folder's own layer.
 # EN.zip is copied as PL.zip and br.zip too, for the tables each language gets in its own words
 # (API 10), and the language last time is Polish (fh2-mods\platform-language.ini).
 # With the exe given, the phases that map it ("full" and "hud") have it in the game folder too, as
@@ -36,7 +37,7 @@ run_layout() {   # run_layout mediaoverride|own
     dirs+=("$dir")
     echo "==== platform test, layout: $1"
     mkdir -p "$dir/fh2-mods" "$dir/FH2/Mount/media/Stripped/StringTables" "$dir/FH2/Mount/mediaoverride/UI"
-    [ "$1" = own ] && mkdir -p "$dir/data/titles/1A96545B/saves/1A96545B"
+    [ "$1" = own ] && mkdir -p "$dir/data/titles/1A96545B/saves/1A96545B" "$dir/data/titles/1A96545B/tmp/Turn10Temp.scratch"
     cp "$b/platform_test.exe" "$dir/azimuth.exe"
     cp "$b/d3dcompiler_47.dll" "$b/database_test.exe" "$b/DbMod.dll" "$b/fh2mod.exe" "$dir/"
     # the hook test's stand-in for Extra Options, which the database test loads by this name when it plays it

@@ -31,8 +31,9 @@
 // ("removed", and the ends of "newmod" and "home").
 // The runner goes through the phases twice, once per layout (platform 2.9.0): first with no
 // data\titles folder (Azimuth before 1.0, or Extra Options loaded), where the platform's files go
-// to mediaoverride; then with one (Azimuth 1.0 or later without Extra Options), where they go to
-// the folder's own layer, data\titles\1A96545B\tmp\fh2-platform\media (car_packs.cpp).
+// to mediaoverride; then with one (Azimuth 1.0 or later without Extra Options), with the game's
+// data\titles\1A96545B\tmp\Turn10Temp.scratch in it, where they go to the folder's own layer,
+// data\titles\1A96545B\tmp\fh2-platform\media (car_packs.cpp).
 #include "platform_version.h"
 #include "strings.hpp"
 #include "updates.hpp"
@@ -58,8 +59,9 @@ static std::string slurp(const fs::path& f) {
 }
 
 // Where the platform's files go in this layout: the folder's own layer on Azimuth 1.0 or later
-// (a data\titles folder) without Extra Options, else mediaoverride.
-static bool own_layer() { return fs::is_directory(L"data\\titles"); }
+// (a data\titles folder, with the game's Turn10Temp.scratch on its T:\ drive) without Extra Options,
+// else mediaoverride.
+static bool own_layer() { return fs::is_directory(L"data\\titles\\1A96545B\\tmp\\Turn10Temp.scratch"); }
 static fs::path layer() {
     return own_layer() ? fs::path{L"data\\titles\\1A96545B\\tmp\\fh2-platform\\media"} : fs::path{L"FH2\\Mount\\mediaoverride"};
 }
@@ -430,13 +432,14 @@ int wmain(int argc, wchar_t** argv) {
     HMODULE p = LoadLibraryW(L"d3dcompiler_47.dll"); // what azimuth.exe does at startup
     CHECK(p != nullptr);
     if (phase == L"crash-chained") return crash_chained();
-    // Where the platform writes is decided once, at start (platform 2.9.0): data\titles\1A96545B made once it has decided
-    // (as Azimuth makes it when the game first starts) moves nothing this session. It goes again before the checks.
+    // Where the platform writes is decided once, at start (platform 2.9.0): data\titles\1A96545B and the game's
+    // tmp\Turn10Temp.scratch in it, made once it has decided (as Azimuth and the game make them when the game first
+    // starts), move nothing this session. They go again before the checks.
     const bool made_titles = phase == L"full" && !own_layer();
     if (made_titles) {
         for (int i = 0; i < 250 && !has(slurp(L"fh2-mods\\platform.log"), "for this whole session the platform's files go to mediaoverride"); ++i)
             Sleep(20);
-        fs::create_directories(L"data\\titles\\1A96545B");
+        fs::create_directories(L"data\\titles\\1A96545B\\tmp\\Turn10Temp.scratch");
     }
     // the game's UI.zip is here (FH2_MEDIA), so the MODS menus are written: the title screen's line points at them
     const bool menus = fs::exists(L"FH2\\Mount\\media\\UI.zip");
