@@ -425,6 +425,15 @@ int main() {
         check((q.status(&g_a, false) & FH2_UI_TIPS_OFF) != 0, "ui_status: FH2_UI_TIPS_OFF");
     }
 
+    // ---- which device tips' buttons are written for: a developer's choice, the HUD layer's Button prompts row, the
+    // device used last ----
+    {
+        check(popup_device(-1, 0, 1) == 1 && popup_device(-1, 0, 0) == 0 && popup_device(-1, 0, -1) == -1, "device: Automatic follows the device used last");
+        check(popup_device(-1, 1, 1) == 0 && popup_device(-1, 1, -1) == 0, "device: Button prompts Controller writes the pad's, whatever was used last");
+        check(popup_device(-1, 2, 0) == 1 && popup_device(-1, 2, -1) == 1, "device: Button prompts Keyboard and mouse writes keys");
+        check(popup_device(1, 1, 0) == 1 && popup_device(0, 2, 1) == 0, "device: a developer's ui keyboard or ui pad comes first");
+    }
+
     // ---- the player's rows turned Off while pop-ups and a tip wait (in the pause menu): they go, and never show ----
     reset();
     {

@@ -240,13 +240,12 @@ std::atomic<bool> g_wide{false};         // WideText=1, and the wide constructor
 std::atomic<bool> g_tips_poll{false};    // the controller poll was started for tips
 std::atomic<DWORD> g_tick_thread{0};
 std::atomic<int> g_option{-1};           // 1 on, 0 off, -1 not known
-std::atomic<int> g_force_device{-1};     // "fh2mod Platform ui keyboard | pad": 1 keys, 0 the pad, -1 as last used
+std::atomic<int> g_force_device{-1};     // "fh2mod Platform ui keyboard | pad": 1 keys, 0 the pad, -1 as normal
 
-// The device used last (1 the keyboard or mouse), or the one a developer forced.
-bool keyboard_last() {
-    const int forced = g_force_device.load();
-    return forced >= 0 ? forced == 1 : device_auto_kbd() == 1;
-}
+// The device tips' buttons are written for (popup_device): the one a developer forced, else the one the player chose
+// in a HUD layer's Button prompts row (there's no such row in a session without a layer), else the one used last.
+int tips_device() { return popup_device(g_force_device.load(), hud_layer_choice(), device_auto_kbd()); }
+bool keyboard_last() { return tips_device() == 1; }
 double g_option_at = -1e18;              // the tick only
 bool g_option_unread_logged = false;     // the tick only
 int g_option_logged         = -2;        // the tick only: the value last logged
@@ -848,7 +847,7 @@ int popups_tips_again() { return queue().tips_again(); }
 std::vector<PopupRecent> popups_recent() { return queue().recent(); }
 std::string popups_describe() { return queue().describe(now_ms()); }
 void popups_force_device(int keyboard) { g_force_device = keyboard < 0 ? -1 : keyboard ? 1 : 0; }
-int popups_device() { return g_force_device.load() >= 0 ? g_force_device.load() : device_auto_kbd(); }
+int popups_device() { return tips_device(); }
 bool popups_started() { return g_started.load(); }
 
 } // namespace fh2platform

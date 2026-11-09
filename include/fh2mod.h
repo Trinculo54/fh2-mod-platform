@@ -713,11 +713,12 @@ typedef struct FH2ModApi {
        A hint with a button in it, "Press {button} to keep it", shown once
        rather than every session: a pop-up with your mod's name as its title,
        after delay_s seconds of driving and at least 3 minutes after any other
-       mod's tip. The button is written as the player last pressed: "(A)" on
-       a pad, "[SPACE]" on the keyboard. The platform remembers which tips
-       were seen (fh2-mods\platform-seen.txt); a tip counts as seen only once
-       it was really drawn. The player can turn tips off, which also drops a
-       waiting one (not seen). Returns 1 if
+       mod's tip. The button is written as the player last pressed (or as
+       they chose in a HUD layer's Button prompts row): "(A)" on a pad,
+       "[SPACE]" on the keyboard. The platform remembers which tips were seen
+       (fh2-mods\platform-seen.txt); a tip counts as seen only once it was
+       really drawn. The player can turn tips off, which also drops a waiting
+       one (not seen). Returns 1 if
        queued, 0 if it was seen, tips or the game's Minor notifications are
        off, or a button is set but the text has no "{button}" (the log says
        which). */
@@ -970,7 +971,8 @@ struct FH2PageRow {
 #define FH2_UI_ON_SCREEN       0x0008  /* the free-roam HUD page is on screen now */
 #define FH2_UI_GAME_HUD_HIDDEN 0x0010  /* the game's HUD is suspended (a car meet, a Rivals event), or a mod's
                                           HUD layer holds it hidden (hold_game_hud): pop-ups and tips wait */
-#define FH2_UI_KEYBOARD        0x0020  /* the keyboard or mouse was used last: buttons are written as keys */
+#define FH2_UI_KEYBOARD        0x0020  /* buttons are written as keys: the keyboard or mouse was used last, or
+                                          the player chose Keyboard and mouse in a HUD layer's Button prompts row */
 
 /* ui_uses bits (API 10). */
 #define FH2_UI_USES_TOASTS     0x0001  /* pop-ups: the platform adds a "Pop-ups" row to your page */

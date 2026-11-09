@@ -161,6 +161,12 @@ std::string popup_fold_ascii(const std::string& s, bool* changed) {
     return out;
 }
 
+int popup_device(int forced, int choice, int last) {
+    if (forced == 0 || forced == 1) return forced;
+    if (choice == 1 || choice == 2) return choice == 2 ? 1 : 0;
+    return last;
+}
+
 PopupQueue::PopupQueue(PopupEnv env) : env_(std::move(env)) {}
 
 // ---- logging ----------------------------------------------------------------------------------------------------

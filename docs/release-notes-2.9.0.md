@@ -70,6 +70,7 @@ When you release a mod built on 2.9.0, bump your `platform` submodule to the v2.
 - **The game's Czech and Hungarian text is English**, and so is the platform's when the game is in either.
 - **Pop-ups are dropped, not held, while the game's Notifications setting is Off**, since the game then draws no notification at all.
 - **Pop-ups and tips wait while a mod's HUD layer hides the game's HUD**, as the game's own notifications do: the notification is part of the HUD it hides. They show once it's back.
+- **Tips write their buttons for the device you used last**, and a pad that isn't Xbox-style (a DualSense without Steam Input) isn't seen, so tips then show keys. A HUD layer mod's **Button prompts** row (Controller or Keyboard and mouse) sets tips' buttons too; without such a mod there's no row for it yet.
 - **Message boxes' help bar** reads "(A) Select (B) Cancel" while the box's last item says Back. Both do the same.
 - **Car packs aren't read with Extra Options loaded.** They need Azimuth 1.0 or later without it.
 - **A saved upgrade whose part no longer exists** (a car pack or mod that changed the database, then removed) can still stop the game as the car loads. That one isn't guarded yet; game-notes.md says why.

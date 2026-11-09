@@ -218,6 +218,12 @@ private:
     std::vector<PopupRecent> recent_;
 };
 
+// The device tips' buttons are written for, and ui_status's FH2_UI_KEYBOARD says: 1 the keyboard or mouse, 0 the
+// controller, -1 not known yet. `forced`: a developer's "ui keyboard" (1) or "ui pad" (0), or -1. `choice`: the HUD
+// layer's Button prompts row, 0 Automatic (and in a session without a layer), 1 Controller, 2 Keyboard and mouse.
+// `last`: the device used last (-1 not known yet). The first of them that says one wins.
+int popup_device(int forced, int choice, int last);
+
 // ---- text, for the queue and its tests ----
 
 // UTF-8 `s` folded to ASCII for the game's narrow display strings: letters with marks to their base letter (ą to a,
