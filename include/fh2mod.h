@@ -966,7 +966,9 @@ struct FH2PageRow {
                                           and the platform's hooks for them are in (without its watch on the
                                           game's own pop-ups, they're spaced 5.5 s apart) */
 #define FH2_UI_TOASTS_OFF      0x0002  /* the player turned mod pop-ups off: the platform's row, your mod's
-                                          row, or the game's Minor notifications option it follows */
+                                          row, or the game's Minor notifications option it follows (read
+                                          only while a pop-up or tip waits on the driving view, so known to
+                                          be off only once it has been read off) */
 #define FH2_UI_TIPS_OFF        0x0004  /* the player turned tips off */
 #define FH2_UI_ON_SCREEN       0x0008  /* the free-roam HUD page is on screen now */
 #define FH2_UI_GAME_HUD_HIDDEN 0x0010  /* the game's HUD is suspended (a car meet, a Rivals event), or a mod's

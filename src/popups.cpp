@@ -15,8 +15,9 @@
 //    game shows, whoever made it, and knows whether its own was drawn. Without the watch, pop-ups are 5.5 s apart.
 //  - The Notifications option (Options/MinorNotifications in the player's profile, S2): read on the tick's thread
 //    by the gate's own four calls, published in an atomic: once a second only while the HUD page is on screen and
-//    something waits (or it read Off last), and again just before each Show. Never at the title screen, while
-//    loading or while a profile is loaded or swapped, when the game itself doesn't read it either.
+//    something waits (or it read Off last), and again just before each Show. With the page tracked, never at the
+//    title screen, while loading or while a profile is loaded or swapped, when the game itself doesn't read it
+//    either. ui_status's FH2_UI_TOASTS_OFF therefore says the option is off only once it has been read off.
 //  - Page tracking: the free-roam HUD's vtable slots +0x488 (shown), +0x4F8 (hidden) and 0 (the deleting
 //    destructor), chained with the HUD layer's and the notice's. The game's HUD suspend is read, never set: the
 //    HUD modules' prioritiser byte +0xA8, found as the HUD layer finds it. A HUD layer's hold_game_hud sets the same
