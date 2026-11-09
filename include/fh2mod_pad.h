@@ -27,8 +27,10 @@
  * layer is for driving, ignore presses while a menu is open: FH2_HUD_ON_SCREEN in hud_status
  * (with a HUD layer of your own, fh2mod_hud.h), or FH2_UI_ON_SCREEN in ui_status (API 10, in a
  * session with pop-ups or tips: declare them with ui_uses), is set while the free-roam HUD page
- * is on screen. A flag for layers that are only on in the world is planned for 2.9.1, in the
- * reserved `flags`.
+ * is on screen. Without FH2_HUD_AVAILABLE, or FH2_UI_TOASTS, the platform may not be following
+ * that page and the bit may never come, so then let presses through rather than drop them all.
+ * A flag for layers that are only on in the world is planned for 2.9.1, in the reserved
+ * `flags`.
  */
 #ifndef FH2MOD_PAD_H
 #define FH2MOD_PAD_H
