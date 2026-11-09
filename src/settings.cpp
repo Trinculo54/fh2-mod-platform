@@ -43,6 +43,7 @@
 #include "seen.hpp"
 #include "strings.hpp"
 #include "text.hpp"
+#include "ui_sounds.hpp"
 #include "ui_templates.hpp"
 #include "updates.hpp"
 #include "xml_text.hpp"
@@ -5532,6 +5533,17 @@ bool settings_sounds_ok() { return g_sounds_ok; }
 bool settings_play_sound(const char* name, uint32_t* code) {
     *code = 0;
     if (!g_sounds_ok) return false;
+    __try {
+        hud_play_sound_inner(name);
+        return true;
+    } __except (*code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+// play_ui_sound's way in (ui_sounds.hpp): its own checks are made, so not the MODS tab's.
+bool settings_play_sound_unchecked(const char* name, uint32_t* code) {
+    *code = 0;
+    if (!g_base) return false;
     __try {
         hud_play_sound_inner(name);
         return true;

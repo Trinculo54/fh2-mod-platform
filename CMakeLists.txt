@@ -53,7 +53,7 @@ set_source_files_properties(${_sqlite_src} PROPERTIES
     COMPILE_DEFINITIONS "SQLITE_OMIT_LOAD_EXTENSION;SQLITE_DEFAULT_MEMSTATUS=0")
 
 add_library(fh2mod_platform SHARED src/platform.cpp src/strings.cpp src/updates.cpp src/files.cpp
-            src/database.cpp src/car_ids.cpp src/media_overrides.cpp src/car_packs.cpp src/titles.cpp src/session.cpp src/hotkeys.cpp src/commands.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/pad_layer.cpp src/xml_text.cpp src/lang.cpp src/text.cpp src/l10n.cpp src/ui_templates.cpp src/ui_rules.cpp src/popup_queue.cpp src/popups.cpp src/seen.cpp src/wine.cpp src/xaml_safety.cpp src/page_guard.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
+            src/database.cpp src/car_ids.cpp src/media_overrides.cpp src/car_packs.cpp src/titles.cpp src/session.cpp src/hotkeys.cpp src/commands.cpp src/crash.cpp src/hooks.cpp src/settings.cpp src/pad_layer.cpp src/xml_text.cpp src/lang.cpp src/text.cpp src/l10n.cpp src/ui_templates.cpp src/ui_rules.cpp src/ui_sounds.cpp src/popup_queue.cpp src/popups.cpp src/seen.cpp src/wine.cpp src/xaml_safety.cpp src/page_guard.cpp src/version.rc ${_minhook_src} ${_sqlite_src})
 target_include_directories(fh2mod_platform PRIVATE third_party/minhook/include ${_minhook} third_party/sqlite)
 if(NOT MSVC)
     # InterlockedCompareExchange128, for rewriting call sites atomically.

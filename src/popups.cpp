@@ -37,6 +37,7 @@
 #include "platform.hpp"
 #include "seen.hpp"
 #include "text.hpp"
+#include "ui_sounds.hpp"
 #include "ui_templates.hpp"
 #include "updates.hpp"
 
@@ -102,22 +103,6 @@ constexpr uintptr_t RVA_TLS_INDEX    = 0x354EBD8;     // 0x14354EBD8 the per-thr
 constexpr uintptr_t RVA_STRING_HEAP  = 0x125F380;     // 0x14125F380
 constexpr uintptr_t RVA_STRING_ALLOC = 0x125D850;     // 0x14125D850 alloc(heap, size, tag, 0)
 constexpr uintptr_t RVA_STRING_WCTOR = 0x1239840;     // 0x141239840 the wide constructor, in place
-
-// The sounds a pop-up may ask for (FH2_SOUND_ 1 to 11; NOTIFY is never played with one: the game chimes).
-const char* const kSoundNames[] = {
-    nullptr,
-    "/Master/UI/PauseMenu/HZ2_SFX_UI_PauseMenu_Select_01",
-    "/Master/UI/PopUpMenu/HZ2_SFX_HUD_PopUpMenu_Back_01",
-    "/Master/UI/PauseMenu/HZ2_SFX_UI_PauseMenu_SubMenuOpen_01",
-    "/Master/UI/PauseMenu/HZ2_SFX_UI_PauseMenu_SubMenuClose_01",
-    "/Master/UI/PauseMenu/HZ2_SFX_UI_PauseMenu_Fail_01",
-    "/Master/UI/Notification/HZ2_SFX_HUD_Notification_GenericOn_01",
-    "/Master/UI/PopUpInfo/HZ2_SFX_HUD_PopUpInfo_Open_01",
-    "/Master/UI/Countdown/HZ2_SFX_HUD_Countdown_High_01",
-    "/Master/UI/Countdown/HZ2_SFX_HUD_Countdown_Low_01",
-    "/Master/UI/Countdown/HZ2_SFX_HUD_Countdown_End_01",
-    "/Master/UI/Promo/HZ2_SFX_HUD_Promo_TakePhoto_01",
-};
 
 // ---- small helpers ----------------------------------------------------------------------------------------------
 
@@ -497,10 +482,11 @@ __attribute__((noinline)) void show_thunk(void* p) {
     reinterpret_cast<void (*)(void*, void**, void**, void**)>(c->base + RVA_SHOW)(c->comp, &s[0], &s[1], &s[2]);
 }
 
+// A pop-up's sound (FH2_SOUND_ 1 to 11; NOTIFY is never played with one: the game chimes), through play_ui_sound's
+// player and its checks (ui_sounds.cpp), so it doesn't need the MODS tab's hooks.
 void play_sound(uint32_t sound) {
-    if (!sound || sound >= sizeof kSoundNames / sizeof kSoundNames[0]) return;
     uint32_t code = 0;
-    if (settings_play_sound(kSoundNames[sound], &code) || !code) return;
+    if (!sound || ui_sound_play_direct(sound, &code) || !code) return;
     plog_f("a pop-up's sound crashed in the game's code (exception 0x%08X)", code);
 }
 
@@ -823,6 +809,8 @@ void popups_prepare(const FH2ModApi* api) {
 }
 
 bool popups_track_page() { return g_track_wanted.load(); }
+
+int popups_hud_on_screen() { return g_tracking.load() ? (g_on_screen.load() ? 1 : 0) : -1; }
 
 void popups_note_callback(FH2Mod* m) {
     if (m) queue().note_callback(m, now_ms());
