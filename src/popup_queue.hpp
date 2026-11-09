@@ -161,8 +161,9 @@ private:
     };
     struct OnScreen {
         const void* mod;
-        std::string key, title, line;
+        std::string mod_name, key, title, line;   // title and line only for the same-text check, never printed if private
         uint32_t icon;
+        bool priv;
         double at;
     };
 

@@ -828,6 +828,42 @@ int main() {
         }
     }
 
+    // ---- describe() never has a PRIVATE pop-up's text ----
+    reset();
+    {
+        Game g;
+        PopupQueue q{env()};
+        arm(q, g);
+        FH2Toast p = toast("Signed in as", "SecretGamertag", "SignIn", FH2_TOAST_FLAG_PRIVATE), o = toast("Open", "Plain text", "Open");
+        q.show_toast(A, &p, 0);
+        run(q, g, 100);
+        const std::string d = q.describe(g.now);
+        check(d.find("SecretGamertag") == std::string::npos && d.find("Signed in") == std::string::npos, "describe(): no private text");
+        check(d.find("ModA: on screen: key SignIn (private)") != std::string::npos, "describe(): a private pop-up by its key");
+        check(q.show_toast(A, &p, g.now) == 1 && q.waiting() == 0, "a private one on screen still isn't queued again");
+        run(q, g, 5200);
+        q.show_toast(B, &o, g.now);
+        run(q, g, g.now + 100);
+        check(q.describe(g.now).find("ModB: on screen: Open / Plain text (key Open)") != std::string::npos, "describe(): others with their text");
+    }
+
+    // ---- URGENT: the same one sent again doesn't use up another ----
+    reset();
+    {
+        Game g;
+        PopupQueue q{env()};
+        arm(q, g);
+        q.show_seen(0);   // the lane is busy: they wait
+        FH2Toast u = toast("Fault", "Do this", "Fault", FH2_TOAST_FLAG_URGENT), v = toast("Other fault", "Do that", "Other", FH2_TOAST_FLAG_URGENT);
+        for (int i = 0; i < 4; ++i) q.show_toast(A, &u, i * 100.0);   // re-reported while waiting: replaced
+        run(q, g, 5100);
+        check(g.shown.size() == 1, "the urgent one shows once");
+        for (int i = 0; i < 3; ++i) q.show_toast(A, &u, g.now);   // re-reported while on screen: not queued
+        q.show_toast(A, &v, g.now);
+        check(!logged("has sent more than 2 urgent pop-ups this session"), "repeats of one urgent pop-up count once");
+        check(logged("[ModA] urgent pop-up queued: Other fault / Do that (key Other)"), "so a second one is still urgent");
+    }
+
     std::printf(g_failed ? "%d FAILED\n" : "ALL PASSED\n", g_failed);
     return g_failed ? 1 : 0;
 }

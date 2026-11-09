@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 
 namespace fh2platform {
 namespace {
@@ -190,13 +191,18 @@ void PopupQueue::log_rated(const std::string& who, const std::string& what, cons
     log(who, line);
 }
 
-// The counts held back, once their 10 s are over (or all of them).
+// The counts held back, once their 10 s are over (or all of them). An entry whose 10 s are over has nothing left to
+// hold back, so it goes: a mod with a new key for each pop-up mustn't grow the map the tick walks.
 void PopupQueue::flush_rated(double now, bool all) {
-    for (auto& [k, r] : rated_) {
-        if (!r.more || (!all && now - r.since < kRateMs)) continue;
-        log(r.who, "pop-ups " + r.what + " " + std::to_string(r.more) + " more time" + (r.more == 1 ? "" : "s") + " in the last 10 s" +
-                       (r.key.empty() ? "" : " (key " + r.key + ")"));
-        r.more = 0;
+    for (auto i = rated_.begin(); i != rated_.end();) {
+        Rated& r        = i->second;
+        const bool over = now - r.since >= kRateMs;
+        if (r.more && (all || over)) {
+            log(r.who, "pop-ups " + r.what + " " + std::to_string(r.more) + " more time" + (r.more == 1 ? "" : "s") + " in the last 10 s" +
+                           (r.key.empty() ? "" : " (key " + r.key + ")"));
+            r.more = 0;
+        }
+        i = over && !r.more ? rated_.erase(i) : std::next(i);
     }
 }
 
@@ -276,13 +282,15 @@ int PopupQueue::show_toast(const PopupMod& m, const FH2Toast* t, double now) {
         log_rated(m.name, "not shown (" + off + ")", it.key, "pop-up not shown: " + off + " (" + text_of(it) + ")", now);
         return 0;
     }
-    // the flags each mod is held to
+    // the flags each mod is held to. An URGENT one is counted only once it's queued anew: the same one re-sent while
+    // it's on screen, or one taking the place of a waiting URGENT one, doesn't use up another.
+    bool count_urgent = false;
     if (it.flags & FH2_TOAST_FLAG_URGENT) {
         if (urgent_used_[m.id] >= kUrgentPerSession) {
             it.flags &= ~static_cast<uint32_t>(FH2_TOAST_FLAG_URGENT);
             log_once(m, "urgent cap", "has sent more than 2 urgent pop-ups this session, so later ones are shown as normal ones");
         } else {
-            ++urgent_used_[m.id];
+            count_urgent = true;
         }
     }
     if (it.flags & FH2_TOAST_FLAG_REPLY) {
@@ -323,6 +331,7 @@ int PopupQueue::show_toast(const PopupMod& m, const FH2Toast* t, double now) {
     if (!it.key.empty())
         for (Item& w : items_)
             if (!w.tip && w.mod == m.id && w.key == it.key) {
+                if (count_urgent && !(w.flags & FH2_TOAST_FLAG_URGENT)) ++urgent_used_[m.id];
                 it.id        = w.id;
                 it.seq       = w.seq;
                 it.queued_at = w.queued_at;
@@ -340,6 +349,7 @@ int PopupQueue::show_toast(const PopupMod& m, const FH2Toast* t, double now) {
         if (oldest == items_.size() && !(w.flags & FH2_TOAST_FLAG_URGENT)) oldest = i;
     }
     if (mine >= FH2_TOAST_MAX_WAITING) drop(oldest < items_.size() ? oldest : oldest_any, "a 5th was sent while 4 were waiting", now, true);
+    if (count_urgent) ++urgent_used_[m.id];
     it.id        = next_id_++;
     it.seq       = next_seq_++;
     it.queued_at = now;
@@ -749,7 +759,7 @@ void PopupQueue::note_shown(const Item& it, double now, bool private_title) {
     if (recent_.size() > kRecent) recent_.resize(kRecent);
     on_screen_items_.erase(std::remove_if(on_screen_items_.begin(), on_screen_items_.end(), [&](const OnScreen& s) { return now - s.at >= kOnScreenMs; }),
                            on_screen_items_.end());
-    if (!it.tip) on_screen_items_.push_back({it.mod, it.key, it.title, it.line, it.icon, now});
+    if (!it.tip) on_screen_items_.push_back({it.mod, it.mod_name, it.key, it.title, it.line, it.icon, private_title, now});
 }
 
 // ---- the tick ---------------------------------------------------------------------------------------------------
@@ -929,8 +939,14 @@ std::string PopupQueue::describe(double now) const {
     s += std::string("; the HUD page: ") + (on_screen_ ? "on screen" : "not on screen") + (suspended_ ? ", suspended" : "") + "\n";
     if (!platform_toasts_) s += "the player turned mod pop-ups off\n";
     if (!tips_) s += "the player turned tips off\n";
-    for (const OnScreen& o : on_screen_items_)
-        if (now - o.at < kOnScreenMs) s += "on screen: " + o.title + (o.line.empty() ? "" : " / " + o.line) + "\n";
+    // what's on screen, a PRIVATE one by its key only, as the log has it (this goes into bug reports)
+    for (const OnScreen& o : on_screen_items_) {
+        if (now - o.at >= kOnScreenMs) continue;
+        const std::string key = o.key.empty() ? "" : "key " + o.key;
+        const std::string text = o.priv ? (key.empty() ? "no key" : key) + " (private)"
+                                        : one_line(o.title) + (o.line.empty() ? "" : " / " + one_line(o.line)) + (key.empty() ? "" : " (" + key + ")");
+        s += o.mod_name + ": on screen: " + text + "\n";
+    }
     if (now - last_show_ < kShowGapMs) s += "a Show was seen " + seconds(now - last_show_) + " ago\n";
     for (const Item& w : items_) {
         if (w.tip) {
