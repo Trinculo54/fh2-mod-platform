@@ -1,10 +1,12 @@
 // A mod for the platform test: notices, conflicting edits, a late edit,
 // file overrides, database changes, an interface for AaaMod, pages (API 8),
-// title-screen entries (API 9), translations (API 10).
+// title-screen entries (API 9), translations and the UI templates (API 10).
 #include "fh2mod.h"
 #include "fh2mod_l10n.h"
+#include "fh2mod_ui.h"
 #include <windows.h>
 
+#include <cstddef>
 #include <cstdio>
 #include <string>
 
@@ -170,6 +172,43 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     // each language's string table with its own text
     api->set_string_tr(g_mod, "LoadingMessages.str", 0x5507, "loading.tip", L"A loading tip from TestMod");
 
+    // UI templates (API 10): all twelve members are there. ui_uses is real (an unknown bit is ignored, a second call
+    // adds to the first); the others are being built, so each returns 0 and says so in the log once. Then the same
+    // through fh2mod_ui.h, whose notify_or_log writes the pop-up to the log when it isn't shown.
+    {
+        const bool all = api->size >= offsetof(FH2ModApi, show_page_hint) + sizeof api->show_page_hint && api->ui_status &&
+                         api->ui_uses && api->play_ui_sound && api->show_toast && api->clear_toast && api->show_tip &&
+                         api->tip_seen && api->set_tip_seen && api->show_message_box && api->set_page_help &&
+                         api->set_page_hints && api->show_page_hint;
+        api->log(g_mod, all ? "ui templates: all 12 members there" : "ui templates: a member is missing");
+        FH2Toast toast{sizeof toast};
+        toast.key = "Test"; toast.title = "Test pop-up"; toast.subtitle = "From TestMod"; toast.icon = FH2_ICON_TROPHY;
+        FH2Tip tip{sizeof tip};
+        tip.key = "FirstTip"; tip.text = "Press {button} to test"; tip.button.glyph = FH2_GLYPH_A; tip.button.vk = VK_SPACE;
+        static const char* const box_choices[] = {"Keep", "Reset"};
+        FH2MessageBox box{sizeof box};
+        box.key = "Reset"; box.title = "Reset?"; box.choices = box_choices; box.choice_count = 2;
+        FH2Prompt help{};
+        help.glyph = FH2_GLYPH_A; help.word = FH2_WORD_SELECT;
+        static const char* const hints[] = {"Saved."};
+        const int uses        = api->ui_uses(g_mod, FH2_UI_USES_TOASTS | FH2_UI_USES_TIPS | 0x100);
+        const uint32_t status = api->ui_status(g_mod);
+        const int others = api->play_ui_sound(g_mod, FH2_SOUND_SELECT) + api->show_toast(g_mod, &toast) + api->show_tip(g_mod, &tip) +
+                           api->tip_seen(g_mod, "FirstTip") + api->show_message_box(g_mod, &box) +
+                           api->set_page_help(g_mod, "Stats", &help, 1) + api->set_page_hints(g_mod, "Stats", hints, 1) +
+                           api->show_page_hint(g_mod, "Stats", 0, FH2_HINT_INFO);
+        api->clear_toast(g_mod, "Test");
+        api->set_tip_seen(g_mod, "FirstTip", 1);
+        api->show_toast(g_mod, &toast);   // a second call: no second line in the log
+        api->log(g_mod, ("ui templates: ui_uses " + std::to_string(uses) + ", ui_status " + std::to_string(status) + ", the others " +
+                         std::to_string(others))
+                            .c_str());
+        api->ui_uses(g_mod, FH2_UI_USES_OWN_SWITCH);
+        fh2_helpers_init(api, g_mod);
+        if (fh2ui_ui_status() == 0 && fh2ui_tip_seen("FirstTip") == 0 && !fh2ui_notify_or_log("Test pop-up", "from the helper"))
+            api->log(g_mod, "ui helpers ok");
+    }
+
     // Sessions: the id, and a log of our own named after it (three kept); a bad folder name.
     api->log(g_mod, (std::string("session id ") + api->session_id()).c_str());
     if (const wchar_t* p = api->session_log_path(g_mod, L"TestModData", 3)) {
@@ -208,6 +247,7 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
         g_api->replace_string(g_mod, "AIPlayers.str", L"Super Final", L"Buddy2");
         g_api->apply_strings(g_mod);
         g_api->clear_file(g_mod, "UI/temp.xml");
+        g_api->ui_uses(g_mod, FH2_UI_USES_TOASTS);   // refused: after fh2mod_init
         g_api->log(g_mod, "late edit applied");
         return 0;
     }, nullptr, 0, nullptr);

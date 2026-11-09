@@ -7,7 +7,7 @@ msgstr ""
 "X-Domain: TestMod\n"
 
 #. TestMod's notice on the title screen, in each language's own words (the spaces at the end are trimmed)
-#: test_mod.cpp:31
+#: test_mod.cpp:33
 #, max-length:40
 msgctxt "notice"
 msgid ""
@@ -17,38 +17,38 @@ msgid ""
 msgstr ""
 
 #. a row on the Mods page
-#: test_mod.cpp:160
+#: test_mod.cpp:162
 #, max-length:30
 msgctxt "row.Greeting.label"
 msgid "Test greeting"
 msgstr ""
 
-#: test_mod.cpp:161
+#: test_mod.cpp:163
 #, max-length:450
 msgctxt "row.Greeting.description"
 msgid "A row whose text is in the game's language."
 msgstr ""
 
-#: test_mod.cpp:164
+#: test_mod.cpp:166
 msgctxt "count.cars"
 msgid "{n} car"
 msgid_plural "{n} cars"
 msgstr[0] ""
 msgstr[1] ""
 
-#: test_mod.cpp:165
+#: test_mod.cpp:167
 #, max-length:30
 msgctxt "row.Stale.label"
 msgid "New English"
 msgstr ""
 
-#: test_mod.cpp:166
+#: test_mod.cpp:168
 #, max-length:30
 msgctxt "row.Fuzzy.label"
 msgid "Not sure yet"
 msgstr ""
 
-#: test_mod.cpp:171
+#: test_mod.cpp:173
 msgctxt "loading.tip"
 msgid "A loading tip from TestMod"
 msgstr ""

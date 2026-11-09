@@ -24,8 +24,10 @@
 #include "lang.hpp"
 #include "platform.hpp"
 #include "platform_version.h"
+#include "seen.hpp"
 #include "strings.hpp"
 #include "text.hpp"
+#include "ui_templates.hpp"
 #include "updates.hpp"
 
 #ifdef _MSC_VER
@@ -1046,6 +1048,8 @@ DWORD WINAPI load_mods(LPVOID) {
     }
     start_media_overrides();
     l10n_start();
+    // What the player has already been shown (tips, the settings' first-run cues), read before any mod starts.
+    seen_open(g_azimuth / "fh2-mods" / "platform-seen.txt", plog);
 
     struct Loaded {
         std::wstring file;
@@ -1630,6 +1634,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.set_string_tr     = api_set_string_tr;
                 g_api.format_number     = l10n_format_number;
                 g_api.format_date       = l10n_format_date;
+                fill_ui_api(g_api);
                 return load_mods(nullptr);
             },
             nullptr, 0, nullptr))
