@@ -1,6 +1,6 @@
 # The HUD layer (preview)
 
-**This is a preview, and it will change.** Platform 2.9.0 is the first release with the HUD layer; before that it was only in a test build, "2.8.0 + HUD layer preview 3", for the testers of a mod that needed it. It still isn't part of the API in `fh2mod.h`: it's an interface the platform publishes, and when it moves into the API its names, limits and behaviour may all change, and this interface may go. Never make it the only way your mod works.
+**This is a preview, and it will change.** Platform 2.9.0 is the first release with the HUD layer, which it publishes as a preview interface; before that it was only in a test build, "2.8.0 + HUD layer preview 3", for the testers of a mod that needed it. It still isn't part of the API in `fh2mod.h`: it's an interface the platform publishes, and when it moves into the API its names, limits and behaviour may all change, and this interface may go. Never make it the only way your mod works.
 
 The layer is a heads-up display of your own, drawn by the game's own UI inside its free-roam HUD page, in the game's look and fonts: a bar along the bottom of the screen with tabs, two status lines, a strip of marks and button prompts; small labels (chips) at the top; a tip card; a panel of rows; a countdown in the middle of the screen; and a white blink across the picture. You fill the parts with text and numbers; the platform owns the layout, so nothing you set can break the game's HUD page. The header, [`include/fh2mod_hud.h`](../include/fh2mod_hud.h), is the reference for every member; this page explains how it behaves. Testers of the old test build: see [Which builds have it](#which-builds-have-it) at the end.
 
@@ -280,7 +280,7 @@ Letting go brings the speedometer and map back in one frame.
 Prompts follow the device the player used last: the game's own controller pictures, or key names on key caps.
 
 - **Automatic** (the default): the newest input wins. A key going down, a mouse button or the mouse moving (in two readings running and by 3 px or more, so the window placing the pointer doesn't count) picks key caps; a button, a trigger or a stick on an Xbox-style (XInput) pad picks pad pictures. The modifiers, the Windows keys, any key while a Windows key is down (Win+Alt+R starts a recording, say) and the platform's hotkeys' own keys don't count. It switches at most every 150 ms, and only watches while the game is in front. At start-up it shows pad pictures if an XInput pad is connected, otherwise key caps; until it knows, key caps.
-- **The "Button prompts" row:** Automatic, Controller or Keyboard and mouse, on the first layer mod's page under Pause > MODS > YOUR MODS (Pause > Settings > MODS opens the same list). A change applies straight away and is kept in `fh2-mods\platform-hudlayer.ini`. The row's description also names the build.
+- **The "Button prompts" row:** Automatic, Controller or Keyboard and mouse, on the first layer mod's page under Pause > MODS > YOUR MODS (Pause > Settings > MODS opens the same list). A change applies straight away and is kept in `fh2-mods\platform-hudlayer.ini`.
 - **Pads that aren't XInput** (a DualSense without Steam Input, or a keyboard that Azimuth reads as a controller) aren't seen: choose Controller.
 - `FH2_HUD_KEYBOARD` and `FH2_HUD_DEVICE_FORCED` say what the prompts show and whether the player chose.
 
@@ -400,7 +400,7 @@ What the platform writes while a mod has a layer:
 | `fh2-mods\platform-hudlayer.ini` | the Button prompts choice, made the first time the row is changed |
 | `fh2-mods\notices\HUD layer.txt` | the title-screen line, after a session the crash marker left the layer out of |
 
-`fh2-mods\platform-session.json` gets `"hud_layer": "preview 3: <mods with a layer>"`, and every crash report a line `platform: FH2 Mod Platform <build>` after the CRASH line, plus a `HUD layer:` line saying what the layer was doing.
+`fh2-mods\platform-session.json` gets `"hud_layer": "2.9.0 preview: <mods with a layer>"` (the build's own name in place of 2.9.0, for a build that isn't a release), and every crash report a line `platform: FH2 Mod Platform <build>` after the CRASH line, plus a `HUD layer:` line saying what the layer was doing.
 
 **What to send back:** `fh2-mods\platform.log` from the session (the platform also keeps each session's copy in `fh2-mods\platform-logs\`, so an older one isn't lost when the game starts again), any `fh2-mods\crashes\crash-*.txt` from it, and the log of the mod that uses the layer.
 

@@ -1,6 +1,6 @@
 // The HUD layer preview (include/fh2mod_hud.h): a heads-up display of a mod's own, drawn by the game's
 // own UI inside its free-roam HUD page (A_Hud.xaml), offered through the FH2Platform.HudLayer interface
-// (v1), not the API. This file is the glue between hud_state.cpp (what the layer shows, and when the
+// (v2), not the API. This file is the glue between hud_state.cpp (what the layer shows, and when the
 // page is told) and the game:
 //  - add_hud_layer, from fh2mod_init only; once every mod's fh2mod_init has returned, the page gets one
 //    copy of the layer (hud_template.cpp) with the union of the layers' parts, checked before set_file.
@@ -25,6 +25,7 @@
 #include "hud_template.hpp"
 #include "lang.hpp"
 #include "platform.hpp"
+#include "platform_version.h"
 #include "ui_rules.hpp"
 #include "updates.hpp"
 
@@ -497,8 +498,7 @@ bool write_marker(bool loading) {
 const char* const kChoices[3] = {"Automatic", "Controller", "Keyboard and mouse"};
 constexpr const char* kRowLabel = "Button prompts";
 constexpr const char* kRowText  = "What the HUD bar's button prompts show. Automatic: the controller or the keyboard and mouse, whichever "
-                                  "you used last (Xbox-style controllers only; choose Controller for others). This is a development "
-                                  "build of the FH2 Mod Platform.";
+                                  "you used last (Xbox-style controllers only; choose Controller for others).";
 std::atomic<FH2Mod*> g_row_mod{nullptr};   // the mod whose part has the row
 fs::path ini_path() { return fh2mods() / L"platform-hudlayer.ini"; }
 
@@ -1585,7 +1585,7 @@ std::string hud_layer_session_text() {
     if (!g_active.load()) return "";
     std::string mods;
     for (int i = 0; i < g_eng.layer_count(); ++i) mods += (i ? ", " : "") + g_eng.layer_name(i);
-    return "preview 3: " + mods;
+    return PLATFORM_BUILD_STR " preview: " + mods;   // "2.9.0 preview: MyMod", the build's own name
 }
 
 void hud_layer_sweep_check() {

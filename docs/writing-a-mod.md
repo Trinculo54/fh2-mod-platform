@@ -269,7 +269,7 @@ fh2ui_set_page_hints("Main", hints, 2);           // in fh2mod_init or the page'
 
 ## A HUD of your own (preview)
 
-From platform 2.9.0, the `FH2Platform.HudLayer` interface lets a mod show a bar, labels, button prompts and a feed of its own in the game's free-roam HUD, drawn by the game's UI in its own look, and `FH2Platform.PadLayer` lets it have some controller buttons to itself while the player holds a modifier. Both are previews: they aren't part of the API yet, they'll change before they join it, and platform 2.8.0 and older don't have them, so your mod has to carry on without them. [`hud-layer-preview.md`](hud-layer-preview.md) and [`pad-layer-preview.md`](pad-layer-preview.md) have how to use them. One layer is on screen at a time, so if your mod could use the HUD layer, ask first.
+From platform 2.9.0, the `FH2Platform.HudLayer` interface (version 2) lets a mod show a bar, labels, button prompts and a feed of its own in the game's free-roam HUD, drawn by the game's UI in its own look, and `FH2Platform.PadLayer` (version 1) lets it have some controller buttons to itself while the player holds a modifier. Both are preview interfaces: they aren't part of the API yet, they'll change before they join it, and platform 2.8.0 and older don't have them, so your mod has to carry on without them. [`hud-layer-preview.md`](hud-layer-preview.md) and [`pad-layer-preview.md`](pad-layer-preview.md) have how to use them. One layer is on screen at a time, so if your mod could use the HUD layer, ask first.
 
 ## Your own files
 

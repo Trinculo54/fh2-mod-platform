@@ -2,11 +2,11 @@
  * fh2mod_hud.h -- the HUD layer, a preview (MIT licensed, see LICENSE).
  *
  * PREVIEW. This isn't part of the API in fh2mod.h: it's an interface the
- * platform publishes. Platform 2.9.0 offers version 2 (with the feed); the
- * "2.8.0 + HUD layer preview 3" test build offered version 1, and released
- * 2.8.0 and older don't offer it. When the layer moves into the API, its
- * names, limits and behaviour may all change, and this interface may go.
- * Never make it the only way your mod works.
+ * platform publishes, and platform 2.9.0 publishes it as a preview, version
+ * 2 (with the feed). Version 1 was only in a test build before 2.9.0, and
+ * released 2.8.0 and older don't offer it. When the layer moves into the
+ * API, its names, limits and behaviour may all change, and this interface
+ * may go. Never make it the only way your mod works.
  *
  * The layer is a heads-up display of your own, drawn by the game's own UI
  * inside its free-roam HUD page, in the game's look and fonts:
@@ -40,8 +40,8 @@
  *     if (!hud)
  *         api->log(mod, "no HUD layer on this platform; carrying on without the bar");
  *
- * get_interface came with API 2, hence the version check. Every released
- * platform returns NULL there.
+ * get_interface came with API 2, hence the version check. Platform 2.8.0
+ * and older return NULL there.
  *
  * Where it shows. Only while the game's free-roam HUD page is on screen.
  * In testing, the pause menu, the map, photo mode, the rewind (with its

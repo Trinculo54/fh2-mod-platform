@@ -388,6 +388,10 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (phase == L"home")
         std::ofstream{"fh2-mods\\platform-popups.ini", std::ios::binary} << "[popups]\r\nDeveloper=1\r\n[player]\r\nModPopups=0\r\nTips=0\r\n";
+    if (phase == L"hud") {   // the HUD layer's diagnostics (Debug=1 in its ini): on in the second layout's run, off in the first
+        if (own_layer()) std::ofstream{"fh2-mods\\platform-hudlayer.ini", std::ios::binary} << "[HudLayer]\r\nDebug=1\r\n";
+        else fs::remove("fh2-mods\\platform-hudlayer.ini");
+    }
     if (phase == L"full" && own_layer()) {   // a save, for the snapshot TestMod asks for (platform 2.8.0)
         fs::create_directories(L"data\\titles\\1A96545B\\saves\\1A96545B");
         std::ofstream{"data\\titles\\1A96545B\\saves\\1A96545B\\test.sav", std::ios::binary} << "save data";
@@ -984,7 +988,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(log, "[HUD layer] page: the layer is left out: A_Hud.xaml couldn't be read from the game's UI.zip"));
             CHECK(!fs::exists("fh2-mods\\platform-hudlayer-A_Hud.xaml") && marker.empty());
         }
-        CHECK(has(slurp("fh2-mods\\platform-session.json"), "\"hud_layer\": \"preview 3: HudTestMod\""));
+        CHECK(has(slurp("fh2-mods\\platform-session.json"), "\"hud_layer\": \"" PLATFORM_BUILD_STR " preview: HudTestMod\""));
         if (argc > 2 && !menus) {
             // the game mapped, but with the layer left out (no UI.zip) its start thread doesn't run: no code checks, no hooks
             CHECK(!has(log, "[HUD layer] hooks:") && !hud_started(log));
