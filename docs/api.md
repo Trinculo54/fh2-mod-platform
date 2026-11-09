@@ -1190,7 +1190,7 @@ Players never see what it adds:
   fh2mod Platform ui tip Press {button} to try it | A
   fh2mod Platform ui keyboard      buttons in tips written as keys, whatever was used last
   fh2mod Platform ui pad           ... for the controller
-  fh2mod Platform ui auto          ... for the device used last again
+  fh2mod Platform ui auto          ... as normal again (a HUD layer's Button prompts row, else the device used last)
   fh2mod Platform ui demo          four pop-ups (normal, reply, urgent, private) and a tip, each saying what it is, and a sound
   fh2mod Platform ui set Tips off  Mod pop-ups (ModPopups), Tips or a mod's Pop-ups row (by its name), as the player sets them
   ```

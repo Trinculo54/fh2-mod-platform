@@ -1214,7 +1214,8 @@ int wmain(int argc, wchar_t** argv) {
             out.clear();
             CHECK(run_cli(pid + L"Platform ui", out) == 0 && has(out, "buttons in tips are written for the keyboard\n"));
             out.clear();
-            CHECK(run_cli(pid + L"Platform ui auto", out) == 0 && out == "buttons in tips follow the device used last again\n");
+            CHECK(run_cli(pid + L"Platform ui auto", out) == 0 &&
+                  out == "buttons in tips are written as normal again (the HUD layer's Button prompts row, else the device used last)\n");
             out.clear();
             CHECK(run_cli(pid + L"Platform ui demo", out) == 0 && has(out, "demo: 0 of 4 pop-ups queued") && has(out, "the tip not queued"));
             out.clear();
