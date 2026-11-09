@@ -319,11 +319,20 @@ bool extra_options_file_here() {
     return data.find(std::string("Fh2TweaksStatus", 16)) != std::string::npos;
 }
 
-// A DLL override from Wine's registry (what winecfg's Libraries tab writes), as plain text.
+using RegGetValueFn = LSTATUS(WINAPI*)(HKEY, LPCWSTR, LPCWSTR, DWORD, LPDWORD, PVOID, LPDWORD);
+
+// A DLL override from Wine's registry (what winecfg's Libraries tab writes), as plain text. advapi32
+// is loaded here, from System32, not linked: see CMakeLists.txt. Without it, every value reads as not set.
 LoadOrder registry_load_order(const std::wstring& key, const wchar_t* name) {
+    static const RegGetValueFn get_value = [] {
+        HMODULE a = LoadLibraryExW(L"advapi32.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        return a ? reinterpret_cast<RegGetValueFn>(reinterpret_cast<void*>(GetProcAddress(a, "RegGetValueW")))
+                 : nullptr;
+    }();
     wchar_t value[256];
     DWORD size = sizeof value;
-    if (RegGetValueW(HKEY_CURRENT_USER, key.c_str(), name, RRF_RT_REG_SZ, nullptr, value, &size) != ERROR_SUCCESS)
+    if (!get_value ||
+        get_value(HKEY_CURRENT_USER, key.c_str(), name, RRF_RT_REG_SZ, nullptr, value, &size) != ERROR_SUCCESS)
         return LoadOrder::unsaid;
     return parse_load_order(narrow(value));
 }
