@@ -339,7 +339,8 @@
  * Options); the pad layer's game+0x10768D0; for the HUD layer (preview) and for pop-ups and tips
  * (API 10, every session), the free-roam HUD's vtable slots +0x488, +0x4F8 and 0 (game+0x2DEFE50,
  * 0x2DEFEC0, 0x2DEF9C8); and for pop-ups and tips, the three calls of the minor-notification gate
- * game+0x754920 at game+0x75542C, 0x7555A5 and 0x750FB1. Don't hook them: use the platform's settings, pages,
- * title-screen entries and pop-ups instead. */
+ * game+0x754920 at game+0x75542C, 0x7555A5 and 0x750FB1; and the database guard (2.9.0, when the game reads a
+ * database a car pack or mod changed), DriveTrainConverter's two type checks at game+0xB99CA0 and 0xB99D74. Don't
+ * hook them: use the platform's settings, pages, title-screen entries and pop-ups instead. */
 
 #endif /* FH2GAME_H */

@@ -32,8 +32,10 @@
 // Mounting the folders runs game code, so only the live game shows that.
 #include <windows.h>
 
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -123,6 +125,204 @@ static char* map_game(const wchar_t* path, bool change_volume_code, bool other_g
     std::memcpy(base, file.data(), nt->OptionalHeader.SizeOfHeaders);
     VirtualProtect(base, nt->OptionalHeader.SizeOfHeaders, PAGE_READONLY, &old);
     return base;
+}
+
+// ---- the database guards (src/db_guards.cpp), on the game's own DriveTrainConverter ----------------------------
+//
+// The converter (game+0xB99BE0) runs natively in the mapped exe. The game functions it calls that need the running
+// game are pointed at stand-ins here (its type checks, the drive type's text, the icon path's string, the release
+// that frees an object, and the "text" compare's import); everything else is the game's code as on disk: the cache's
+// Powertrains lookup (game+0x21DEC0, 0x26F900), the types (game+0x16A4B30, 0x15C91E0) and the empty value
+// (game+0x160C340). The car database cache is a fake one, with Powertrains Ids 0 to 7 and a hole at 3.
+// With the guards on ("plain": another mod's gamedbRC.slt is in mediaoverride), a known Id goes the game's way and an
+// unknown one comes back as the game's empty value, with every reference count as it was; with them off ("eo": the
+// game's own database), the same unknown Id stops at game+0xB99CD3, as in issue #23.
+
+struct GObj {             // what the converter touches in a value, parameter or result
+    void* vtbl;
+    uint64_t kind;        // the stand-ins' own: 1 an int, 2 a string
+    volatile LONG refs;   // +0x10, as the game's objects have it
+    LONG pad;
+    uint64_t pad2[2];
+    uint64_t v;           // +0x28: an int's value, or a string's text (a wchar_t*)
+};
+static_assert(offsetof(GObj, refs) == 0x10 && offsetof(GObj, v) == 0x28, "the game's layout");
+
+static char* g_game = nullptr;
+static char g_type_int[16];   // the int type the converter's first check asks for (game+0x15C8B20)
+static GObj g_made[8];
+static int g_nmade = 0, g_drive_calls = 0, g_released = 0, g_last_drive = -1;
+static std::string g_last_path;
+
+static void* gs_type_int(int) { return g_type_int; }
+static bool gs_is_instance(GObj* o, void* type) {
+    if (!o) return false;
+    if (type == g_type_int) return o->kind == 1;
+    if (type == g_game + 0x36CFB90) return o->kind == 2;   // the string type, game+0x16A4B30's
+    return false;
+}
+static bool gs_assignable(void* target, void* type) { return target == type; }
+static int gs_wcscmp(const wchar_t* a, const wchar_t* b) { return std::wcscmp(a, b); }
+static GObj** gs_drive_text(void*, GObj** out, int drive) {
+    ++g_drive_calls;
+    g_last_drive = drive;
+    GObj* o      = &g_made[g_nmade++ & 7];
+    *o           = {};
+    o->refs      = 1;
+    *out         = o;
+    return out;
+}
+static GObj** gs_string(GObj** out, const char* text) {
+    g_last_path = text;
+    GObj* o     = &g_made[g_nmade++ & 7];
+    *o          = {};
+    o->refs     = 1;
+    *out        = o;
+    return out;
+}
+static void gs_release(GObj*) { ++g_released; }
+
+static void stub(char* game, uint32_t rva, const void* to) {
+    DWORD old = 0;
+    VirtualProtect(game + rva, 12, PAGE_EXECUTE_READWRITE, &old);
+    unsigned char b[12] = {0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xE0};   // mov rax, imm64; jmp rax
+    std::memcpy(b + 2, &to, 8);
+    std::memcpy(game + rva, b, sizeof b);
+    VirtualProtect(game + rva, 12, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), game + rva, 12);
+}
+
+using ConvertFn = GObj** (*)(void* self, GObj** out, GObj* value, void* target, GObj* param);
+static LONG converter_filter(EXCEPTION_POINTERS* e, DWORD* code, uintptr_t* at) {
+    *code = e->ExceptionRecord->ExceptionCode;
+    *at   = reinterpret_cast<uintptr_t>(e->ExceptionRecord->ExceptionAddress);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+// No object with a destructor here: it has __try.
+static bool call_converter(GObj* value, void* target, GObj* param, GObj** out, DWORD* code, uintptr_t* at) {
+    static char self[0x100];
+    const auto fn = reinterpret_cast<ConvertFn>(g_game + 0xB99BE0);
+    __try {
+        fn(self + 0x80, out, value, target, param);
+        return true;
+    } __except (converter_filter(GetExceptionInformation(), code, at)) {
+        return false;
+    }
+}
+
+static void check_db_guards(char* game, bool guarded) {
+    g_game = game;
+    // Stack walks through the game's code: its function table, with the converter's C++ unwind handler left out
+    // (that's the game's CRT, which isn't running here).
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(game + reinterpret_cast<const IMAGE_DOS_HEADER*>(game)->e_lfanew);
+    const auto& pd = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+    CHECK(RtlAddFunctionTable(reinterpret_cast<PRUNTIME_FUNCTION>(game + pd.VirtualAddress), pd.Size / sizeof(RUNTIME_FUNCTION),
+                              reinterpret_cast<DWORD64>(game)));
+    DWORD old = 0;
+    char* unwind = game + 0x28D0D14;   // the converter's UNWIND_INFO: version 1, a termination handler
+    CHECK(static_cast<unsigned char>(*unwind) == 0x11);
+    VirtualProtect(unwind, 1, PAGE_READWRITE, &old);
+    *unwind = 0x01;
+    VirtualProtect(unwind, 1, old, &old);
+    stub(game, 0x15C8B20, reinterpret_cast<const void*>(&gs_type_int));
+    stub(game, 0x14530E0, reinterpret_cast<const void*>(&gs_is_instance));
+    stub(game, 0x154F960, reinterpret_cast<const void*>(&gs_assignable));
+    stub(game, 0xB9B570, reinterpret_cast<const void*>(&gs_drive_text));
+    stub(game, 0x16A0200, reinterpret_cast<const void*>(&gs_string));
+    stub(game, 0x257730, reinterpret_cast<const void*>(&gs_release));
+    void** iat = reinterpret_cast<void**>(game + 0x1DD0B00);   // the "text" compare's import
+    VirtualProtect(iat, 8, PAGE_READWRITE, &old);
+    *iat = reinterpret_cast<void*>(&gs_wcscmp);
+    VirtualProtect(iat, 8, old, &old);
+
+    // The cache: Powertrains Ids 0 to 7, record 3 missing. A record: its drive type at +1, its icon's path at +0x30
+    // (an MSVC std::string, short, so in place: the size at +0x10 and the capacity, 15, at +0x18 from there).
+    static char cache[0x400], table[0x80], records[8][0x60];
+    static char* list[9];
+    for (int i = 0; i < 8; ++i) {
+        records[i][1] = static_cast<char>(1 + i % 3);
+        std::snprintf(records[i] + 0x30, 16, "ICON%d", i);
+        const uint64_t size = std::strlen(records[i] + 0x30), cap = 15;
+        std::memcpy(records[i] + 0x40, &size, 8);
+        std::memcpy(records[i] + 0x48, &cap, 8);
+        list[i] = i == 3 ? nullptr : records[i];
+    }
+    list[8] = reinterpret_cast<char*>(0x4141414141414141ull);   // past the end, where the game's jbe reads for Id 8
+    char* table_ptr = table;
+    std::memcpy(cache + 0x3A0, &table_ptr, 8);
+    char* begin = reinterpret_cast<char*>(list);
+    char* end   = reinterpret_cast<char*>(list + 8);
+    std::memcpy(table + 0x68, &begin, 8);
+    std::memcpy(table + 0x70, &end, 8);
+    char* cache_ptr = cache;
+    std::memcpy(game + 0x34ABA60, &cache_ptr, 8);
+
+    void* const string_type = game + 0x36CFB90;
+    void* const other_type  = game + 0x36AD5E0;   // game+0x15C91E0's: the icon itself
+    auto* const empty       = reinterpret_cast<GObj*>(game + 0x36BA4F8);
+    static wchar_t text[] = L"text", icon[] = L"icon";
+    auto run = [&](uint32_t id, void* target, wchar_t* param_text, GObj** out, LONG* param_refs, DWORD* code, uintptr_t* at) {
+        static GObj value, param;
+        value      = {};
+        value.kind = 1;
+        value.v    = id;
+        param      = {};
+        param.kind = 2;
+        param.refs = 1;
+        param.v    = reinterpret_cast<uint64_t>(param_text);
+        *out       = nullptr;
+        const bool ok = call_converter(&value, target, &param, out, code, at);
+        *param_refs   = param.refs;
+        return ok;
+    };
+    GObj* out = nullptr;
+    LONG prefs = 0;
+    DWORD code = 0;
+    uintptr_t at = 0;
+    std::string log;
+    for (int i = 0; i < 100; ++i) {
+        log = slurp(L"fh2-mods\\platform.log");
+        if (has(log, "[Database guards] o")) break;
+        Sleep(100);
+    }
+    if (!guarded) {
+        CHECK(has(log, "[Database guards] off: the game reads its own database (no car pack or mod changes it)"));
+        // Without the guard, Id 9 (not in the table) stops the converter where issue #23's crash did.
+        const bool ok = run(9, string_type, text, &out, &prefs, &code, &at);
+        std::printf("     unguarded, Id 9: %s, exception 0x%08lX at game+0x%llX\n", ok ? "returned" : "stopped", code,
+                    static_cast<unsigned long long>(at - reinterpret_cast<uintptr_t>(game)));
+        CHECK(!ok && code == EXCEPTION_ACCESS_VIOLATION && at == reinterpret_cast<uintptr_t>(game) + 0xB99CD3);
+        return;
+    }
+    CHECK(has(log, "[Database guards] on (mediaoverride has another mod's database): a car whose powertrain isn't in the "
+                   "game's Powertrains table is shown without its drivetrain instead of stopping the game"));
+    CHECK(has(log, "hooked instruction game+0xB99CA0") && has(log, "hooked instruction game+0xB99D74"));
+    // A known Id, as text: the game's way, the drive type's text made and handed over, the parameter released.
+    bool ok = run(2, string_type, text, &out, &prefs, &code, &at);
+    CHECK(ok && g_drive_calls == 1 && g_last_drive == 3 && out == &g_made[0] && out->refs == 1 && prefs == 1);
+    // A known Id, as the icon's path: the record's own string.
+    ok = run(5, string_type, icon, &out, &prefs, &code, &at);
+    CHECK(ok && g_last_path == "ICON5" && out == &g_made[1] && out->refs == 1 && prefs == 1);
+    CHECK(!has(slurp(L"fh2-mods\\platform.log"), "a car's powertrain"));
+    // Unknown Ids: Id 8 (one past the end, which the game would read), the hole at 3 (as the icon's path) and Id 40
+    // (as the icon itself): the game's empty value, AddRef'd once each, nothing made, the parameter released.
+    const LONG empty_refs = empty->refs;
+    const int made        = g_nmade;
+    ok = run(8, string_type, text, &out, &prefs, &code, &at);
+    CHECK(ok && out == empty && empty->refs == empty_refs + 1 && prefs == 1);
+    ok = run(3, string_type, icon, &out, &prefs, &code, &at);
+    CHECK(ok && out == empty && empty->refs == empty_refs + 2 && prefs == 1);
+    ok = run(40, other_type, icon, &out, &prefs, &code, &at);
+    CHECK(ok && out == empty && empty->refs == empty_refs + 3 && prefs == 1);
+    CHECK(g_nmade == made && g_drive_calls == 1 && g_released == 0);
+    log = slurp(L"fh2-mods\\platform.log");
+    CHECK(has(log, "[Database guards] a car's powertrain, 8, isn't in the game's Powertrains table, so the game would have "
+                   "stopped at game+0xB99CD3"));
+    CHECK(has(log, "The likely cause is a car pack or a mod that changes the game database (mediaoverride has another mod's database)"));
+    CHECK(log.find("a car's powertrain") == log.rfind("a car's powertrain"));   // once a session
+    // And a known Id still goes the game's way after them.
+    ok = run(0, string_type, text, &out, &prefs, &code, &at);
+    CHECK(ok && g_drive_calls == 2 && g_last_drive == 1 && out->refs == 1 && prefs == 1);
 }
 
 static LONG WINAPI after_crash(EXCEPTION_POINTERS*) {
@@ -256,6 +456,7 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(waited < 2000);
     }
     CHECK(has(log, "WINEDLLOVERRIDES=\"winmm=n,b\"") == (phase == L"wine-builtin"));
+    if (phase == L"plain" || phase == L"eo") check_db_guards(game, phase == L"plain");
     // The game's file lookup: the platform's own function only without Extra Options.
     void* lookup = game ? *reinterpret_cast<void**>(game + 0x2E6EF28) : nullptr;
     MEMORY_BASIC_INFORMATION mbi{};
