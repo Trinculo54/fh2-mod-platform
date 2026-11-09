@@ -710,7 +710,7 @@ The platform publishes this interface itself, before any mod starts, so FH2MP fi
 
 - **0**: the game counts as online from then on, and the mods that shouldn't run online but haven't run yet are stopped as above. Connect.
 - **Over 0**: nothing changed. No mod is stopped and `playing_online` stays 0; those mods keep running, as they ran offline first and may have changed the game in ways the platform can't undo. Stay offline, and ask the player to start the game from the FH2MP launcher. The log names them and says what they did.
-- **Already online** (decided at load, or by an earlier call that returned 0): nothing changes, and it returns the mods that had run before the platform stopped them as FH2MP started, with the mods from before the platform it couldn't stop.
+- **Already online** (decided at load, or by an earlier call that returned 0): nothing changes, and it returns the mods that had run before the platform stopped them as FH2MP started, with the mods from before the platform it couldn't stop. Over 0 still means stay offline, and ask the player to restart the game from the FH2MP launcher: `playing_online` is already 1 then, and those mods stay stopped until the restart.
 
 `going_online` never rewrites the string tables or the game database, and leaves FH2MP's copy of the server's database alone. Call it from FH2MP's own thread rather than a game thread (it can wait while the platform writes the string tables), as often as you like.
 

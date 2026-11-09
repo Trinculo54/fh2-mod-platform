@@ -1127,10 +1127,16 @@ void finish_online(const std::string& why, const GoingOnline& g) {
 void go_online(const std::string& why) {
     GoingOnline g;
     {
+        // With the hooks' and files' locks held too, as in online_going: a hook of theirs that goes in meanwhile is
+        // either in what begin_online reads (FH2Mod::ran), or refused as theirs is stopped.
         std::scoped_lock lk{g_mu};
         if (g_online) return;
-        online_off(g.stop, g.others);
-        begin_online(g);
+        hooks_locked([&] {
+            return files_locked([&] {
+                online_off(g.stop, g.others);
+                return begin_online(g);
+            });
+        });
     }
     finish_online(why, g);
 }

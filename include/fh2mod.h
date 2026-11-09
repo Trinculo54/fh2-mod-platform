@@ -1163,7 +1163,10 @@ struct FH2MessageBox {
    stay offline, and ask the player to start the game from the FH2MP
    launcher.
    Once the game counts as online (at load, or after a 0), it changes nothing
-   and returns the mods that had run before the platform stopped them.
+   and returns the mods that had run before the platform stopped them. Over 0
+   then still means stay offline, and ask the player to restart the game from
+   the FH2MP launcher: playing_online is already 1, and those mods stay
+   stopped until the restart.
    It never rewrites the string tables or the game database. Call it from
    FH2MP's own thread, as often as you like. */
 #define FH2_ONLINE_INTERFACE "FH2Platform.Online"
