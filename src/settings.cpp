@@ -2473,7 +2473,9 @@ std::vector<PageItem> car_pack_items() {
     heading.style    = FH2_ROW_HEADING;
     heading.skip     = true;
     items.push_back(heading);
-    if (!unread.empty()) items.push_back(info(tr("Car packs aren't read"), shown(unread)));
+    // Recorded cars (a save may have them) missing from the database this time: a copy of the saves was made first
+    const std::string saves = platform_save_snapshots_kept() ? tr("A copy of your saves from before is in fh2-mods\\save-snapshots.") : "";
+    if (!unread.empty()) items.push_back(info(tr("Car packs aren't read"), unread_cars_missing() ? join_sentences(shown(unread), saves) : shown(unread)));
     for (const CarPack& p : car_packs()) {
         std::string cars;   // the cars' names, as the Autoshow shows them
         for (std::size_t i = 0; i < p.cars.size(); ++i)
@@ -2490,6 +2492,7 @@ std::vector<PageItem> car_pack_items() {
             it.value_alert = "! " + tr("Error") + " !";
             it.value.clear();
             it.note       = trf("It isn't working: {0} fh2-mods\\platform.log has more.", {shown(why)});
+            if (car_pack_cars_missing(p.name)) it.note = join_sentences(it.note, saves);
             it.note_alert = true;
         } else if (const std::string warn = car_pack_sql_warning(p.name); !warn.empty()) {   // it works, but could clash
             it.note       = trf("Warning: {0} fh2-mods\\platform.log has more.", {warn});
@@ -2582,6 +2585,13 @@ void first_run_cues(bool tab, bool settings_door) {
             lines.push_back(title_line("Mod settings: Pause > Settings > MODS"));
             slog("title screen: mod settings are under Pause > Settings > MODS, as the MODS tab's files couldn't be written");
         }
+    }
+    // Car packs' cars a save may have that aren't in the game database this time (database.cpp): said before the save
+    // loads, with the pack and why (messages from later(), which each language's Main.str gets in its own words).
+    if (const std::vector<std::string> cars = car_pack_title_lines(); !cars.empty()) {
+        lines.insert(lines.end(), cars.begin(), cars.end());
+        if (platform_save_snapshots_kept()) lines.push_back(later("A copy of your saves from before is in fh2-mods\\save-snapshots."));
+        slog("title screen: car packs' cars that a save may have aren't in the game database this time");
     }
     set_platform_notice(lines);
 }

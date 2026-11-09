@@ -16,6 +16,16 @@ std::string fh2platform::tr(const char* english) {
     return e;
 }
 
+// And for tr_in(), the title screen's: two templates and one line marked in "PL", English for any other.
+std::string fh2platform::tr_in(const char* english, std::string_view code) {
+    const std::string e = english ? english : "";
+    if (code != "PL") return e;
+    if (e == "{0}, {1} and {2} more") return "pl<{0}|{1}|+{2}>";
+    if (e == "Its SQL adds rows by Ids ({0}); from {1} up.") return "pl[{1}: {0}]";
+    if (e == "Made for offline play.") return "pl: Made for offline play.";
+    return e;
+}
+
 using namespace fh2platform;
 
 namespace {
@@ -135,6 +145,18 @@ int main() {
         same(shown(later("Problem: {0}", {outer})),
              "Problem: Its SQL adds rows by Ids (Data_Car 3000, Data_Engine 3000 and 2 more); from 9000 up.",
              "two levels deep: the argument is shown as its English sentence");
+    }
+    {
+        // the title screen's lines in one table's language (shown_in, with the stand-in tr_in() above): a message and the
+        // message in it translated, a plain argument (a pack's name) kept as it is, a plain line looked up as before
+        const std::string inner = later("{0}, {1} and {2} more", {"Data_Car 3000", "Data_Engine 3000", "2"});
+        const std::string outer = later("Its SQL adds rows by Ids ({0}); from {1} up.", {inner, "9000"});
+        same(shown_in(outer, "PL"), "pl[9000: pl<Data_Car 3000|Data_Engine 3000|+2>]", "a message in Polish, with the one in it");
+        same(shown_in(outer, "EN"), "Its SQL adds rows by Ids (Data_Car 3000, Data_Engine 3000 and 2 more); from 9000 up.",
+             "the same in English");
+        same(shown_in(later("Its SQL adds rows by Ids ({0}); from {1} up.", {"Made for offline play.", "1"}), "PL"),
+             "pl[1: Made for offline play.]", "a plain argument isn't looked up");
+        same(shown_in("Made for offline play.", "PL"), "pl: Made for offline play.", "a plain line is, as before");
     }
 
     std::printf(g_failed ? "\n%d FAILED\n" : "\nALL PASSED\n", g_failed);

@@ -488,7 +488,9 @@ typedef struct FH2ModApi {
        that changes what gets saved. Call it from fh2mod_init. Once every mod's
        fh2mod_init has returned, the platform copies the folder (once, however
        many mods ask) to fh2-mods\save-snapshots\<session id>\, keeps the
-       newest `keep` copies (the most any mod asked for, at least 1), and says
+       newest `keep` copies (the most any mod asked for, at least 1; from
+       platform 2.9.0 the platform's own car-packs-<session id> copies aren't
+       counted), and says
        in the log which mods asked and why. The game reads the saves when A is
        pressed on the title screen, long after. The platform only reads the
        saves, never writes to them; to go back, copy a snapshot's contents

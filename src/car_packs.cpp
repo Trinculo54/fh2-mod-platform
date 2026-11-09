@@ -52,6 +52,7 @@ namespace {
 
 std::vector<CarPack> g_packs;
 std::string g_unread;                         // why fh2-cars' packs aren't read this session
+std::string g_unread_why;                     // and the reason alone (a message from later())
 std::atomic<bool> g_merged{false};            // the layer's zipmanifest.xml is the platform's, with the packs' zips
 std::mutex g_problem_mu;
 std::map<std::string, std::string> g_problems; // pack -> why it isn't working
@@ -475,12 +476,15 @@ void car_packs_unavailable(const std::string& why) {
     for (const auto& e : fs::directory_iterator(azimuth_dir() / "fh2-cars", ec))
         n += e.is_directory(ec) && fs::is_directory(e.path() / "media", ec);
     if (!n) return;
+    g_unread_why = why;
     g_unread = later("The {0} car pack(s) in fh2-cars aren't read: {1} They need Azimuth 1.0 or later, without Extra Options.",
                      {std::to_string(n), why});
     plog("car packs: " + english(g_unread));
 }
 
 std::string car_packs_unread() { return g_unread; }
+
+std::string car_packs_unread_why() { return g_unread_why; }
 
 // A car's carbin names its upgradeable parts' models by their rows' Ids. Its body's are shared with
 // the base car, but its rear wing's rows are its own, which its SQL numbers <car Id> * 1000 + n, so

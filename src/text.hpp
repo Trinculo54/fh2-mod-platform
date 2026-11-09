@@ -54,6 +54,20 @@ inline std::string shown(const std::string& message) {
     return fill(tr(t.c_str()), args);
 }
 
+// Text for the string tables in `table_code` (tr_in), for what's written into every language's tables at once (the
+// title screen): a message from later() in that language; any other text looked up in the table as it is.
+inline std::string shown_in(const std::string& message, std::string_view table_code) {
+    std::string t;
+    std::vector<std::string> args;
+    if (!split_later(message, t, args)) return tr_in(message.c_str(), table_code);
+    for (std::string& a : args) {
+        std::string inner;
+        std::vector<std::string> inner_args;
+        if (split_later(a, inner, inner_args)) a = shown_in(a, table_code);   // a plain argument (a name) stays as it is
+    }
+    return fill(tr_in(t.c_str(), table_code), args);
+}
+
 // `s` in capitals for the game's language now (invariant before the game has one).
 inline std::string upper_game(const std::string& s) {
     char code[8];

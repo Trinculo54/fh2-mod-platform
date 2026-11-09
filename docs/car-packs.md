@@ -12,6 +12,16 @@ Put the pack's folder in `fh2-cars`, so that its `pack.ini` is at `fh2-cars\<pac
 
 To remove a pack, delete its folder. Its cars and files are gone from the next start. A car you bought is in your save by its Id, and what the game does with a save whose car has gone hasn't been tried yet, so keep a copy of your saves before removing a pack whose car you own. A car keeps its Id for good (see below), so putting the pack back gives it the same one.
 
+### When a pack's cars are missing
+
+A pack's cars can also be missing from the game's database without you removing anything: the pack is left out because a mod's SQL now takes one of its car's Ids, its own SQL fails after an update, the packs aren't read at all (Extra Options installed), or the platform has gone back to an older version. The platform checks at every start, before the game reads your save, that every car it has given an Id to (`fh2-mods\platform-car-ids.txt`) is in the database the game reads. When one isn't:
+
+- the first start it's missing, your saves are copied to `fh2-mods\save-snapshots\car-packs-<session>` (the newest 5 such copies are kept, apart from those mods ask for), and `fh2-mods\platform-cars-missing.txt` lists the cars;
+- every start it's missing, the title screen says which pack's cars aren't in the game and why ("Car pack Mustang clone's cars aren't in the game this time: ..."), and the pack's row on the MODS tab says so in red. For a pack whose folder is gone only `platform.log` says so;
+- when the database the platform built on can't be read, which passes on its own, the database from the last start is kept as it is, with the packs' cars, rather than one without them.
+
+**Extracting an older mod zip takes car packs out.** Every mod zip ships the platform it was built with, and many (WreckingBall 1.3.3, Achievements 1.0.2 and others) still ship 2.8.0, which doesn't know car packs. Extract one of those and the next start has none of your packs' cars, with no warning, since 2.8.0 can't give one. Reinstall a mod that ships 2.9.0 (or the platform's own zip) before playing, and keep a copy of your saves if you own a pack's car.
+
 ## This Azimuth folder's own files
 
 On Azimuth 1.0 or later without Extra Options, everything the platform writes for the game goes to the Azimuth folder itself, from 2.9.0: mods' text and files (`set_string`, `set_file`), the MODS tab's pages, the database, and the packs' merged `zipmanifest.xml`. They're in `data\titles\1A96545B\tmp\fh2-platform\media`, part of the temporary drive Azimuth keeps for FH2 in its own folder, which the game reads ahead of `mediaoverride`. So Azimuth folders that share one game folder no longer see each other's mods. `mediaoverride` is still read, after this: files other mods copy there, a traffic car mod's database. The first time the layer is used, the files and string tables the platform wrote to `mediaoverride` before (as 2.8.0 did) are moved to `fh2-mods\platform-old-overrides\mediaoverride`, so they can't show through from under it; `moved.txt` there lists them.

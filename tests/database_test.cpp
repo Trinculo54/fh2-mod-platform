@@ -802,18 +802,39 @@ static void car_ids() {
     CHECK(has(c.log, "database: same changes as last launch, reusing this folder's database on the temp drive"));
     CHECK(stamp(layer) == built && listed(record) == ids);
 
-    // A mod that adds engine 3003, test-pack's car's: the pack is left out, and its car keeps its Id.
+    // A mod that adds engine 3003, test-pack's car's: the pack is left out, and its car keeps its Id. A save may have
+    // that car, so the saves are copied first (the first session only), and the title screen says so, with the pack and
+    // why, every session it's missing.
+    const fs::path saves = c.dir / "data" / "titles" / "1A96545B" / "saves", missing = c.dir / "fh2-mods" / "platform-cars-missing.txt";
+    const fs::path title = c.dir / "fh2-mods" / "platform-title.txt";
+    fs::create_directories(saves);
+    std::ofstream{saves / "test.sav", std::ios::binary} << "a save";
     c.mods({"CarIdLate"});
-    c.launch();
+    c.launch(L"snapshot");
     CHECK(has(c.log, "[car pack test-pack] database: left out, so none of its changes were made: TEST_Pack01's Id, 3003, is "
                      "taken now: CarIdLate's SQL adds Data_Engine 3003."));
     CHECK(car(3003) == "" && car(3001) == "LIT_Pack01" && q(layer, "SELECT count(*) FROM Data_Engine WHERE EngineID = 3003") == "1");
     CHECK(listed(record) == ids);
+    CHECK(has(c.log, "[car pack test-pack] database: TEST_Pack01 (car 3003), which a save may have, isn't in the game database this "
+                     "session: TEST_Pack01's Id, 3003, is taken now: CarIdLate's SQL adds Data_Engine 3003."));
+    CHECK(has(c.log, "copied to fh2-mods\\save-snapshots\\car-packs-") &&
+          has(c.log, "(the newest 5 kept), for the FH2 Mod Platform (cars a save may have aren't in the game database: TEST_Pack01 (car 3003))"));
+    CHECK(listed(missing) == "TEST_Pack01\t3003\n");
+    CHECK(has(slurp(title), "Car pack {0}'s cars aren't in the game this time: {1}") && has(slurp(title), "Test pack") &&
+          has(slurp(title), "A copy of your saves from before is in fh2-mods\\save-snapshots."));
+    bool copied = false;
+    for (const auto& e : fs::directory_iterator(c.dir / "fh2-mods" / "save-snapshots"))
+        copied = copied || (e.path().filename().wstring().rfind(L"car-packs-", 0) == 0 && slurp(e.path() / "test.sav") == "a save");
+    CHECK(copied);
+    c.launch();
+    CHECK(has(c.log, "TEST_Pack01 (car 3003), which a save may have, isn't in the game database this session") &&
+          !has(c.log, "save snapshot:") && has(slurp(title), "Car pack {0}'s cars aren't in the game this time: {1}"));
 
-    // That mod gone: the pack is back with the same Id.
+    // That mod gone: the pack is back with the same Id, and nothing is said about it.
     c.mods({});
     c.launch();
     CHECK(car(3003) == "TEST_Pack01" && car(3000) == "" && listed(record) == ids);
+    CHECK(!present(missing) && !has(c.log, "which a save may have") && !has(slurp(title), "Car pack {0}"));
 
     // The keys of the car names given as text gone (platform-db-layer-strings.txt): the database is built again, not
     // reused with names no string table has.
@@ -857,6 +878,14 @@ static void car_ids() {
                                                "INSERT INTO Data_Car SELECT * FROM mc; DROP TABLE mc;\n";
     c.launch();
     CHECK(listed(record) == recovered + "MORE_Pack01\t3600\n" && listed(copy) == listed(record) && car(3600) == "MORE_Pack01");
+
+    // Extra Options installed: the packs aren't read, so none of their cars is in the database the game reads, and the
+    // title screen says why.
+    c.launch(L"eo");
+    CHECK(has(c.log, "database: TEST_Pack01 (car 3003), which a save may have, isn't in the game database this session: The 4 car "
+                     "pack(s) in fh2-cars aren't read: Extra Options is loaded. They need Azimuth 1.0 or later, without Extra Options."));
+    CHECK(has(slurp(title), "The car packs in fh2-cars aren't read this time: {0}") && has(slurp(title), "Extra Options is loaded."));
+    CHECK(has(listed(missing), "MORE_Pack01\t3600\n"));
 }
 
 // A mod that replaces zipmanifest.xml with set_file: its own without a car pack zip, as before; refused while the

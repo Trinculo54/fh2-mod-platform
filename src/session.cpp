@@ -57,13 +57,17 @@ std::string json(const std::string& s) {
 
 // Deletes the oldest files called "<prefix>*<suffix>" (or folders, with `folders`) in `dir`, so
 // that `keep` are left; names sort by time, as session ids do.
-void prune(const fs::path& dir, const std::wstring& prefix, const std::wstring& suffix, std::size_t keep, bool folders) {
+// Keeps the newest `keep` of the files (or folders) in `dir` named prefix...suffix: names sort by date. Those
+// starting with `skip` aren't counted (the platform's own save snapshots, among the mods').
+void prune(const fs::path& dir, const std::wstring& prefix, const std::wstring& suffix, std::size_t keep, bool folders,
+           const std::wstring& skip = {}) {
     std::error_code ec;
     std::vector<fs::path> found;
     for (const auto& e : fs::directory_iterator(dir, ec)) {
         const std::wstring n = e.path().filename().wstring();
         if ((folders ? e.is_directory(ec) : e.is_regular_file(ec)) && n.size() >= prefix.size() + suffix.size() &&
-            n.compare(0, prefix.size(), prefix) == 0 && n.compare(n.size() - suffix.size(), suffix.size(), suffix) == 0)
+            n.compare(0, prefix.size(), prefix) == 0 && n.compare(n.size() - suffix.size(), suffix.size(), suffix) == 0 &&
+            (skip.empty() || n.compare(0, skip.size(), skip) != 0))
             found.push_back(e.path());
     }
     std::sort(found.begin(), found.end());
@@ -170,7 +174,52 @@ namespace {
 std::vector<std::string> g_snap_for; // "Mod (reason)"
 uint32_t g_snap_keep = 0;
 bool g_snap_closed   = false;        // every fh2mod_init has returned
+bool g_snap_platform = false;        // the platform's own copy started this session (platform_save_snapshot)
 fs::path saves_dir() { return azimuth_dir() / L"data" / L"titles" / L"1A96545B" / L"saves"; }
+
+// The platform's own copies (car packs' cars missing from the database) are save-snapshots\car-packs-<session id>,
+// kept apart from the mods' when either is pruned, so mods asking for copies every session don't prune them away.
+const std::wstring kPlatformSnapshots = L"car-packs-";
+constexpr uint32_t kPlatformKeep      = 5;
+
+struct SnapJob {
+    std::wstring folder; // under fh2-mods\save-snapshots
+    std::string who;
+    uint32_t keep;
+    bool platform;
+};
+
+DWORD WINAPI copy_saves(LPVOID p) {
+    const SnapJob j = *static_cast<SnapJob*>(p);
+    delete static_cast<SnapJob*>(p);
+    const fs::path root = azimuth_dir() / L"fh2-mods" / L"save-snapshots";
+    const fs::path to   = root / j.folder;
+    std::error_code ec;
+    fs::create_directories(to, ec);
+    fs::copy(saves_dir(), to, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+    std::size_t files = 0;
+    uintmax_t bytes   = 0;
+    for (auto it = fs::recursive_directory_iterator(to, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
+        if (it->is_regular_file(ec)) {
+            ++files;
+            bytes += it->file_size(ec);
+        }
+    if (ec || files == 0) {
+        plog("save snapshot: copying the saves failed" + (ec ? " (" + ec.message() + ")" : std::string()) + ", for " + j.who);
+        return 0;
+    }
+    if (j.platform) prune(root, kPlatformSnapshots, L"", j.keep, true);
+    else prune(root, L"", L"", j.keep, true, kPlatformSnapshots);
+    plog("save snapshot: " + std::to_string(files) + " file(s), " + std::to_string((bytes + 524288) / 1048576) +
+         " MB, copied to fh2-mods\\save-snapshots\\" + narrow(j.folder) + " (the newest " + std::to_string(j.keep) + " kept), for " + j.who);
+    return 0;
+}
+
+void start_copy(SnapJob* job) {
+    HANDLE t = CreateThread(nullptr, 0, copy_saves, job, 0, nullptr);
+    if (t) CloseHandle(t);
+    else delete job;
+}
 } // namespace
 
 int request_save_snapshot(FH2Mod* m, const char* reason, uint32_t keep) {
@@ -204,40 +253,33 @@ void start_save_snapshot() {
     if (asked.empty()) return;
     std::string who;
     for (const std::string& a : asked) who += (who.empty() ? "" : ", ") + a;
-    struct Job {
-        std::string who;
-        uint32_t keep;
-    };
-    auto* job = new Job{who, keep};
-    HANDLE t  = CreateThread(
-        nullptr, 0,
-        [](LPVOID p) -> DWORD {
-            const Job j = *static_cast<Job*>(p);
-            delete static_cast<Job*>(p);
-            const fs::path root = azimuth_dir() / L"fh2-mods" / L"save-snapshots";
-            const fs::path to   = root / std::wstring(g_id.begin(), g_id.end());
-            std::error_code ec;
-            fs::create_directories(to, ec);
-            fs::copy(saves_dir(), to, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
-            std::size_t files = 0;
-            uintmax_t bytes   = 0;
-            for (auto it = fs::recursive_directory_iterator(to, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
-                if (it->is_regular_file(ec)) {
-                    ++files;
-                    bytes += it->file_size(ec);
-                }
-            if (ec || files == 0) {
-                plog("save snapshot: copying the saves failed" + (ec ? " (" + ec.message() + ")" : std::string()) + ", for " + j.who);
-                return 0;
-            }
-            prune(root, L"", L"", j.keep, true);
-            plog("save snapshot: " + std::to_string(files) + " file(s), " + std::to_string((bytes + 524288) / 1048576) +
-                 " MB, copied to fh2-mods\\save-snapshots\\" + g_id + " (the newest " + std::to_string(j.keep) + " kept), for " + j.who);
-            return 0;
-        },
-        job, 0, nullptr);
-    if (t) CloseHandle(t);
-    else delete job;
+    start_copy(new SnapJob{std::wstring(g_id.begin(), g_id.end()), who, keep, false});
+}
+
+bool platform_save_snapshot(const std::string& why) {
+    std::error_code ec;
+    {
+        std::scoped_lock lk{g_mu};
+        if (g_snap_platform) return true;   // once a session: the first has the saves as they were
+        if (!fs::is_directory(saves_dir(), ec)) {
+            plog("save snapshot: there's no saves folder at data\\titles\\1A96545B\\saves to copy, for the FH2 Mod Platform (" + why + ")");
+            return false;
+        }
+        g_snap_platform = true;
+    }
+    start_copy(new SnapJob{kPlatformSnapshots + std::wstring(g_id.begin(), g_id.end()), "the FH2 Mod Platform (" + why + ")", kPlatformKeep, true});
+    return true;
+}
+
+bool platform_save_snapshots_kept() {
+    {
+        std::scoped_lock lk{g_mu};
+        if (g_snap_platform) return true;   // still being copied, perhaps
+    }
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(azimuth_dir() / L"fh2-mods" / L"save-snapshots", ec))
+        if (e.is_directory(ec) && e.path().filename().wstring().rfind(kPlatformSnapshots, 0) == 0) return true;
+    return false;
 }
 
 const wchar_t* session_log_path(FH2Mod* m, const wchar_t* folder, uint32_t keep) {

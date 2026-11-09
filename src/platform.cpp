@@ -388,7 +388,7 @@ void apply_all() {
                 if (auto x = texts.find(s); x != texts.end()) s = x->second;
                 if (is_main && key == kToStartKey) {
                     std::vector<std::string> own;   // the platform's own lines, in this table's language
-                    for (const std::string& l : platform_lines()) own.push_back(tr_in(l.c_str(), lang));
+                    for (const std::string& l : platform_lines()) own.push_back(shown_in(l, lang));   // later() messages too
                     // a notice a mod got from tr() (API 10) in this table's language, then the platform's own lines
                     s = title_with_notices(
                         g_azimuth, s,

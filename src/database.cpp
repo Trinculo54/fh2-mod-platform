@@ -674,8 +674,13 @@ bool write_whole(const fs::path& to, const std::string& text) {
     return true;
 }
 
+//
+// `keep_last` comes back true, with nothing changed, when the database built on couldn't be read (so every pack with
+// cars would be left out, for a reason that can pass on its own) and `can_keep_last` says there's a copy from last
+// time to keep instead, with their cars.
 std::vector<Sql> with_car_ids(const Files& f, const fs::path& base, const std::string& shown, const std::vector<Sql>& given,
-                              std::list<std::vector<std::string>>& held) {
+                              std::list<std::vector<std::string>>& held, bool can_keep_last, bool& keep_last) {
+    keep_last = false;
     if (std::none_of(given.begin(), given.end(), [](const Sql& s) { return s.pack && !s.pack->cars.empty(); }))
         return given;
     Record rec;
@@ -713,6 +718,8 @@ std::vector<Sql> with_car_ids(const Files& f, const fs::path& base, const std::s
     sqlite3_close(db);
     plog("database: car packs' car Ids checked against " + shown + " and the other SQL in " +
          std::to_string(GetTickCount64() - started) + " ms");
+    keep_last = can_keep_last && std::any_of(plan.begin(), plan.end(), [](const car_ids::Outcome& o) { return o.base_unread; });
+    if (keep_last) return {};
     std::vector<Sql> out;
     for (std::size_t i = 0; i < given.size(); ++i) {
         const Sql& s = given[i];
@@ -1009,7 +1016,16 @@ void apply_layer_database(const Files& f, const std::vector<Sql>& given) {
         return;
     }
     std::list<std::vector<std::string>> held;
-    const std::vector<Sql> sources = with_car_ids(f, base, shown, given, held);
+    const State last = read_state(f.layer_state);
+    const auto at    = stamp_of(f.layer);
+    bool keep_last   = false;
+    const std::vector<Sql> sources = with_car_ids(f, base, shown, given, held, at && last.names(*at), keep_last);
+    if (keep_last) {
+        plog("database: car packs' cars couldn't be checked against " + shown + ", as it couldn't be read, so this folder's "
+             "database from last time is kept as it is, with their cars (it's built again next launch)");
+        replay(last);
+        return;
+    }
     if (sources.empty()) {
         drop_layer_copy(f, "no changes could be applied");
         keep_strings(f.layer_strings, {});
@@ -1060,6 +1076,106 @@ void apply_layer_database(const Files& f, const std::vector<Sql>& given) {
         plog("database: couldn't write fh2-mods\\platform-db-layer.txt, so the database is built again next launch");
     plog("database: wrote this folder's database on the temp drive with changes from " + std::to_string(applied) +
          " car pack(s) and mod(s)");
+}
+
+// Cars fh2-mods\platform-car-ids.txt records, which a save may have (by Id), that aren't in the database the game reads
+// this session: their pack left out, its SQL failed, the packs not read at all (Extra Options, say), or the pack
+// removed. What the game does with such a save hasn't been tried; it may drop the car and save. So the first session
+// a car goes missing (fh2-mods\platform-cars-missing.txt lists last time's), the saves are copied first; and every
+// session the title screen and the MODS tab say so for a pack that's there, or for the packs that aren't read. The
+// log has every car.
+std::set<std::string> g_missing_packs;   // under g_warn_mu: packs whose recorded cars aren't in the database
+bool g_missing_unread = false;           // the same for the packs that aren't read
+std::vector<std::string> g_title_lines;  // the title screen's lines about them (messages from later())
+
+void check_recorded_cars(const Files& f) {
+    std::vector<std::pair<std::string, int64_t>> recorded;   // as the record spells them
+    std::set<std::string> listed;
+    for (const fs::path* file : {&f.car_ids, &f.car_ids_copy})
+        for (const auto& l : read_lines(*file)) {
+            std::string car;
+            int64_t id = 0;
+            if (record_line(l, car, id) && listed.insert(lower_ascii(car)).second) recorded.emplace_back(car, id);
+        }
+    std::set<std::string> packs;
+    bool unread = false;
+    std::vector<std::string> lines, missing;   // missing: "<car><TAB><id>"
+    if (!recorded.empty()) {
+        fs::path read;   // the database the game reads, as cars_without_powertrain finds it
+        for (const fs::path* p : {&f.layer, &f.target, &f.mediapc, &f.media})
+            if ((p != &f.layer || instance_layer()) && is_file(*p)) {
+                read = *p;
+                break;
+            }
+        sqlite3* db = nullptr;
+        if (read.empty() || sqlite3_open_v2(narrow(read.wstring()).c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+            sqlite3_close(db);
+            return;   // can't tell: as it was
+        }
+        const auto ask = [&](const char* sql, const std::function<void(sqlite3_stmt*)>& bind) {
+            std::string name;
+            sqlite3_stmt* q = nullptr;
+            if (sqlite3_prepare_v2(db, sql, -1, &q, nullptr) == SQLITE_OK) {
+                bind(q);
+                if (sqlite3_step(q) == SQLITE_ROW)
+                    if (const auto* t = reinterpret_cast<const char*>(sqlite3_column_text(q, 0))) name = t;
+            }
+            sqlite3_finalize(q);
+            return name;
+        };
+        for (const auto& [car, id] : recorded) {
+            const CarPack* pack = nullptr;
+            for (const auto& p : car_packs())
+                for (const auto& c : p.cars)
+                    if (lower_ascii(c) == lower_ascii(car)) pack = &p;
+            // There: its Id is still that car; or, for a pack whose SQL writes an Id of its own, the pack ran and the
+            // database has the car by name.
+            const int64_t at = id;
+            if (lower_ascii(ask("SELECT MediaName FROM Data_Car WHERE Id = ?1", [&](sqlite3_stmt* q) { sqlite3_bind_int64(q, 1, at); })) ==
+                lower_ascii(car))
+                continue;
+            if (pack && car_pack_problem(pack->name).empty() &&
+                !ask("SELECT MediaName FROM Data_Car WHERE MediaName = ?1 COLLATE NOCASE",
+                     [&](sqlite3_stmt* q) { sqlite3_bind_text(q, 1, car.c_str(), -1, SQLITE_TRANSIENT); }).empty())
+                continue;
+            missing.push_back(car + "\t" + std::to_string(id));
+            const std::string what = "database: " + car + " (car " + std::to_string(id) + "), which a save may have, isn't in the "
+                                     "game database this session: ";
+            if (pack) {
+                if (car_pack_problem(pack->name).empty()) note_car_pack_problem(pack->name, later("Its cars aren't in the game database this time."));
+                const std::string why = car_pack_problem(pack->name);
+                log_line("car pack " + pack->name, what + english(why));
+                if (packs.insert(pack->name).second)
+                    lines.push_back(later("Car pack {0}'s cars aren't in the game this time: {1}", {pack->title.empty() ? pack->name : pack->title, why}));
+            } else if (!car_packs_unread().empty()) {
+                plog(what + english(car_packs_unread()));
+                if (!unread) lines.push_back(later("The car packs in fh2-cars aren't read this time: {0}", {car_packs_unread_why()}));
+                unread = true;
+            } else {
+                plog(what + "no car pack in fh2-cars adds it now.");
+            }
+        }
+        sqlite3_close(db);
+    }
+    // The first session a car goes missing, the saves are copied before the game reads them.
+    const fs::path state = azimuth_dir() / "fh2-mods" / "platform-cars-missing.txt";
+    const std::vector<std::string> before = read_lines(state);
+    std::string fresh;
+    for (const auto& m : missing)
+        if (std::find(before.begin(), before.end(), m) == before.end())
+            fresh += (fresh.empty() ? "" : ", ") + m.substr(0, m.find('\t')) + " (car " + m.substr(m.find('\t') + 1) + ")";
+    if (!fresh.empty()) platform_save_snapshot("cars a save may have aren't in the game database: " + fresh);
+    if (missing.empty()) {
+        if (!before.empty()) remove_or_log(state, "fh2-mods\\platform-cars-missing.txt");
+    } else if (missing != before) {
+        std::string text;
+        for (const auto& m : missing) text += m + "\r\n";
+        if (!write_whole(state, text)) plog("database: couldn't write fh2-mods\\platform-cars-missing.txt");
+    }
+    std::scoped_lock lk{g_warn_mu};
+    g_missing_packs  = std::move(packs);
+    g_missing_unread = unread;
+    g_title_lines    = std::move(lines);
 }
 
 } // namespace
@@ -1135,8 +1251,23 @@ std::vector<std::string> cars_without_powertrain() {
     return cars;
 }
 
-void apply_database(const std::vector<FH2Mod*>& mods) {
-    std::scoped_lock lk{g_db_mu};
+bool car_pack_cars_missing(const std::string& pack) {
+    std::scoped_lock lk{g_warn_mu};
+    return g_missing_packs.count(pack) != 0;
+}
+
+bool unread_cars_missing() {
+    std::scoped_lock lk{g_warn_mu};
+    return g_missing_unread;
+}
+
+std::vector<std::string> car_pack_title_lines() {
+    std::scoped_lock lk{g_warn_mu};
+    return g_title_lines;
+}
+
+// The build itself (apply_database), under g_db_mu.
+static void build_and_write(const std::vector<FH2Mod*>& mods) {
     g_strings.clear();
     clear_sql_warnings();
     if (game_mount().empty()) return;
@@ -1210,7 +1341,14 @@ void apply_database(const std::vector<FH2Mod*>& mods) {
         return;
     }
     std::list<std::vector<std::string>> held;
-    const std::vector<Sql> resolved = with_car_ids(f, base, shown, sources, held);
+    bool keep_last = false;
+    const std::vector<Sql> resolved = with_car_ids(f, base, shown, sources, held, found == Found::ours, keep_last);
+    if (keep_last) {
+        plog("database: car packs' cars couldn't be checked against " + shown + ", as it couldn't be read, so the copy from "
+             "last time is kept as it is, with their cars (it's built again next launch)");
+        replay(st);
+        return;
+    }
     if (resolved.empty()) {
         release(f, st, found, true);
         keep_strings(f.strings, {});
@@ -1349,6 +1487,12 @@ void apply_database(const std::vector<FH2Mod*>& mods) {
         plog("database: couldn't write fh2-mods\\platform-db.txt, so the copy isn't known as the platform's and is built "
              "again next launch");
     plog("database: wrote the game database with changes from " + std::to_string(applied) + " mod(s)");
+}
+
+void apply_database(const std::vector<FH2Mod*>& mods) {
+    std::scoped_lock lk{g_db_mu};
+    build_and_write(mods);
+    if (!game_mount().empty()) check_recorded_cars(files());   // however the build went, against what the game reads
 }
 
 } // namespace fh2platform

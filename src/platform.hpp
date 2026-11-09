@@ -159,6 +159,7 @@ void place_car_ids(const CarPack& pack, const std::vector<std::pair<std::string,
 void car_packs_unavailable(const std::string& why);   // why: a sentence, as a message from later() (text.hpp)
 // Why the packs in fh2-cars aren't read this session (for the MODS tab), or "".
 std::string car_packs_unread();
+std::string car_packs_unread_why();                 // and only the reason given to car_packs_unavailable
 // Why a pack (by folder name) isn't working this session, or "": the first reason given.
 void note_car_pack_problem(const std::string& pack, const std::string& why);   // why: a message from later() (text.hpp)
 std::string car_pack_problem(const std::string& pack);
@@ -174,6 +175,13 @@ std::map<uint16_t, std::wstring> database_strings();
 // other installs don't show it). Only looked for while a pack adds cars. For the MODS tab.
 std::string car_pack_sql_warning(const std::string& pack);
 std::string mod_sql_warning(const std::string& mod);
+// Cars fh2-mods\platform-car-ids.txt records (a save may have them) that the database the game reads this session
+// doesn't have: whether a pack's (by folder name) are, or those of the packs that aren't read (car_packs_unread), and
+// the title screen's lines saying so (messages from later()), from the last build. The first session one goes
+// missing, the saves are copied first (platform_save_snapshot).
+bool car_pack_cars_missing(const std::string& pack);
+bool unread_cars_missing();
+std::vector<std::string> car_pack_title_lines();
 // Where the database the game reads comes from, for the database guards (db_guards.hpp): the files as they are
 // now, told apart as apply_database tells them.
 struct DbFacts;
@@ -304,6 +312,11 @@ void write_session_crashed(const wchar_t* fh2mods_dir, const char* report);
 // returned (start_save_snapshot).
 int request_save_snapshot(FH2Mod* mod, const char* reason, uint32_t keep);
 void start_save_snapshot();
+// The platform's own copy of the saves, to fh2-mods\save-snapshots\car-packs-<session id>, started now on a thread of
+// its own, once a session; the newest 5 are kept, counted apart from the mods' copies. False when there's no saves
+// folder. And whether one was started this session or is kept from before.
+bool platform_save_snapshot(const std::string& why);
+bool platform_save_snapshots_kept();
 
 // crash.cpp
 struct LoadedDll {

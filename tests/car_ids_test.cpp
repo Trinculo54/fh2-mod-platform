@@ -292,7 +292,15 @@ void recorded() {
         check(o[0].ids == Ids{{"PACK_A", 3000}} && english(o[1].problem) == "PACK_B's Id, 3000, is PACK_A's too (fh2-mods\\platform-car-ids.txt "
                                                                     "gives both the same one).",
               "two cars recorded with the same Id: " + english(o[1].problem));
+        check(!o[1].base_unread, "that isn't a reason that passes on its own");
         sqlite3_close(db);
+    }
+    {
+        // The database built on couldn't be read: every pack with cars is left out, for a reason that can pass on its
+        // own (database.cpp keeps the last database it built, with their cars, rather than one without them).
+        const auto o = run(nullptr, {pack("a", "PACK_A")}, {{"pack_a", 3000}});
+        check(english(o[0].problem) == "The cars of " + kShown + " couldn't be read." && o[0].base_unread && o[0].ids.empty(),
+              "an unreadable database: " + english(o[0].problem));
     }
 }
 
