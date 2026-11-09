@@ -17,4 +17,12 @@ uint32_t ui_uses_of(const FH2Mod* mod);
 // Whether any loaded mod said it uses `bits` (any of them).
 bool any_mod_uses(uint32_t bits);
 
+// The platform is about to call one of a mod's own callbacks: a hotkey's on_press or on_rebind, a command, a page,
+// setting, title-screen or message box callback. A pop-up sent within 1 s of it may be a reply
+// (FH2_TOAST_FLAG_REPLY). Any thread; call it just before the callback.
+void ui_note_callback(FH2Mod* mod);
+// The platform caught a crash in one of a mod's callbacks: its waiting pop-ups and tip are dropped (and, as the
+// other templates are built, what else of its the design takes down). Any thread.
+void ui_mod_faulted(FH2Mod* mod);
+
 } // namespace fh2platform

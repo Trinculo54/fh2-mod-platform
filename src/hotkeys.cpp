@@ -8,14 +8,16 @@
 // button or a d-pad direction. A change there takes effect straight away, and on_rebind tells
 // the mod, which keeps the bindings.
 //
-// With a mod that has a HUD layer (the HUD layer preview), the same thread also follows the device the
-// player used last, for the layer's button prompts (the device sweep): the whole keyboard, the mouse and
-// the XInput pads, judged by hud_state.cpp. Without one, poll() is 2.8.0's exactly.
+// With a mod that has a HUD layer (the HUD layer preview), or one that shows tips (API 10), the same thread
+// also follows the device the player used last, for the layer's button prompts and the tips' buttons (the
+// device sweep): the whole keyboard, the mouse and the XInput pads, judged by hud_state.cpp. Without
+// either, poll() is 2.8.0's exactly.
 #include "hud_layer.hpp"
 #include "hud_state.hpp"
 #include "l10n.hpp"
 #include "lang.hpp"
 #include "platform.hpp"
+#include "ui_templates.hpp"
 #include "updates.hpp"
 
 #include <windows.h>
@@ -167,11 +169,14 @@ struct Sweep {
 
 constexpr int kDeviceLines = 200;
 
+// Whose lines the sweep's are: the HUD layer's, or the tips' when no mod has a layer.
+std::string sweep_owner() { return hud_layer_active() ? "HUD layer" : "Tips"; }
+
 // True while device lines may still be written; the one after the last says they stop.
 bool device_line(Sweep& s) {
     if (++s.lines <= kDeviceLines) return true;
     if (s.lines == kDeviceLines + 1)
-        log_line("HUD layer", "device: more than 200 device lines; no more of them this session (the prompts still follow the device)");
+        log_line(sweep_owner(), "device: more than 200 device lines; no more of them this session (the buttons still follow the device)");
     return false;
 }
 
@@ -212,7 +217,7 @@ void sweep_round(Sweep& s, bool front, WORD pads[4]) {
         s.tried[i] = true;
         PadState st{};
         if (g_xinput(i, &st) != ERROR_SUCCESS) {
-            if (s.connected[i] && device_line(s)) log_line("HUD layer", "device: XInput pad " + std::to_string(i) + " disconnected" + at_ms(now));
+            if (s.connected[i] && device_line(s)) log_line(sweep_owner(), "device: XInput pad " + std::to_string(i) + " disconnected" + at_ms(now));
             s.connected[i]  = false;
             s.next_probe[i] = now + 1000;
             continue;
@@ -221,7 +226,7 @@ void sweep_round(Sweep& s, bool front, WORD pads[4]) {
         pads[i] = st.buttons;
         if (first_pad < 0) first_pad = static_cast<int>(i);
         if (!s.connected[i]) {
-            if (device_line(s)) log_line("HUD layer", "device: XInput pad " + std::to_string(i) + " connected" + at_ms(now));
+            if (device_line(s)) log_line(sweep_owner(), "device: XInput pad " + std::to_string(i) + " connected" + at_ms(now));
             s.ever = true;
         } else if (const char* what = !pad ? hud_pad_input(a, s.last[i]) : nullptr) {
             if (a.buttons != s.last[i].buttons) std::snprintf(pad_text, sizeof pad_text, "pad %lu, buttons 0x%04X", i, a.buttons);
@@ -234,8 +239,9 @@ void sweep_round(Sweep& s, bool front, WORD pads[4]) {
     if (!s.none_logged && !s.ever && s.tried[0] && s.tried[1] && s.tried[2] && s.tried[3]) {
         s.none_logged = true;
         if (device_line(s))
-            log_line("HUD layer", "device: no XInput pad in slots 0-3 (pads that aren't XInput, such as a DualSense without Steam Input, "
-                                  "aren't seen: choose Controller on the Mods page)");
+            log_line(sweep_owner(), std::string("device: no XInput pad in slots 0-3 (pads that aren't XInput, such as a DualSense without Steam "
+                                                "Input, aren't seen") +
+                                        (hud_layer_active() ? ": choose Controller on the Mods page)" : ")"));
     }
     if (s.first) {   // the first judged state: a pad connected in the first round, else keyboard and mouse
         s.first     = false;
@@ -243,7 +249,10 @@ void sweep_round(Sweep& s, bool front, WORD pads[4]) {
         g_auto_kbd  = s.judge.kbd ? 1 : 0;
         static const char* const kChoice[3] = {"Automatic", "Controller", "Keyboard and mouse"};
         const int choice                    = hud_layer_choice();
-        if (choice != 0)
+        if (!hud_layer_active())
+            log_line("Tips", first_pad < 0 ? "tips' buttons: starting on the keyboard's keys (no XInput pad connected)"
+                                           : "tips' buttons: starting on the controller's (XInput pad " + std::to_string(first_pad) + ")");
+        else if (choice != 0)
             log_line("HUD layer", std::string("button prompts: ") + kChoice[choice] + "; the device is followed for the log only");
         else if (first_pad < 0)
             log_line("HUD layer", "button prompts: Automatic, starting on key caps (no XInput pad connected)");
@@ -257,7 +266,7 @@ void sweep_round(Sweep& s, bool front, WORD pads[4]) {
     if (!s.judge.round(kb, pad, now)) return;
     g_auto_kbd = s.judge.kbd ? 1 : 0;
     if (device_line(s))
-        log_line("HUD layer", std::string("device: ") + (s.judge.kbd ? "keyboard and mouse (" : "pad (") + s.judge.cause + ")" + at_ms(now));
+        log_line(sweep_owner(), std::string("device: ") + (s.judge.kbd ? "keyboard and mouse (" : "pad (") + s.judge.cause + ")" + at_ms(now));
 }
 
 DWORD WINAPI poll(LPVOID) {
@@ -298,8 +307,11 @@ DWORD WINAPI poll(LPVOID) {
         for (int i = 0; i < 4; ++i) last_pads[i] = pads[i];
         for (Hotkey* h : fire) {
             if (stopped_online(h->mod)) continue;   // stopped for online play (platform.cpp's go_online)
-            if (!call_press(h->on_press, h->user, h->key.c_str()))
+            ui_note_callback(h->mod);               // a pop-up in reply to it counts as one (API 10)
+            if (!call_press(h->on_press, h->user, h->key.c_str())) {
                 log_line(h->mod->name, "crashed in its on_press for hotkey " + h->key);
+                ui_mod_faulted(h->mod);
+            }
         }
     }
 }
@@ -326,8 +338,11 @@ void on_row(void* user, const char* row, int value) {
         h->modifiers = opt[value].modifiers;
     }
     log_line(h->mod->name, "hotkey " + h->key + ": " + (pad ? "controller " + h->chord_names[value] : h->key_names[value]));
-    if (h->on_rebind && !call_rebind(h->on_rebind, h->user, h->key.c_str(), h->vk, h->modifiers, h->chord))
+    if (h->on_rebind) ui_note_callback(h->mod);
+    if (h->on_rebind && !call_rebind(h->on_rebind, h->user, h->key.c_str(), h->vk, h->modifiers, h->chord)) {
         log_line(h->mod->name, "crashed in its on_rebind for hotkey " + h->key);
+        ui_mod_faulted(h->mod);
+    }
 }
 
 } // namespace
@@ -424,6 +439,18 @@ void device_sweep_start() {
 }
 
 int device_auto_kbd() { return g_auto_kbd.load(); }
+
+bool hotkey_binding(const FH2Mod* m, const std::string& key, uint32_t* vk, uint32_t* modifiers, uint32_t* chord) {
+    std::scoped_lock lk{g_mu};
+    for (const Hotkey& h : g_hotkeys)
+        if (h.mod == m && h.key == key) {
+            *vk        = h.vk.load();
+            *modifiers = h.modifiers.load();
+            *chord     = h.chord.load();
+            return true;
+        }
+    return false;
+}
 
 // The rows' text, in the game's language now: before the pages are written. The choices keep the keys' and
 // buttons' names; only Off is translated.

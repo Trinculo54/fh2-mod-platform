@@ -1,15 +1,16 @@
 // The UI templates (API 10, platform 2.9.0): the members of fh2mod.h's "UI templates" block.
 //
 // Being built. Each member is in g_api from the start, so the header, docs/api.md and the platform test agree on
-// them while the templates are written. Until a member is done its body here does nothing: it returns 0 (ui_status
-// returns kNothingWorksYet) and says once in platform.log, in the name of the first mod to call it, that it isn't in
-// this build yet. Replace a stub with the real call (in a file of its own if it's big: the pop-up queue, tips, boxes,
+// them while the templates are written. Until a member is done its body here does nothing: it returns 0 and says
+// once in platform.log, in the name of the first mod to call it, that it isn't in this build yet. Replace a stub with the real call (in a file of its own if it's big: the pop-up queue, tips, boxes,
 // page help) and take its line out of kStubs; docs/api.md drops its "(being built)" at the same time.
 //
-// ui_uses is real: it records what each mod said it uses, for the "Pop-ups" rows and the controller poll.
+// ui_uses is real: it records what each mod said it uses, for the "Pop-ups" rows and the controller poll. So are
+// ui_status, the pop-ups (show_toast, clear_toast) and the tips (show_tip, tip_seen, set_tip_seen): popups.cpp.
 #include "ui_templates.hpp"
 
 #include "platform.hpp"
+#include "popups.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -26,19 +27,9 @@ static_assert(sizeof(FH2Prompt) == 56 && offsetof(FH2Prompt, hotkey) == 16 && of
               "FH2Prompt is frozen");
 static_assert(offsetof(FH2Tip, button) == 24, "FH2Tip's members before the prompt");
 
-// ui_status while nothing is built: no FH2_UI_TOASTS (pop-ups and tips can't show), and none of the other bits,
-// which only mean something once they can.
-constexpr uint32_t kNothingWorksYet = 0;
-
 // The members still being built, and what the log says each does meanwhile.
 enum Stub {
-    kUiStatus,
     kPlayUiSound,
-    kShowToast,
-    kClearToast,
-    kShowTip,
-    kTipSeen,
-    kSetTipSeen,
     kShowMessageBox,
     kSetPageHelp,
     kSetPageHints,
@@ -50,13 +41,7 @@ struct StubInfo {
     const char* meanwhile;
 };
 constexpr StubInfo kStubs[kStubCount] = {
-    {"ui_status", "so it says that nothing works yet"},
     {"play_ui_sound", "so no sound plays and it returns 0"},
-    {"show_toast", "so no pop-up shows and it returns 0"},
-    {"clear_toast", "so it does nothing"},
-    {"show_tip", "so no tip shows and it returns 0"},
-    {"tip_seen", "so it returns 0 (not seen)"},
-    {"set_tip_seen", "so it does nothing"},
     {"show_message_box", "so no box shows and it returns 0"},
     {"set_page_help", "so the help bar stays as it was and it returns 0"},
     {"set_page_hints", "so it returns 0"},
@@ -105,30 +90,21 @@ int api_ui_uses(FH2Mod* m, uint32_t uses) {
     return 1;
 }
 
+// ---- pop-ups and tips (popups.cpp) ---------------------------------------------------------------------------
+
+uint32_t api_ui_status(FH2Mod* m) { return m ? popups_status(m) : 0; }
+int api_show_toast(FH2Mod* m, const FH2Toast* t) { return popups_show_toast(m, t); }
+void api_clear_toast(FH2Mod* m, const char* key) { popups_clear_toast(m, key); }
+int api_show_tip(FH2Mod* m, const FH2Tip* t) { return popups_show_tip(m, t); }
+int api_tip_seen(FH2Mod* m, const char* key) { return popups_tip_seen(m, key); }
+void api_set_tip_seen(FH2Mod* m, const char* key, int seen) { popups_set_tip_seen(m, key, seen); }
+
 // ---- the stubs -----------------------------------------------------------------------------------------------
 
-uint32_t api_ui_status(FH2Mod* m) {
-    not_built(m, kUiStatus);
-    return kNothingWorksYet;
-}
 int api_play_ui_sound(FH2Mod* m, uint32_t) {
     not_built(m, kPlayUiSound);
     return 0;
 }
-int api_show_toast(FH2Mod* m, const FH2Toast*) {
-    not_built(m, kShowToast);
-    return 0;
-}
-void api_clear_toast(FH2Mod* m, const char*) { not_built(m, kClearToast); }
-int api_show_tip(FH2Mod* m, const FH2Tip*) {
-    not_built(m, kShowTip);
-    return 0;
-}
-int api_tip_seen(FH2Mod* m, const char*) {
-    not_built(m, kTipSeen);
-    return 0;
-}
-void api_set_tip_seen(FH2Mod* m, const char*, int) { not_built(m, kSetTipSeen); }
 int api_show_message_box(FH2Mod* m, const FH2MessageBox*) {
     not_built(m, kShowMessageBox);
     return 0;
@@ -175,5 +151,8 @@ bool any_mod_uses(uint32_t bits) {
         if (uses & bits) return true;
     return false;
 }
+
+void ui_note_callback(FH2Mod* mod) { popups_note_callback(mod); }
+void ui_mod_faulted(FH2Mod* mod) { popups_mod_faulted(mod); }
 
 } // namespace fh2platform

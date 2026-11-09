@@ -460,25 +460,39 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "wrote LoadingMessages.str for 3 languages (2 key edits, 1 of them in each language's own words, "));
         CHECK(has(log, "[TestMod] set_setting_text: Button has 3 choices, not 2") &&
               has(log, "[TestMod] set_setting_text: there's no row called Nope"));
-        // the UI templates (API 10): every member there; ui_uses records what a mod uses, from fh2mod_init only; the
-        // others are being built: each returns 0 (ui_status: nothing works yet) and says so once, whoever calls it
+        // the UI templates (API 10): every member there; ui_uses records what a mod uses, from fh2mod_init only; pop-ups and
+        // tips queue and log with no game (ui_status: nothing works yet, since their hooks wait for the game); the
+        // others are being built: each returns 0 and says so once, whoever calls it
         CHECK(has(log, "[TestMod] ui templates: all 12 members there"));
         CHECK(has(log, "[TestMod] ui_uses: 0x100 isn't a bit this platform knows, so it's ignored"));
         CHECK(has(log, "[TestMod] UI templates: it uses pop-ups, tips\n") || has(log, "[TestMod] UI templates: it uses pop-ups, tips\r\n"));
         CHECK(has(log, "[TestMod] UI templates: it uses pop-ups, tips, a pop-ups row of its own"));
-        CHECK(has(log, "[TestMod] ui templates: ui_uses 1, ui_status 0, the others 0"));
+        CHECK(has(log, "[TestMod] ui templates: ui_uses 1, ui_status 0, show_toast 1 then 1, show_tip 1, tip_seen 0 then 1, show_tip again 0, "
+                       "the others 0"));
         CHECK(has(log, "[TestMod] ui_uses wasn't called from fh2mod_init, so it's ignored"));
-        for (const char* m : {"ui_status", "play_ui_sound", "show_toast", "clear_toast", "show_tip", "tip_seen", "set_tip_seen",
-                              "show_message_box", "set_page_help", "set_page_hints", "show_page_hint"}) {
+        CHECK(has(log, "[TestMod] pop-up queued: Test pop-up / From TestMod (key Test)") &&
+              has(log, "[TestMod] pop-up taken down while waiting (key Test)"));
+        CHECK(has(log, "[TestMod] pop-up queued: key SignIn") && !has(log, "TestGamertag"));   // private: the key only
+        CHECK(has(log, "[TestMod] show_toast: \"no spaces\" isn't a usable key (up to 32 letters, digits and _)"));
+        CHECK(has(log, "[TestMod] tip FirstTip queued, to show after 60 s of driving: Press {button} to test") &&
+              has(log, "[TestMod] tip FirstTip marked seen; it was waiting, so it won't show") &&
+              has(log, "[TestMod] tip FirstTip not shown: it was seen already"));
+        CHECK(has(log, "[TestMod] show_tip: tip NoSlot has a button, but its text has no {button} to put it in"));
+        CHECK(has(log, "[TestMod] pop-up queued: Test pop-up / from the helper") && has(log, "[TestMod] ui helpers ok"));
+        CHECK(!has(log, "[TestMod] shows pop-ups without saying so") && !has(log, "[Pop-ups]"));   // declared; no hooks without a game
+        for (const char* m : {"play_ui_sound", "show_message_box", "set_page_help", "set_page_hints", "show_page_hint"}) {
             const std::string line = std::string("[TestMod] ") + m + " isn't in this build yet, ";
             const std::size_t at   = log.find(line);
             const bool once = at != std::string::npos && log.find(line, at + 1) == std::string::npos;
             std::printf("%s ui templates: %s says once that it isn't in this build yet\n", once ? "ok  " : "FAIL", m);
             if (!once) ++fails;
         }
-        CHECK(has(log, "[TestMod] Test pop-up: from the helper") && has(log, "[TestMod] ui helpers ok"));
-        // nothing was seen, so the platform hasn't written platform-seen.txt
-        CHECK(!fs::exists("fh2-mods\\platform-seen.txt"));
+        // the tip TestMod marked seen is in platform-seen.txt, by its DLL's name (written on the store's own thread)
+        {
+            std::string seen;
+            for (int i = 0; i < 50 && !has(seen = slurp(L"fh2-mods\\platform-seen.txt"), "TestMod.dll\ttip.FirstTip\tseen\t"); ++i) Sleep(100);
+            CHECK(has(seen, "TestMod.dll\ttip.FirstTip\tseen\t"));
+        }
         // commands (API 9): through fh2mod.exe, as a tool would
         {
             const std::wstring pid = L"--pid " + std::to_wstring(GetCurrentProcessId()) + L" ";
@@ -499,6 +513,8 @@ int wmain(int argc, wchar_t** argv) {
             log = slurp(L"fh2-mods\\platform.log");
             CHECK(has(log, ("commands: other programs on this PC (this Windows user's) can run mods' commands through " + pipe).c_str()));
             CHECK(has(log, "[TestMod] command: echo (echo <text>: answers with the text)") && has(log, "[TestMod] command: echo hello world"));
+            // a pop-up sent from the command is a reply (API 10): the platform had just called it
+            CHECK(has(log, "[TestMod] reply pop-up queued: Echo / hello world (key Echo)"));
             CHECK(has(log, "[TestMod] add_command: \"bad name\" isn't a usable name (letters, digits, _)") &&
                   has(log, "[TestMod] add_command: there's already a command called Echo"));
             CHECK(has(slurp("fh2-mods\\platform-session.json"), "\"pipe\": \"\\\\\\\\.\\\\pipe\\\\fh2mod-"));
