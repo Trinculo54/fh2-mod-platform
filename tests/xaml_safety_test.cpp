@@ -337,6 +337,44 @@ void fragments(Media& m, const AppKeys& app) {
     }
     check(refused("", "<Grid><Button></Grid>", "", "the tags in the content don't balance: </Grid> closes <Button>"), "tags that don't balance: refused");
 
+    // A {StaticResource} only finds a key defined above it, in the page's order: resources, help, content (platform 2.9.0)
+    check(refused("<Style x:Key=\"Mod_A\" BasedOn=\"{StaticResource Mod_B}\" />\r\n<Style x:Key=\"Mod_B\" />", "", "",
+                  "the resource key Mod_B, in the resources, is used by a {StaticResource} before the fragment defines it"),
+          "a style based on one the fragment defines further down: refused");
+    check(refused("<Style x:Key=\"Mod_Self\" BasedOn=\"{StaticResource Mod_Self}\" />", "", "", "the resource key Mod_Self, in the resources, is used by"),
+          "a style based on itself, with no key of the game's by that name: refused");
+    check(refused("<Style x:Key=\"Mod_Outer\">\r\n<Setter Property=\"Tag\" Value=\"{StaticResource Mod_Outer}\" />\r\n</Style>", "", "",
+                  "the resource key Mod_Outer, in the resources, is used by"),
+          "a use inside its own key's definition (not there until the element is complete): refused");
+    check(refused("", "<Grid Style=\"{StaticResource Mod_Late}\"><Grid.Resources><Style x:Key=\"Mod_Late\" /></Grid.Resources></Grid>", "",
+                  "the resource key Mod_Late, in the content, is used by"),
+          "content using a key from Resources further down: refused");
+    check(refused("", "<Grid><Grid.Resources><Style x:Key=\"Mod_InContent\" /></Grid.Resources></Grid>", "<Grid Style=\"{StaticResource Mod_InContent}\" />",
+                  "the resource key Mod_InContent, in the help, is used by"),
+          "the help bar comes before the content in the page, so a key the content defines is after it: refused");
+    check(refused("", "<Grid><Grid.Background><StaticResource ResourceKey=\"Mod_Brush\" /></Grid.Background><Grid.Resources><Color x:Key=\"Mod_Brush\">#FF000000</Color></Grid.Resources></Grid>",
+                  "", "the resource key Mod_Brush, in the content, is used by"),
+          "<StaticResource ResourceKey=\"...\"/> before its key: refused too");
+    check(check_page_fragment(app, "<Style x:Key=\"A_Style_FZTextBlock_Heading\" TargetType=\"local:FZTextBlock\" BasedOn=\"{StaticResource A_Style_FZTextBlock_Heading}\" />",
+                              "", "", tex, c, why),
+          "a style of the game's key based on the game's own of that key passes (the game's is there first)");
+    check(check_page_fragment(app, "<Style x:Key=\"Mod_D1\" BasedOn=\"{DynamicResource Mod_D2}\" />\r\n<Style x:Key=\"Mod_D2\" />", "", "", tex, c, why),
+          "a {DynamicResource} may come before its key: it's looked up later");
+    check(check_page_fragment(app, "<DataTemplate x:Key=\"Mod_Row\"><Grid Style=\"{StaticResource Mod_Later}\" /></DataTemplate>\r\n<Style x:Key=\"Mod_Later\" />",
+                              "", "", tex, c, why),
+          "inside a template, as the game's own dictionaries have it, a key from further down passes (a template is built when it's used)");
+    check(check_page_fragment(app,
+                              "<Style x:Key=\"Mod_T1\"><Setter Property=\"Template\"><Setter.Value><ControlTemplate><Border Style=\"{StaticResource Mod_T2}\" />"
+                              "</ControlTemplate></Setter.Value></Setter></Style>\r\n<Style x:Key=\"Mod_T2\" />",
+                              "", "", tex, c, why),
+          "a ControlTemplate in a style's setter: the same");
+    check(refused("<Style x:Key=\"Mod_P1\"><Setter Property=\"ItemTemplate\" Value=\"{StaticResource Mod_P2}\" /></Style>\r\n<DataTemplate x:Key=\"Mod_P2\" />",
+                  "", "", "the resource key Mod_P2, in the resources, is used by"),
+          "a setter's value isn't inside a template, even for a template property: refused");
+    check(check_page_fragment(app, "<Style x:Key=\"Mod_Res\" />", "<Grid Style=\"{StaticResource Mod_Res}\" />", "<Grid Style=\"{StaticResource Mod_Res}\" />",
+                              tex, c, why),
+          "the resources' keys in the help and the content pass");
+
     // a zip that can't be read: the image is let through, and counted as unchecked
     Media gone{m.root / "nowhere"};
     check(check_page_fragment(app, "", "<Image Source=\"/Textures/Anthem/Icons/Anything.png\" />", "",

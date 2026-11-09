@@ -74,8 +74,12 @@ struct FragmentCheck {
 // Checks a page of a mod's own design, its three parts as set_page_xaml takes them (any may be empty): every
 // {StaticResource K} and {DynamicResource K} (and <StaticResource ResourceKey="K"/>) names a key of the
 // application's, of the frame's or of the fragment's own (any x:Key in any part), and every image path is an entry
-// of the game's texture zips. False, with `why` naming the first key or path that isn't, and which part it's in.
-// The tags are checked before this (settings.cpp's balanced_xml).
+// of the game's texture zips. A {StaticResource} of a key that's only the fragment's must come after the key's
+// definition is complete, in the order the parts are in the page (resources, help, content), except inside a
+// template (ControlTemplate, DataTemplate...), which is built later. Scope isn't looked at (a key in one element's
+// own Resources counts for the whole fragment), nor are element types, x:Type and x:Static. False, with `why` naming
+// the first key or path that isn't, and which part it's in. The tags are checked before this (settings.cpp's
+// balanced_xml).
 bool check_page_fragment(const AppKeys& app, std::string_view resources, std::string_view content, std::string_view help,
                          const TextureLookup& textures, FragmentCheck& out, std::string& why);
 

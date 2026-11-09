@@ -384,7 +384,10 @@ typedef struct FH2ModApi {
        opens: the page keeps the XAML it had, or, if none has passed yet,
        shows "This page couldn't be shown" until XAML that passes is set.
        A page the game crashed opening is left out until the mod's DLL
-       changes. api.md has the rules.
+       changes, or until the player presses A on the message its tile
+       shows instead. A {StaticResource} of a key only the XAML defines
+       has to come after that key (templates aside); scope and element
+       types aren't checked. api.md has the rules.
 
        Bindings: slot n (0..15) is an int of the page's, "FH2Mod_Slot_<n>",
        which XAML can bind two-way (a list's SelectedIndex, say), and

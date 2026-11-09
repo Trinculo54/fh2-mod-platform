@@ -162,11 +162,12 @@ bool dict_keys(const std::string& xaml, std::set<std::string>& keys, std::string
         why);
 }
 
-// Every {StaticResource K} and {DynamicResource K} in one attribute value: f(K), or f("") for one without a key.
-// Keys that are markup themselves ({x:Type Button}) can't be checked and are passed over.
+// Every {StaticResource K} and {DynamicResource K} in one attribute value: f(K, static?), or f("", ...) for one without a
+// key. Keys that are markup themselves ({x:Type Button}) can't be checked and are passed over.
 template <class F> void each_resource_use(std::string_view v, F&& f) {
     if (v.substr(0, 2) == "{}") return;   // "{}" in front makes the rest plain text
     for (const char* kind : {"{StaticResource", "{DynamicResource"}) {
+        const bool stat         = kind[1] == 'S';
         const std::size_t klen = std::strlen(kind);
         for (std::size_t at = v.find(kind); at != std::string_view::npos; at = v.find(kind, at + 1)) {
             std::size_t b = at + klen;
@@ -181,9 +182,15 @@ template <class F> void each_resource_use(std::string_view v, F&& f) {
             if (b < v.size() && v[b] == '{') continue;
             std::size_t e = b;
             while (e < v.size() && v[e] != '}' && v[e] != ',' && !space(v[e])) ++e;
-            f(v.substr(b, e - b));
+            f(v.substr(b, e - b), stat);
         }
     }
+}
+
+// A template element (ControlTemplate, DataTemplate, ItemsPanelTemplate...), whose content the game only builds when
+// the template is used; not a property element such as ListBox.ItemTemplate.
+bool template_element(std::string_view local) {
+    return local.size() > 8 && local.find('.') == std::string_view::npos && local.substr(local.size() - 8) == "Template";
 }
 
 // Attributes that hold an image (the game's own XAML: Source, ImageSource, UriSource and Icon, and a Setter's Value
@@ -334,28 +341,50 @@ bool check_page_fragment(const AppKeys& app, std::string_view resources, std::st
                          const TextureLookup& textures, FragmentCheck& out, std::string& why) {
     out = FragmentCheck{};
     struct Use {
-        std::string what;    // the key or path
-        const char* part;    // "resources", "content" or "help"
+        std::string what;      // the key or path
+        const char* part;      // "resources", "content" or "help"
+        std::size_t at = 0;    // the tag it's in, counted through the page in the order the platform writes it
+        bool stat     = false; // a {StaticResource} (or <StaticResource/>): it only finds a key defined above it
+        bool deferred = false; // inside a template, whose content is only built when it's used, once the page is read
     };
     std::vector<Use> keys, images;
-    std::set<std::string> own;
-    const std::pair<const char*, std::string_view> parts[] = {{"resources", resources}, {"content", content}, {"help", help}};
+    std::map<std::string, std::size_t> own;   // each key the fragment defines, and the tag that completes its first definition
+    // The parts in the order they're in the page: the resources (in Page.Resources), the help bar (DefaultHelpPanel's
+    // place), then the content (BasicOptions'); see settings.cpp, write_custom_page.
+    const std::pair<const char*, std::string_view> parts[] = {{"resources", resources}, {"help", help}, {"content", content}};
+    std::size_t at = 0;
     for (const auto& [part, text] : parts) {
         std::string tag_why;
+        std::vector<std::pair<std::string, int>> defining;   // open elements with an x:Key, and their depth
+        std::vector<int> templates;                          // open template elements' depths
         const bool ok = each_tag(
             text,
             [&](const Tag& t) {
-                if (t.close) return;
+                ++at;
                 const std::string_view el = local_name(t.name);
+                if (t.close) {
+                    // a key is there once its element is complete: a use inside it is still before it
+                    if (!defining.empty() && defining.back().second == t.depth) {
+                        own.emplace(defining.back().first, at);
+                        defining.pop_back();
+                    }
+                    if (!templates.empty() && templates.back() == t.depth) templates.pop_back();
+                    return;
+                }
+                const bool deferred = !templates.empty();
                 std::string_view property;
                 const bool setter = el == "Setter" && attr(t.text, "Property", property);
                 if (el == "StaticResource" || el == "DynamicResource") {   // the element form
                     std::string_view k;
-                    if (attr(t.text, "ResourceKey", k) && !trimmed(k).empty() && trimmed(k).front() != '{') keys.push_back({std::string(trimmed(k)), part});
+                    if (attr(t.text, "ResourceKey", k) && !trimmed(k).empty() && trimmed(k).front() != '{')
+                        keys.push_back({std::string(trimmed(k)), part, at, el == "StaticResource", deferred});
                 }
                 each_attr(t.text, [&](std::string_view n, std::string_view v) {
-                    if (n == "x:Key") own.emplace(v);
-                    each_resource_use(v, [&](std::string_view k) { keys.push_back({std::string(k), part}); });
+                    if (n == "x:Key") {
+                        if (t.self) own.emplace(v, at);
+                        else defining.emplace_back(std::string(v), t.depth);
+                    }
+                    each_resource_use(v, [&](std::string_view k, bool stat) { keys.push_back({std::string(k), part, at, stat, deferred}); });
                     const bool holds_image = image_property(n) || (setter && n == "Value" && image_property(property));
                     if ((holds_image && texture_like(v)) || texture_path_form(v)) images.push_back({std::string(trimmed(v)), part});
                 });
@@ -368,6 +397,7 @@ bool check_page_fragment(const AppKeys& app, std::string_view resources, std::st
                     if (texture_path_form(inner) || ((el == "ImageSource" || el == "BitmapImage") && texture_like(inner)))
                         images.push_back({std::string(trimmed(inner)), part});
                 }
+                if (!t.self && template_element(el)) templates.push_back(t.depth);
             },
             tag_why);
         if (!ok) return why = std::string("the tags in the ") + part + " don't balance: " + tag_why, false;
@@ -377,14 +407,23 @@ bool check_page_fragment(const AppKeys& app, std::string_view resources, std::st
     for (const Use& u : keys) {
         if (u.what.empty()) return why = std::string("a {StaticResource} or {DynamicResource} in the ") + u.part + " has no key", false;
         used.insert(u.what);
-        if (own.count(u.what) || app.keys.count(u.what)) continue;
+        if (app.keys.count(u.what)) continue;   // the game's: there before anything on the page
         bool frame = false;
         for (std::size_t k = 0; k < kPageFrameKeyCount; ++k) frame = frame || u.what == kPageFrameKeys[k];
         if (frame) continue;
-        return why = "the resource key " + u.what + ", in the " + u.part +
-                     ", isn't one of the game's shared resources, the page's own or the fragment's (a scene's own "
-                     "resources, A_PauseMenu's say, aren't there: copy them into the fragment's resources)",
-               false;
+        const auto def = own.find(u.what);
+        if (def == own.end())
+            return why = "the resource key " + u.what + ", in the " + u.part +
+                         ", isn't one of the game's shared resources, the page's own or the fragment's (a scene's own "
+                         "resources, A_PauseMenu's say, aren't there: copy them into the fragment's resources)",
+                   false;
+        // a {StaticResource} is looked up as the page is read, so it only finds a key defined above it (the game's own
+        // XAML never does otherwise, except inside templates, which are built later)
+        if (u.stat && !u.deferred && def->second >= u.at)
+            return why = "the resource key " + u.what + ", in the " + u.part +
+                         ", is used by a {StaticResource} before the fragment defines it, and a {StaticResource} only finds a key "
+                         "defined above it (move the definition up, into the resources, or use {DynamicResource})",
+                   false;
     }
     out.keys_used = used.size();
     std::map<std::string, int> seen;   // each distinct path once: 1 found, -1 its zip unreadable
