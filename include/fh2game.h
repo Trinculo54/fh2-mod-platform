@@ -336,10 +336,10 @@
  * Achievements tile's calls 0xDBD635 and 0xDBF185; and the title screen's buttons (Splash vtable
  * +0x578, game+0x2E53940); the HUD options page's vtable slots game+0x2DF06C0 and 0x2DF07B0; the
  * Marketplace tab's five byte patches; the media resolver's slot game+0x2E6EF28 (without Extra
- * Options); the pad layer's game+0x10768D0; when a mod has a HUD layer (preview) or uses pop-ups or tips
- * (API 10), the free-roam HUD's vtable slots +0x488, +0x4F8 and 0 (game+0x2DEFE50, 0x2DEFEC0,
- * 0x2DEF9C8); and for pop-ups and tips, the three calls of the minor-notification gate game+0x754920
- * at game+0x75542C, 0x7555A5 and 0x750FB1. Don't hook them: use the platform's settings, pages,
+ * Options); the pad layer's game+0x10768D0; for the HUD layer (preview) and for pop-ups and tips
+ * (API 10, every session), the free-roam HUD's vtable slots +0x488, +0x4F8 and 0 (game+0x2DEFE50,
+ * 0x2DEFEC0, 0x2DEF9C8); and for pop-ups and tips, the three calls of the minor-notification gate
+ * game+0x754920 at game+0x75542C, 0x7555A5 and 0x750FB1. Don't hook them: use the platform's settings, pages,
  * title-screen entries and pop-ups instead. */
 
 #endif /* FH2GAME_H */

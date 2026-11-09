@@ -1286,7 +1286,7 @@ DWORD WINAPI load_mods(LPVOID) {
     }
 
     hud_layer_prepare(&g_api);
-    popups_prepare(&g_api);   // pop-ups and tips (API 10): their hooks, if a mod declared or sent any
+    popups_prepare(&g_api);   // pop-ups and tips (API 10): their hooks, once the game's code is ready
     // First write of everything edited so far, and the title notices.
     {
         std::scoped_lock lk{g_mu};

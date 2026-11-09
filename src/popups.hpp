@@ -19,13 +19,14 @@ int popups_show_tip(FH2Mod* mod, const FH2Tip* tip);
 int popups_tip_seen(FH2Mod* mod, const char* key);
 void popups_set_tip_seen(FH2Mod* mod, const char* key, int seen);
 
-// load_mods, once every fh2mod_init has returned: reads fh2-mods\platform-popups.ini, and starts the hooks (and the
-// controller poll for tips) when a mod declared pop-ups or tips, or has already sent one. Otherwise they start with
-// the first show_toast or show_tip. Without either, nothing here runs: no hook, no thread.
+// load_mods, once every fh2mod_init has returned: reads fh2-mods\platform-popups.ini and starts the hooks' thread,
+// in every session: it waits for the game's code, and hooks only if the game is FH2. A mod's first pop-up may come
+// mid-session, after the notification component was made and the HUD page shown, which only these hooks see. The
+// controller poll for tips starts here when a mod declared tips, otherwise with the first show_tip.
 void popups_prepare(const FH2ModApi* api);
 // Whether the pop-ups' page tracking hooks the free-roam HUD's vtable slots this session (settings.cpp: the
-// notice's own hook then accepts the slot as the exe on disk has it, S5's F1). True from the moment the hooks are
-// asked for, before they go in.
+// notice's own hook then accepts the slot as the exe on disk has it, S5's F1). True from popups_prepare on, before
+// the hooks go in.
 bool popups_track_page();
 
 // The platform is about to call one of the mod's callbacks (REPLY's 1 s window), or caught a crash in one (its
@@ -40,6 +41,7 @@ void popups_set_mod_toasts(FH2Mod* mod, bool on);
 void popups_set_tips(bool on);
 int popups_tips_again();                  // how many tips were forgotten
 std::vector<PopupRecent> popups_recent(); // the last 10 shown, newest first
-std::string popups_describe();            // what's on screen and waiting, and why (for "fh2mod Platform ui")
+std::string popups_describe();            // what's on screen and waiting, and why (for "fh2mod Platform ui", which
+                                          // comes with the templates' test page and commands)
 
 } // namespace fh2platform

@@ -931,7 +931,8 @@ struct FH2PageRow {
 
 /* ui_status bits (API 10). */
 #define FH2_UI_TOASTS          0x0001  /* pop-ups and tips can show this session: the game's notification code
-                                          is as expected and the platform's tick and watch are in */
+                                          is as expected and the platform's tick is in (without its watch on
+                                          the game's own pop-ups, they're spaced 5.5 s apart) */
 #define FH2_UI_TOASTS_OFF      0x0002  /* the player turned mod pop-ups off: the platform's row, your mod's
                                           row, or the game's Minor notifications option it follows */
 #define FH2_UI_TIPS_OFF        0x0004  /* the player turned tips off */

@@ -894,7 +894,7 @@ Ready-made pieces of the game's own UI that you fill with text: pop-ups on the g
 
   | Bit | Means |
   |---|---|
-  | `FH2_UI_TOASTS` | Pop-ups and tips can show this session: the game's notification code is as expected, and the platform's hooks for them are in. Not set until the game's code is ready, a few seconds after start-up: pop-ups and tips sent before then wait, as they do for the first drive. |
+  | `FH2_UI_TOASTS` | Pop-ups and tips can show this session: the game's notification code is as expected, and the platform's hooks for them are in. The platform starts them in every session, whether or not a mod declared pop-ups, so this isn't set until the game's code is ready, a few seconds after start-up: pop-ups and tips sent before then wait, as they do for the first drive. Without the platform's watch on the game's own notifications (the log says so), they still show, spaced 5.5 seconds apart. |
   | `FH2_UI_TOASTS_OFF` | The player turned mod pop-ups off: the platform's "Mod pop-ups" row, your mod's "Pop-ups" row, or the game's Notifications setting (Pause > Settings > HUD, the "Minor notifications" option inside the game), which the platform follows. |
   | `FH2_UI_TIPS_OFF` | The player turned tips off. |
   | `FH2_UI_ON_SCREEN` | The free-roam HUD page is on screen now. |

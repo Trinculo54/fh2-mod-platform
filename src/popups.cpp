@@ -24,6 +24,10 @@
 //    fh2-mods\platform-popups.ini until it has been seen working in game (T10).
 // Every game address is checked against the exe on disk before use; a group that doesn't match turns off only what
 // needs it, with a log line. Game calls go through one SEH-guarded helper that holds no object with a destructor.
+// The hooks go in every session the game is FH2, whether or not a mod declared pop-ups or tips: the notification
+// component is made, and the HUD page first shown, long before a mod may send its first pop-up (a hotkey's reply,
+// a fault), and only these hooks see either. They're read-only and chained, and S5 found every released mod's
+// in-memory checks clear of them.
 #include "popups.hpp"
 
 #include "hud_layer.hpp"
@@ -231,7 +235,6 @@ bool check_group(const char* group, const char* what_goes, const std::vector<Ent
 // ---- the session's state ----------------------------------------------------------------------------------------
 
 std::once_flag g_start_once;
-std::atomic<bool> g_wanted{false};       // a mod declared or sent pop-ups or tips: the hooks are asked for
 std::atomic<bool> g_track_wanted{false}; // the page tracking hooks are asked for (F1)
 std::atomic<bool> g_ready{false};        // the tick, the component hooks and their code checks are in
 std::atomic<bool> g_watch{false};        // all three gate calls are watched
@@ -690,8 +693,8 @@ void start() {
     });
 }
 
+// A mod sent pop-ups or tips: the hooks are in already (or on their way), so only tips' controller poll is left.
 void want(bool tips) {
-    g_wanted = true;
     if (tips && !g_tips_poll.exchange(true)) device_sweep_start();
     start();
 }
@@ -784,8 +787,8 @@ void popups_prepare(const FH2ModApi* api) {
         plog_f("WideText=1 (fh2-mods\\platform-popups.ini): pop-up text goes to the game as UTF-16, untested in game until T10 passes");
     }
     g_api = api;
-    const bool tips = any_mod_uses(FH2_UI_USES_TIPS);
-    if (tips || any_mod_uses(FH2_UI_USES_TOASTS) || g_wanted.load()) want(tips);
+    // the hooks always (see the top of this file); the controller poll only once a mod has said or sent tips
+    want(any_mod_uses(FH2_UI_USES_TIPS));
 }
 
 bool popups_track_page() { return g_track_wanted.load(); }
