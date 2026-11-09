@@ -17,6 +17,10 @@
 // going_online, once every mod has started, stops OfflineMod and its text, SQL and file are taken
 // out again); last, "hud": HudTestMod.dll adds a HUD layer (the HUD layer preview,
 // include/fh2mod_hud.h).
+// Given the game exe, "full" and "hud" map all of it after loading the platform (Azimuth's "Play"), and the
+// runner has it in FH2\Mount as well: the code checks pass and the hooks go in (but not the MODS menus', which
+// would run game code this copy can't: see map_game). Without it, there's no game, and the parts that wait for
+// it stay out; the checks say which is expected in each case.
 // The UI templates' player controls (platform 2.9.0) are set up by this program before it loads the
 // platform: in "full", AaaMod declares pop-ups (aaa_popups.txt) and fh2-mods\platform-popups.ini has
 // the player's switch for them off; in "newmod", platform-popups.ini has Developer=1 and AaaMod
@@ -140,6 +144,12 @@ static bool hud_started(const std::string& log) {
            has(log, "[HUD layer] the game's code never became ready");
 }
 
+// The "full" phase with the game mapped: the start threads of pop-ups and the database guards have finished, one
+// way or another.
+static bool full_started(const std::string& log) {
+    return has(log, "[Pop-ups] pop-ups and tips are ") && (has(log, "[Database guards] on (") || has(log, "[Database guards] off"));
+}
+
 // fh2mod.exe with these arguments: its exit code and what it printed (platform 2.8.0's commands).
 static int run_cli(const std::wstring& args, std::string& out) {
     SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
@@ -199,23 +209,18 @@ static LONG WINAPI after_crash(EXCEPTION_POINTERS*) {
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
-static char* map_image(const wchar_t* path) {
-    std::ifstream in{path, std::ios::binary};
-    std::vector<char> file((std::istreambuf_iterator<char>(in)), {});
-    if (file.size() < 4096) return nullptr;
-    auto* dos  = reinterpret_cast<IMAGE_DOS_HEADER*>(file.data());
-    auto* nt   = reinterpret_cast<IMAGE_NT_HEADERS64*>(file.data() + dos->e_lfanew);
-    auto* base = static_cast<char*>(VirtualAlloc(reinterpret_cast<void*>(nt->OptionalHeader.ImageBase),
-                                                 nt->OptionalHeader.SizeOfImage, MEM_RESERVE | MEM_COMMIT,
-                                                 PAGE_READWRITE));
-    if (base) std::memcpy(base, file.data(), nt->OptionalHeader.SizeOfHeaders);
-    return base;
-}
-
 // All of the exe, as the hook test maps it: sections at their addresses, code read/execute, read-only data
-// read-only, the headers last so the platform only finds the game once it's all there. The "hud" phase, so
-// the HUD layer's code checks and hooks run against it.
-static char* map_game(const wchar_t* path) {
+// read-only, the headers last so the platform only finds the game once it's all there. The "full" and "hud"
+// phases, given the exe (which the runner puts in the game folder too, as Azimuth has it), so the platform's
+// code checks run against it and its hooks go in: pop-ups, UI sounds, the database guards, the HUD layer.
+// This copy never runs, though: its imports (kernelx.dll, d3d11_x.dll and the rest) aren't bound and nothing
+// started it, so game code the platform calls on a thread of its own crashes here. The MODS menus do that once the
+// game's menus are there (FH2_MEDIA): the HUD's notice (the welcome, new mods, mods that didn't load) gets its
+// property at start, through the game's EnableDrivatarLiveries descriptor (game+0xD58660, which builds it the first
+// time) and AVUI::Object::Object. So with `menus_out`, the first byte of that function is changed to int3, as the
+// hook test's "changed-code" phase changes a byte: the menus' code check fails, and the platform takes the menus out
+// and says so, before any of their game code runs.
+static char* map_game(const wchar_t* path, bool menus_out) {
     std::ifstream in{path, std::ios::binary};
     std::vector<char> file((std::istreambuf_iterator<char>(in)), {});
     if (file.size() < 4096) return nullptr;
@@ -229,6 +234,7 @@ static char* map_game(const wchar_t* path) {
     for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i)
         std::memcpy(base + sec[i].VirtualAddress, file.data() + sec[i].PointerToRawData,
                     std::min(sec[i].SizeOfRawData, sec[i].Misc.VirtualSize ? sec[i].Misc.VirtualSize : sec[i].SizeOfRawData));
+    if (menus_out) base[0xD58660] = static_cast<char>(0xCC);
     for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
         const DWORD c = sec[i].Characteristics;
         DWORD prot    = c & IMAGE_SCN_MEM_EXECUTE ? PAGE_EXECUTE_READ : c & IMAGE_SCN_MEM_WRITE ? PAGE_READWRITE : PAGE_READONLY;
@@ -388,29 +394,29 @@ int wmain(int argc, wchar_t** argv) {
     HMODULE p = LoadLibraryW(L"d3dcompiler_47.dll"); // what azimuth.exe does at startup
     CHECK(p != nullptr);
     if (phase == L"crash-chained") return crash_chained();
-    if (argc > 2) phase == L"hud" ? map_game(argv[2]) : map_image(argv[2]); // "press Play"
+    // the game's UI.zip is here (FH2_MEDIA), so the MODS menus are written: the title screen's line points at them
+    const bool menus = fs::exists(L"FH2\\Mount\\media\\UI.zip");
+    if (argc > 2) map_game(argv[2], menus); // "press Play"
     // the online phases (platform 2.8.0): run after "removed", with OfflineMod and an FH2MP.dll
     const bool online_phase = phase.rfind(L"online", 0) == 0 || phase == L"fh2mp-off";
     // the HUD layer preview's phase: run last, with HudTestMod.dll added
     const bool hud_phase = phase == L"hud";
     // the cues about where mod settings are (platform 2.9.0): run after "removed", with platform-seen.txt edited
     const bool cue_phase = phase == L"upgrade" || phase == L"newmod" || phase == L"home";
-    // the game's UI.zip is here (FH2_MEDIA), so the MODS menus are written: the title screen's line points at them
-    const bool menus = fs::exists(L"FH2\\Mount\\media\\UI.zip");
     std::string log;
     for (int i = 0; i < 250; ++i) {
         Sleep(100);
         log = slurp(L"fh2-mods\\platform.log");
         if (cue_phase ? has(log, "mod(s) loaded")
             : hud_phase ? has(log, "mod(s) loaded") && has(log, "[HudTestMod] after init:") && has(log, "[HUD layer] page:") &&
-                            (argc <= 2 || hud_started(log))
+                            (argc <= 2 || !menus || hud_started(log))
             : online_phase ? has(log, "mod(s) loaded") &&
                                  ((phase != L"online-late" && phase != L"online-ready") || has(log, "[OfflineMod] after start:")) &&
                                  ((phase != L"online-late" && phase != L"online-renamed" && phase != L"online-register" &&
                                    phase != L"online-ready") ||
                                   has(log, "[FH2MP] going_online:"))
                            : has(log, "mod(s) loaded") && has(log, "TestMod version") &&
-                                 (phase == L"full" ? has(log, "late edit applied") && has(log, "save snapshot:")
+                                 (phase == L"full" ? has(log, "late edit applied") && has(log, "save snapshot:") && (argc <= 2 || full_started(log))
                                                    : has(log, "removed AIPlayers.str") && has(log, "keep.xml override")))
             break;
     }
@@ -465,6 +471,8 @@ int wmain(int argc, wchar_t** argv) {
               has(log, "this is the platform's first start in this Azimuth folder\r\n"));
         CHECK(slurp(L"fh2-mods\\platform-tables.txt").find("AIPlayers.str") != std::string::npos);
         if (argc > 2) CHECK(log.find("the game is mapped at") != std::string::npos);
+        // with the game's menus given, this test's copy of the game keeps the MODS menus out (map_game)
+        if (argc > 2 && menus) CHECK(has(log, "[MODS] the game's code at game+D58660 doesn't look as expected; no Mods tile"));
 
         // Files
         const fs::path ov = layer();
@@ -613,13 +621,34 @@ int wmain(int argc, wchar_t** argv) {
               has(log, "[TestMod] tip FirstTip not shown: it was seen already"));
         CHECK(has(log, "[TestMod] show_tip: tip NoSlot has a button, but its text has no {button} to put it in"));
         CHECK(has(log, "[TestMod] pop-up queued: Test pop-up / from the helper") && has(log, "[TestMod] ui helpers ok"));
-        CHECK(!has(log, "[TestMod] shows pop-ups without saying so") && !has(log, "[Pop-ups]"));   // declared; no hooks without a game
+        if (argc <= 2) {
+            CHECK(!has(log, "[TestMod] shows pop-ups without saying so") && !has(log, "[Pop-ups]"));   // declared; no hooks without a game
+            CHECK(!has(log, "[Database guards]"));
+        } else {
+            // the game mapped, with its exe in the game folder: the code is checked against the exe, matches, and the
+            // hooks go in (TestMod declared pop-ups and tips; mods' SQL means the platform built the database)
+            CHECK(!has(log, "[TestMod] shows pop-ups without saying so") &&
+                  has(log, "[Pop-ups] pop-ups and tips are ready: the watch on the game's own in, the HUD page tracked, "
+                           "the Notifications setting read, the HUD suspend read"));
+            CHECK(has(log, own_layer() ? "[Database guards] on (the platform built this Azimuth folder's database with car packs' or mods' changes)"
+                                       : "[Database guards] on (the platform built mediaoverride's database with mods' changes)"));
+            CHECK(!has(log, "couldn't be read from the game folder") && !has(log, "doesn't match the exe on disk") && !has(log, "it isn't code"));
+        }
         CHECK(!has(log, "isn't in this build yet"));   // every member is built
-        // play_ui_sound: from fh2mod_init and from a thread of the mod's own, with no game, nothing plays (said once)
+        // play_ui_sound: from fh2mod_init and from a thread of the mod's own, nothing plays here (said once)
         {
             const std::string line = "[TestMod] play_ui_sound: the game isn't running yet, so SELECT wasn't played";
-            CHECK(has(log, line.c_str()) && log.find(line, log.find(line) + 1) == std::string::npos);
-            CHECK(has(log, "[TestMod] sound from a thread: 0") && !has(log, "so SHUTTER wasn't played") && !has(log, "[UI sounds]"));
+            if (argc <= 2) {
+                CHECK(has(log, line.c_str()) && log.find(line, log.find(line) + 1) == std::string::npos);
+                CHECK(has(log, "[TestMod] sound from a thread: 0") && !has(log, "so SHUTTER wasn't played") && !has(log, "[UI sounds]"));
+            } else {
+                // The game mapped: its sound code is checked against the exe and matches, but this copy of the game has no
+                // sound player, so nothing plays either. The first of the two sounds after the game is there says so, once
+                // (SELECT from fh2mod_init may come before the game, and then says it isn't running yet).
+                CHECK(count(log, "[TestMod] play_ui_sound: the game's sound isn't up yet, so ") == 1 && count(log, line.c_str()) <= 1);
+                CHECK(has(log, "[UI sounds] code: the game's sound player and the eleven sounds' names are as expected"));
+                CHECK(has(log, "[TestMod] sound from a thread: 0") && !has(log, "play_ui_sound: the game's sound code isn't as expected"));
+            }
         }
         // show_message_box: only from the mod's page, setting and title callbacks
         CHECK(has(log, "[TestMod] show_message_box: boxes show only from a callback of this mod's pages, settings or title-screen entries "
@@ -737,7 +766,7 @@ int wmain(int argc, wchar_t** argv) {
                   has(status, "\"platform\": \"2.9.0\"") && has(status, "\"TestMod\": \"1.0.0\""));
         }
         // The game's menus were given: the pages are written. (Not with the game mapped: this
-        // test's copy of it doesn't pass the menus' code checks, so the platform takes them out.)
+        // test's copy of it doesn't pass the menus' code checks, so the platform takes them out; see map_game.)
         if (fs::exists(L"FH2\\Mount\\media\\UI.zip") && argc <= 2) {
             const auto scenes    = ov / "UI" / "Scenes" / "Anthem";
             const auto installed = slurp(scenes / "A_ModPage_01.xaml");
@@ -949,12 +978,18 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(!fs::exists("fh2-mods\\platform-hudlayer-A_Hud.xaml") && marker.empty());
         }
         CHECK(has(slurp("fh2-mods\\platform-session.json"), "\"hud_layer\": \"preview 3: HudTestMod\""));
-        if (argc > 2) {
-            // the game mapped: the start thread checks the code and makes its hooks, or says why not
+        if (argc > 2 && !menus) {
+            // the game mapped, but with the layer left out (no UI.zip) its start thread doesn't run: no code checks, no hooks
+            CHECK(!has(log, "[HUD layer] hooks:") && !hud_started(log));
+        } else if (argc > 2) {
+            // the game mapped: the start thread checks the code and makes its hooks, or says why not. This test's copy
+            // of the game keeps the MODS menus out (map_game), so the Mods page's hooks don't go in: the layer says so.
             const bool ready = has(log, "[HUD layer] hooks: 4 of 4 made and on; the HUD layer is ready");
             const bool no_props = has(log, "[HUD layer] the Mods page's hooks didn't go in, so the game can't read the layer's values; the HUD layer is off");
             std::printf("HUD layer start: %s\n", ready ? "ready (L18)" : no_props ? "the Mods page's hooks didn't go in (L17)" : hud_started(log) ? "off (see the log)" : "not finished");
-            CHECK(ready || no_props);
+            CHECK(no_props && has(log, "[MODS] the game's code at game+D58660 doesn't look as expected; no Mods tile"));
+            CHECK(has(log, "[HUD layer] code: UI sounds: as expected") && has(log, "[HUD layer] enabled 4 hooks") &&
+                  has(log, "[HUD layer] disabled 4 hooks"));   // its code checked and its hooks made, then taken out
         }
         // no fault of the layer's in any case
         CHECK(!has(log, "crashed in the game's code") && !has(log, "[HUD layer] notify crashed"));
