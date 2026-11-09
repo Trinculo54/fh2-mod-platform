@@ -2,8 +2,9 @@
 //
 // Being built. Each member is in g_api from the start, so the header, docs/api.md and the platform test agree on
 // them while the templates are written. Until a member is done its body here does nothing: it returns 0 and says
-// once in platform.log, in the name of the first mod to call it, that it isn't in this build yet. Replace a stub with the real call (in a file of its own if it's big: the pop-up queue, tips, boxes,
-// page help) and take its line out of kStubs; docs/api.md drops its "(being built)" at the same time.
+// once in platform.log, in the name of the first mod to call it, that it isn't in this build yet. Replace a stub
+// with the real call (in a file of its own if it's big: the pop-up queue, tips, boxes, page help) and take its line
+// out of kStubs; docs/api.md drops its "(being built)" at the same time.
 //
 // ui_uses is real: it records what each mod said it uses, for the "Pop-ups" rows and the controller poll. So are
 // ui_status, the pop-ups (show_toast, clear_toast) and the tips (show_tip, tip_seen, set_tip_seen): popups.cpp.
