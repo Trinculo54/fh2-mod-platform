@@ -148,6 +148,23 @@ int wmain(int argc, wchar_t** argv) {
     a = frame(C(kLB));
     CHECK(is(a, 0, C(kLB)) && a.dpad_dir == 8);
 
+    // The game's memory not as the platform expects. It reads the manager, the slot in use and the reading through
+    // safe_copy, and writes the slot inside a guard, so neither faults: nothing is hidden and no press counts.
+    // The manager pointer at memory that can't be read (freed, say):
+    auto* gone = static_cast<unsigned char*>(VirtualAlloc(nullptr, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_NOACCESS));
+    *reinterpret_cast<unsigned char**>(game + 0x365D7C8) = gone;
+    CHECK(is(frame(C(kLB) | C(kLeft)), 0, C(kLB) | C(kLeft)));       // the game keeps Left
+    CHECK(is(frame(C(kLB)), 0, C(kLB)));
+    *reinterpret_cast<unsigned char**>(game + 0x365D7C8) = mgr;
+    // The slot read-only (the game's own function writes nothing to it with nothing taken):
+    *reinterpret_cast<uint64_t*>(slot + 0x78) = C(kLB) | C(kLeft);
+    *reinterpret_cast<uint16_t*>(slot + 0xC0) = static_cast<uint16_t>((C(kLB) | C(kLeft)) & 0xF3FF);
+    VirtualProtect(mgr, 0xAC00, PAGE_READONLY, &old);
+    release(slot);
+    VirtualProtect(mgr, 0xAC00, PAGE_READWRITE, &old);
+    CHECK(*reinterpret_cast<uint64_t*>(slot + 0x1E8) == 0 && *reinterpret_cast<uint64_t*>(slot + 0x78) == (C(kLB) | C(kLeft)));
+    CHECK(is(frame(C(kLB)), 0, C(kLB)));                             // and on as before once it's back
+
     Sleep(500);
     log = slurp(L"fh2-mods\\platform.log");
     std::printf("---- platform.log\n%s----\n", log.c_str());

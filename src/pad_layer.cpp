@@ -23,6 +23,10 @@
 // The same pad is in more than one slot, so presses only count from the slot the game is using.
 // Everything runs on the game's thread, in the game's own order; no game memory is written anywhere
 // else. Presses go to a platform thread, which calls the mods.
+//
+// Game memory is read through safe_copy, never with a plain load: clang's __try only covers calls made
+// inside it, and a plain load can be moved out of it. The slot is written only once those reads have
+// worked, inside a helper called through a pointer from a __try of its own.
 #include "pad_engine.hpp"
 #include "platform.hpp"
 
@@ -158,42 +162,72 @@ void push_press(int layer, uint32_t button) {
     else SetEvent(g_wake);
 }
 
+// One value of game memory, or false if it can't be read.
+template <class T> bool rd(uintptr_t a, T& v) { return a >= 0x10000 && safe_copy(&v, reinterpret_cast<const void*>(a), sizeof v); }
+
+// The controller manager, read from the game: false until the game has made it, or if the pointer isn't to an
+// object with its vtable.
+bool manager(uintptr_t base, uintptr_t* mgr) {
+    uintptr_t vt = 0;
+    return base && rd(base + RVA_MANAGER, *mgr) && *mgr && rd(*mgr, vt) && vt == base + RVA_MANAGER_VT;
+}
+
+// Which of the manager's slots `at` is, or -1 if it isn't the start of one.
+int slot_index(uintptr_t mgr, uintptr_t at) {
+    const uintptr_t first = mgr + OFF_SLOTS;
+    if (at < first || at >= first + kSlots * SLOT_SIZE || (at - first) % SLOT_SIZE) return -1;
+    return static_cast<int>((at - first) / SLOT_SIZE);
+}
+
+// The writes to a slot, called only through g_hide (below), so a fault in them unwinds to the guarded call.
+__attribute__((noinline)) void hide_in_slot(unsigned char* slot, const StepOut* out) {
+    // Not just taken: some of the game's readers (the value query, game+0x106F040) don't look at the taken
+    // mask, so the buttons go from the reading itself, and from its raw button word.
+    *reinterpret_cast<uint64_t*>(slot + OFF_CONTROLS) &= ~out->hide;
+    *reinterpret_cast<uint16_t*>(slot + OFF_RAW) &= static_cast<uint16_t>(~out->hide_pad);
+    *reinterpret_cast<uint64_t*>(slot + OFF_TAKEN) |= out->take;
+    if (out->dpad_idle) {   // the reading's d-pad as the builder leaves it with nothing held
+        *reinterpret_cast<uint64_t*>(slot + OFF_DPAD)      = 8;   // direction 8 (none), magnitude 0
+        *reinterpret_cast<uint64_t*>(slot + OFF_DPAD + 8)  = 0;
+        *reinterpret_cast<uint32_t*>(slot + OFF_DPAD + 16) = 0;
+    }
+}
+void (*volatile g_hide)(unsigned char*, const StepOut*) = hide_in_slot;
+
+// No objects with destructors here (__try).
+bool hide_guarded(unsigned char* slot, const StepOut* out) {
+    __try {
+        g_hide(slot, out);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 // One slot's frame: true when its presses count (it's the slot the game is using; the game keeps the
-// same pad in more than one slot, so presses from the others would come twice). No objects with
-// destructors here (__try).
+// same pad in more than one slot, so presses from the others would come twice). If the manager, the slot
+// or its reading can't be read, or the slot can't be written, nothing is hidden and no press counts, and
+// the slot's state stays as it was.
 bool step_slot(unsigned char* slot, StepOut* out) {
-    const uintptr_t base = g_base.load(std::memory_order_relaxed);
+    const uintptr_t base = g_base.load(std::memory_order_relaxed), at = reinterpret_cast<uintptr_t>(slot);
+    uintptr_t mgr = 0, active = 0;
+    uint64_t controls = 0;
+    if (!manager(base, &mgr)) return false;
+    const int idx = slot_index(mgr, at);
+    if (idx < 0 || !rd(mgr + OFF_ACTIVE, active) || !rd(at + OFF_CONTROLS, controls)) return false;
     LayerView views[kMaxLayers];
     const int n = g_count.load(std::memory_order_acquire);
     // a layer of a mod stopped for online play (platform.cpp's go_online) is off: modifier 0
     for (int i = 0; i < n; ++i)
         views[i] = {stopped_online(g_layers[i].mod) ? 0u : g_layers[i].modifier.load(std::memory_order_relaxed), g_layers[i].buttons};
-    __try {
-        const auto* mgr = *reinterpret_cast<unsigned char* const*>(base + RVA_MANAGER);
-        if (!mgr || *reinterpret_cast<const uintptr_t*>(mgr) != base + RVA_MANAGER_VT) return false;
-        const uintptr_t first = reinterpret_cast<uintptr_t>(mgr) + OFF_SLOTS, at = reinterpret_cast<uintptr_t>(slot);
-        if (at < first || at >= first + kSlots * SLOT_SIZE || (at - first) % SLOT_SIZE) return false;
-        const auto idx         = static_cast<int>((at - first) / SLOT_SIZE);
-        auto& controls         = *reinterpret_cast<uint64_t*>(slot + OFF_CONTROLS);
-        *out                   = step(g_slots[idx], controls, views, n);
-        g_held[idx].store(g_slots[idx].held, std::memory_order_relaxed);
-        if (out->hide) {
-            // Not just taken: some of the game's readers (the value query, game+0x106F040) don't look at
-            // the taken mask, so the buttons go from the reading itself, and from its raw button word.
-            controls &= ~out->hide;
-            *reinterpret_cast<uint16_t*>(slot + OFF_RAW) &= static_cast<uint16_t>(~out->hide_pad);
-            *reinterpret_cast<uint64_t*>(slot + OFF_TAKEN) |= out->take;
-            if (out->dpad_idle) {   // the reading's d-pad as the builder leaves it with nothing held
-                *reinterpret_cast<uint64_t*>(slot + OFF_DPAD) = 8;   // direction 8 (none), magnitude 0
-                *reinterpret_cast<uint64_t*>(slot + OFF_DPAD + 8) = 0;
-                *reinterpret_cast<uint32_t*>(slot + OFF_DPAD + 16) = 0;
-            }
-        }
-        const auto* active = *reinterpret_cast<unsigned char* const*>(mgr + OFF_ACTIVE);
-        return active ? active == slot : idx == 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    const SlotState before = g_slots[idx];
+    *out                   = step(g_slots[idx], controls, views, n);
+    if (out->hide && !hide_guarded(slot, out)) {
+        g_slots[idx] = before;
         return false;
     }
+    g_held[idx].store(g_slots[idx].held, std::memory_order_relaxed);
+    return active ? active == at : idx == 0;
 }
 
 using ReleaseFn = void (*)(void* slot);
@@ -242,11 +276,15 @@ DWORD WINAPI deliver(LPVOID) {
 // ---- start-up ----
 
 bool code_ok(uintptr_t base, const CodeCheck& c) {
-    __try {
-        return std::memcmp(reinterpret_cast<const void*>(base + c.rva), c.bytes, c.n) == 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    unsigned char got[sizeof c.bytes];
+    return c.n <= sizeof got && safe_copy(got, reinterpret_cast<const void*>(base + c.rva), c.n) && std::memcmp(got, c.bytes, c.n) == 0;
+}
+
+// The code the pad layer rests on, checked in memory: "" if it's as expected, else what doesn't match.
+const char* code_mismatch(uintptr_t base) {
+    for (const CodeCheck& c : kChecks)
+        if (!code_ok(base, c)) return c.what;
+    return "";
 }
 
 DWORD WINAPI start_thread(LPVOID) {
@@ -256,11 +294,10 @@ DWORD WINAPI start_thread(LPVOID) {
         return 0;
     }
     const auto base = reinterpret_cast<uintptr_t>(game);
-    for (const CodeCheck& c : kChecks)
-        if (!code_ok(base, c)) {
-            say(std::string("pad layers are off: the game code doesn't match at ") + c.what);
-            return 0;
-        }
+    if (const char* bad = code_mismatch(base); *bad) {
+        say(std::string("pad layers are off: the game code doesn't match at ") + bad);
+        return 0;
+    }
     g_base.store(base);
     FH2Hook* h = g_api->hook_function(&g_owner, "controller: taken controls (pad layer)", reinterpret_cast<void*>(base + RVA_RELEASE),
                                       reinterpret_cast<void*>(&d_release), reinterpret_cast<void**>(&o_release));
@@ -371,20 +408,15 @@ int api_set_modifier(FH2Mod* mod, const char* key, uint32_t modifier) {
 
 bool read_held(uint32_t* held) {
     const uintptr_t base = g_base.load(std::memory_order_relaxed);
-    if (!base) return false;
-    __try {
-        const auto* mgr = *reinterpret_cast<unsigned char* const*>(base + RVA_MANAGER);
-        if (!mgr || *reinterpret_cast<const uintptr_t*>(mgr) != base + RVA_MANAGER_VT) return false;
-        const auto* slot      = *reinterpret_cast<unsigned char* const*>(mgr + OFF_ACTIVE);
-        const uintptr_t first = reinterpret_cast<uintptr_t>(mgr) + OFF_SLOTS, at = reinterpret_cast<uintptr_t>(slot);
-        if (!slot || at < first || at >= first + kSlots * SLOT_SIZE || (at - first) % SLOT_SIZE) return false;
-        // with layers on, the reading has their buttons taken out: what was held before that
-        *held = pad_from_controls(*reinterpret_cast<const uint64_t*>(slot + OFF_CONTROLS));
-        if (g_live.load(std::memory_order_acquire)) *held |= g_held[(at - first) / SLOT_SIZE].load(std::memory_order_relaxed);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    uintptr_t mgr = 0, slot = 0;
+    uint64_t controls = 0;
+    if (!manager(base, &mgr) || !rd(mgr + OFF_ACTIVE, slot)) return false;
+    const int idx = slot ? slot_index(mgr, slot) : -1;
+    if (idx < 0 || !rd(slot + OFF_CONTROLS, controls)) return false;
+    // with layers on, the reading has their buttons taken out: what was held before that
+    *held = pad_from_controls(controls);
+    if (g_live.load(std::memory_order_acquire)) *held |= g_held[idx].load(std::memory_order_relaxed);
+    return true;
 }
 
 int api_buttons(uint32_t* held) {
@@ -401,14 +433,21 @@ const void* pad_interface() { return &g_iface; }
 FH2Mod* pad_layer_owner() { return &g_owner; }
 
 // After every fh2mod_init: hooks only when some mod added a layer. buttons() still works without
-// layers once the code is ready, so it gets the game's base either way.
+// layers once the code is ready and as expected, so it gets the game's base either way.
 void pad_layer_start(const FH2ModApi* api) {
     if (g_started) return;
     g_started = true;
     g_api     = api;
     if (g_count.load() == 0) {
         CloseHandle(CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
-            if (void* game = g_api->wait_for_code(0xFFFFFFFFu)) g_base.store(reinterpret_cast<uintptr_t>(game));
+            void* game = g_api->wait_for_code(0xFFFFFFFFu);
+            if (!game) return 0;
+            const auto base = reinterpret_cast<uintptr_t>(game);
+            if (const char* bad = code_mismatch(base); *bad) {
+                say(std::string("the pad's buttons() is off: the game code doesn't match at ") + bad);
+                return 0;
+            }
+            g_base.store(base);
             return 0;
         }, nullptr, 0, nullptr));
         return;

@@ -64,8 +64,8 @@ if (pad->buttons(&held) && (held & FH2_PAD_LB)) ...
 
 Each frame the game builds a reading of every controller: a mask of the controls held, and the pad's raw buttons. The platform hooks the function the game calls straight after that (game+0x10768D0), and takes the held buttons of each open layer out of the reading, so every part of the game that reads the controller sees them as not pressed. It also marks them in the game's own mask of taken controls, the one that stops a button that closed a menu from acting in the game behind it. A button the layer has taken stays out of the reading until it goes up. The game keeps the same pad in more than one slot, so presses only count from the slot the game is using. Everything runs on the game's own thread, in the game's own order.
 
-If the game's code doesn't match, `platform.log` says "pad layers are off: the game code doesn't match at ...", `add_layer` still succeeds, and no presses come. If no mod adds a layer, nothing is hooked.
+If the game's code doesn't match, `platform.log` says "pad layers are off: the game code doesn't match at ...", `add_layer` still succeeds, and no presses come. If no mod adds a layer, nothing is hooked, but `buttons` rests on the same code and is checked the same way: if it doesn't match, the log says "the pad's buttons() is off: ..." and `buttons` returns 0. The game's memory is read through a guarded copy, so a controller manager that isn't there or isn't what the platform expects means no presses and no buttons, never a crash.
 
 ## Tests
 
-`tests/pad_engine_test.cpp` checks the rules; `tests/run_pad_test.sh <forza_durango_release_final.exe>` also runs `tests/pad_hook_test.cpp`, which maps the real exe and calls the game's own function through the hook with a controller slot of its own.
+`tests/pad_engine_test.cpp` checks the rules; `tests/run_pad_test.sh <forza_durango_release_final.exe>` also runs `tests/pad_hook_test.cpp`, which maps the real exe and calls the game's own function through the hook with a controller slot of its own, and then with a manager pointer that can't be read and a slot that can't be written.
