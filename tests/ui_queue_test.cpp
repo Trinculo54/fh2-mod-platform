@@ -534,7 +534,7 @@ int main() {
         const auto polish = [](const char* english) {
             const std::string e = english;
             if (e == "(private)") return std::string("(prywatne)");
-            if (e == "A tip from {0}.") return std::string("WskazÃ³wka od {0}.");
+            if (e == "A tip from {0}.") return std::string("Wskazówka od {0}.");
             if (e == "A pop-up from {0}.") return std::string("Okienko od {0}.");
             return e;
         };
@@ -544,7 +544,7 @@ int main() {
         r[2].mod = "ModA", r[2].when = "12:01", r[2].title = "SNAPSHOT WRITTEN";
         const auto rows = recent_page(r, polish);
         check(rows.size() == 3, "Recent pop-ups page: a row each");
-        same(rows[0].label + " | " + rows[0].value + " | " + rows[0].description, "Press (A) to keep the tree | 12:05 | WskazÃ³wka od ModA.",
+        same(rows[0].label + " | " + rows[0].value + " | " + rows[0].description, "Press (A) to keep the tree | 12:05 | Wskazówka od ModA.",
              "Recent pop-ups page: a tip, by its line");
         same(rows[1].label + " | " + rows[1].description, "(prywatne) | Okienko od ModB.", "Recent pop-ups page: a private pop-up");
         same(rows[2].label + " | " + rows[2].value + " | " + rows[2].description, "SNAPSHOT WRITTEN | 12:01 | Okienko od ModA.",
