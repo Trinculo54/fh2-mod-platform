@@ -1,8 +1,8 @@
 /*
  * fh2mod_pad.h -- the pad layer preview of the FH2 Mod Platform (MIT licensed, see LICENSE).
  *
- * A preview: not part of any API version yet. It's offered as an interface, so a mod
- * that uses it still loads on a platform without it:
+ * A preview: not part of any API version yet. Platform 2.9.0 is the first to offer it, as an
+ * interface, so a mod that uses it still loads on a platform without it (2.8.0 and older):
  *
  *     const FH2PadInterface* pad = (const FH2PadInterface*)api->get_interface(FH2_PAD_INTERFACE, 1);
  *     if (!pad) ...   (no pad layers on this platform: say so in your log, carry on without)

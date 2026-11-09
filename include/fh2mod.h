@@ -125,8 +125,10 @@ typedef struct FH2ModApi {
     /* ---- String tables -----------------------------------------------------
        The game's text lives in string tables (media\Stripped\StringTables\
        <language>.zip\<Table>.str). Edits are applied to every language and
-       written to Forza Horizon 2 Extra Options' mediaoverride folder, merged
-       with every other mod's edits to the same table. The game reads its
+       written to the game's override folder (mediaoverride, or from platform
+       2.9.0 on Azimuth 1.0 or later without Extra Options, the Azimuth
+       folder's own layer: docs/car-packs.md), merged with every other mod's
+       edits to the same table. The game reads its
        string tables once at startup: edits made in fh2mod_init are always in
        time; later ones show from the next launch. See docs/string-tables.md
        for how to find keys. */
@@ -163,8 +165,10 @@ typedef struct FH2ModApi {
     /* ==== API version 2 (platform 2.1.0): check api_version >= 2 ======== */
 
     /* ---- Game files --------------------------------------------------------
-       Replace a file the game reads from game:\media, through Extra Options'
-       mediaoverride folder. `media_path` is relative to media, with a zip's
+       Replace a file the game reads from game:\media, through the
+       mediaoverride folder (from platform 2.9.0, on Azimuth 1.0 or later
+       without Extra Options, the Azimuth folder's own layer, which the game
+       reads first). `media_path` is relative to media, with a zip's
        name standing in for the zip: "drivatarglobalcache/DefaultCache.bin",
        or "UI/somefile.xml" for a file inside media\UI.zip. One mod per
        file: returns 1 if written (or already identical), 0 if another mod
@@ -187,7 +191,9 @@ typedef struct FH2ModApi {
        game's data (cars, events, AI drivers). add_sql queues statements
        (UTF-8, several per call is fine) to run against a copy of it; every
        mod's statements run in load order, each mod's in a transaction of its
-       own, and the copy goes to mediaoverride. If a mod's SQL fails, only
+       own, and the copy goes to mediaoverride (from platform 2.9.0, on
+       Azimuth 1.0 or later without Extra Options and without FH2MP, the
+       Azimuth folder's own layer). If a mod's SQL fails, only
        that mod's changes are rolled back, and the error is logged. The copy
        is rebuilt only when something changed. Statements added in
        fh2mod_init are applied for you; later ones need apply_database. */
@@ -553,8 +559,8 @@ typedef struct FH2ModApi {
        label and a description. Returns 1, or 0 if you have no row called
        `key` or the choices don't match (the log says why).
 
-       set_mod_description: your FH2ModInfo.description, shown on the MODS
-       tab and with your mod's Load row. */
+       set_mod_description: your FH2ModInfo.description, shown on the YOUR
+       MODS list and in "What it does" on your mod's page. */
     int (*game_language)(char* code, size_t size);
     int (*set_setting_text)(FH2Mod* mod, const char* key, const char* label, const char* description,
                             const char* const* choices, uint32_t choice_count);
@@ -669,17 +675,19 @@ typedef struct FH2ModApi {
        row of your own; FH2_UI_USES_TIPS starts the controller poll that tells
        which device the player used last. Declare pop-ups and tips here: the
        platform hooks the game's notification only in a session where a mod
-       did, and otherwise show_toast and show_tip return 0. Returns 1, or 0
-       after fh2mod_init. */
+       did (or with Developer=1 in fh2-mods\platform-popups.ini), and
+       otherwise show_toast and show_tip return 0. Returns 1, or 0 after
+       fh2mod_init. */
     int (*ui_uses)(FH2Mod* mod, uint32_t uses);
     /* Plays one of the game's UI sounds (FH2_SOUND_), wherever the player
-       is. From a page, title or box callback it plays at once; from any other
-       thread, at the game's next tick, or not at all if none comes within
-       half a second. Each sound at most once per 100 ms from your mod. Never
-       make a sound the only cue. Returns 1, or 0 for an unknown sound, a
-       repeat within 100 ms, NOTIFY or a countdown beep while the driving
-       view isn't on screen (they're silent under menus), or before the
-       game's sound is up. */
+       is. From one of your page, setting, title or box callbacks it plays at
+       once; from anywhere else, at the game's next tick, or not at all if
+       none comes within half a second. Each sound at most once per 100 ms
+       from your mod. Never make a sound the only cue. Returns 1, or 0 for an
+       unknown sound, a repeat within 100 ms, NOTIFY or a countdown beep
+       while the driving view isn't on screen (they're silent under menus),
+       before the game's sound is up, or when its sound code isn't as
+       expected this session. */
     int (*play_ui_sound)(FH2Mod* mod, uint32_t sound);
 
     /* ---- Pop-ups -----------------------------------------------------------
@@ -724,14 +732,16 @@ typedef struct FH2ModApi {
        The game's own message box over the page the player is on: a title, a
        message, your choices and Back, which the platform adds last. Call it
        only from a callback of one of your pages, your settings or your title
-       entries (on_open, on_select, on_button, on_slot, on_change, a title
-       entry's callback); from anywhere else, or from on_choose, it returns 0.
+       entries (on_open, on_select, on_button, on_slot, on_change, on_slide, a
+       title entry's on_press or on_choose); from anywhere else, or from a
+       box's own on_choose, it returns 0.
        One box at a time, and nothing is queued. on_choose gets the choice
        (from 0) or FH2_BOX_BACK (the Back item, or B), on the game's UI
        thread; it may never be called if the player leaves the box another
        way. Returns 1 if shown (from a tile page's on_open: as the page
        loads), 0 if not (not from a callback, on_open as YOUR MODS opens, a
-       box already shown or still coming up, no choices; the log says why).
+       box already shown or still coming up, no title or no choices; the log
+       says why).
        A title entry that shows a box can't also start the game. */
     int (*show_message_box)(FH2Mod* mod, const FH2MessageBox* box);
 
@@ -747,10 +757,12 @@ typedef struct FH2ModApi {
        80 characters), written into the page each time it opens. From
        fh2mod_init or the page's on_open. Returns 1, or 0 for no such page. */
     int (*set_page_hints)(FH2Mod* mod, const char* page_key, const char* const* texts, uint32_t count);
-    /* Shows hint `index` in `kind` (FH2_HINT_), or none for -1. At open or
-       from the page's own callbacks it changes on screen at once; at any
-       other time it shows the next time the page opens. Returns 1, or 0 for
-       no such page or hint. */
+    /* Shows hint `index` in `kind` (FH2_HINT_), or none for -1. From the
+       page's on_open it shows as the page opens, and from its own callbacks
+       while it's up (on_select, on_button, on_slot, or a box's on_choose
+       over it) it changes on screen at once; at any other time it shows the
+       next time the page opens. Returns 1, or 0 for no such page, hint or
+       kind. */
     int (*show_page_hint)(FH2Mod* mod, const char* page_key, int index, uint32_t kind);
 } FH2ModApi;
 
@@ -779,7 +791,7 @@ struct FH2Setting {
 
     /* ---- API 5 (platform 2.4.0): sliders. Zeroed (as by FH2Setting s{}),
        the row is On/Off and these are ignored. ---- */
-    int kind;                      /* FH2_SETTING_ON_OFF or FH2_SETTING_SLIDER */
+    int kind;                      /* FH2_SETTING_ON_OFF, _SLIDER, _LINK (API 6) or _CHOICE (API 9) */
     float min, max;                /* the slider's range */
     float step;                    /* how far one press of left or right moves it; 0 = a hundredth of the range */
     float slider_value;            /* its current value (`value` is ignored) */
@@ -947,9 +959,10 @@ struct FH2PageRow {
 /* ---- UI templates (API 10) ------------------------------------------------ */
 
 /* ui_status bits (API 10). */
-#define FH2_UI_TOASTS          0x0001  /* pop-ups and tips can show this session: the game's notification code
-                                          is as expected and the platform's tick is in (without its watch on
-                                          the game's own pop-ups, they're spaced 5.5 s apart) */
+#define FH2_UI_TOASTS          0x0001  /* pop-ups and tips can show this session: a mod declared them (ui_uses)
+                                          or Developer=1 is set, the game's notification code is as expected
+                                          and the platform's hooks for them are in (without its watch on the
+                                          game's own pop-ups, they're spaced 5.5 s apart) */
 #define FH2_UI_TOASTS_OFF      0x0002  /* the player turned mod pop-ups off: the platform's row, your mod's
                                           row, or the game's Minor notifications option it follows */
 #define FH2_UI_TIPS_OFF        0x0004  /* the player turned tips off */
@@ -1095,9 +1108,9 @@ struct FH2MessageBox {
 };
 
 /* Hint kinds (show_page_hint). */
-#define FH2_HINT_INFO      0   /* white */
-#define FH2_HINT_ATTENTION 1   /* orange, with the info glyph */
-#define FH2_HINT_FAULT     2   /* red, with a warning glyph */
+#define FH2_HINT_INFO      0   /* in the colour of the platform's own hints */
+#define FH2_HINT_ATTENTION 1   /* orange, with the game's info icon */
+#define FH2_HINT_FAULT     2   /* red, with its alert icon */
 
 /* The platform reads only `size` bytes of FH2Toast, FH2Tip and FH2MessageBox, so a mod built against a later
    header that adds members at their end still works, and one built against this header works on a later

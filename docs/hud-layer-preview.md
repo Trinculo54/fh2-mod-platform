@@ -1,14 +1,13 @@
 # The HUD layer (preview)
 
-**This is a preview, and it will change.** The HUD layer is only in one test build of the platform, "2.8.0 + HUD layer preview 3", for the testers of a mod that needs it. It isn't part of the API in `fh2mod.h`, released platforms don't have it, and when it moves into the API its names, limits and behaviour may all change, and this interface may go. Never make it the only way your mod works.
+**This is a preview, and it will change.** Platform 2.9.0 is the first release with the HUD layer; before that it was only in a test build, "2.8.0 + HUD layer preview 3", for the testers of a mod that needed it. It still isn't part of the API in `fh2mod.h`: it's an interface the platform publishes, and when it moves into the API its names, limits and behaviour may all change, and this interface may go. Never make it the only way your mod works.
 
-The layer is a heads-up display of your own, drawn by the game's own UI inside its free-roam HUD page, in the game's look and fonts: a bar along the bottom of the screen with tabs, two status lines, a strip of marks and button prompts; small labels (chips) at the top; a tip card; a panel of rows; a countdown in the middle of the screen; and a white blink across the picture. You fill the parts with text and numbers; the platform owns the layout, so nothing you set can break the game's HUD page. The header, [`include/fh2mod_hud.h`](../include/fh2mod_hud.h), is the reference for every member; this page explains how it behaves. Testers: see [Installing the preview](#installing-the-preview) at the end.
+The layer is a heads-up display of your own, drawn by the game's own UI inside its free-roam HUD page, in the game's look and fonts: a bar along the bottom of the screen with tabs, two status lines, a strip of marks and button prompts; small labels (chips) at the top; a tip card; a panel of rows; a countdown in the middle of the screen; and a white blink across the picture. You fill the parts with text and numbers; the platform owns the layout, so nothing you set can break the game's HUD page. The header, [`include/fh2mod_hud.h`](../include/fh2mod_hud.h), is the reference for every member; this page explains how it behaves. Testers of the old test build: see [Which builds have it](#which-builds-have-it) at the end.
 
 ## What the preview is, and isn't
 
-- **It's released 2.8.0 plus the HUD layer, and nothing else.** It reports itself as platform 2.8.0, API 9, like the release. The only ways to tell it apart are the build text (in line 1 of `platform.log`, the crash reports, the DLL's Product version and the Button prompts row's description) and the interface itself.
-- **Mods reach it through an interface, not the API:** `FH2Platform.HudLayer` version 1, from `get_interface` (API 2). The platform publishes it itself, before any mod starts, so unlike other mods' interfaces it's there in `fh2mod_init`, and no mod can publish that name in its place.
-- **Without a mod that adds a layer, it behaves as 2.8.0.** No HUD page is written for it, no new hook or thread is made, and `platform.log` has no `[HUD layer]` line. The other mods a tester has installed run on it as they do on 2.8.0.
+- **Mods reach it through an interface, not the API:** `FH2Platform.HudLayer`, from `get_interface` (API 2). Platform 2.9.0 publishes version 2, which adds [the feed](#the-feed-290); the 2.8.0 test build had version 1. The platform publishes it itself, before any mod starts, so unlike other mods' interfaces it's there in `fh2mod_init`, and no mod can publish that name in its place.
+- **Without a mod that adds a layer, it does nothing.** No HUD page is written for it, none of its hooks or threads is made, and `platform.log` has no `[HUD layer]` line.
 - **It isn't for every mod.** One layer is on screen at a time, so two mods with bars would keep taking the screen from each other. If your mod could use it, ask first, and expect the interface to be replaced by an API in a later platform.
 
 ## Getting the interface
@@ -33,8 +32,8 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
 }
 ```
 
-- **On a released platform** (2.8.0 among them), `get_interface` returns null. Nothing in the header is linked, so a mod built with it still loads everywhere; it only has to work without the bar. If one of your features can't work without it, say so in your log or with `set_notice`.
-- **Don't look at `api_version` to find the preview:** it's 9, as on 2.8.0. Only the interface tells.
+- **On platform 2.8.0 and older**, `get_interface` returns null. Nothing in the header is linked, so a mod built with it still loads everywhere; it only has to work without the bar. If one of your features can't work without it, say so in your log or with `set_notice`.
+- **Don't look at `api_version` to find the layer:** the 2.8.0 test build said 9, as 2.8.0 does. Only the interface tells. Asking for `FH2_HUD_INTERFACE_VERSION` (2) needs 2.9.0; ask for 1 instead, and check `version` before using the feed, if your mod should also run on the old test build.
 - **Three checks before you rely on it:** the interface isn't null, `add_hud_layer` returned 1, and `hud_status` has `FH2_HUD_AVAILABLE`. The last one comes later in the session (see [Status](#status-on_status-and-the-lease)), and can go away again if the layer is turned off.
 
 ## Adding a layer
@@ -379,32 +378,29 @@ g_hud->hold_game_hud(g_mod, 0);
 
 The platform checks everything it relies on before it uses it, and turns off only what doesn't match, with a line in `platform.log`; the game itself is never affected.
 
-- **Left out for the session** (`FH2_HUD_AVAILABLE` never set, `show_hud_layer` and `hold_game_hud` return 0): the page check failed (the game's `UI.zip` isn't as expected), the page couldn't be written, the game's code for the layer isn't as expected (or the game exe couldn't be read to check it), a hook was refused, the Mods page's hooks didn't go in, or the crash marker left it out.
+- **Left out for the session** (`FH2_HUD_AVAILABLE` never set, `show_hud_layer` and `hold_game_hud` return 0): the page check failed (the game's `UI.zip` isn't as expected), the page couldn't be written, the game's code for the layer isn't as expected (or the game exe couldn't be read to check it), a hook was refused, the platform's menu hooks didn't go in, or the crash marker left it out.
 - **Off from then on** (`FH2_HUD_AVAILABLE` cleared): the HUD page was shown without the layer's values (the game didn't read the platform's page, for example with mediaoverride off), the game used the HUD page from another thread than the platform's frame, or the game's code faulted while the layer was being updated. The hold is let go, and the layer is hidden where that's still safe; in the rare case that telling the page anything isn't, what it showed last can stay on screen for the session. None of these has happened in testing.
 - **Only one piece off:** the game-HUD hold (`hold_game_hud` returns 0, and a hold that was on is let go) or the sounds (`play_ui_sound` returns 0) when their code isn't as expected, or after one of them faulted.
 - **The crash marker.** From the moment the page with the layer is written at start-up until the HUD page has been on screen for 10 s, the platform keeps `fh2-mods\platform-hudlayer-marker.txt`. If the next launch finds a crash report newer than the marker (whatever the crash was), or the page started loading in two sessions running and never reached 10 s on screen in either, that launch leaves the layer out, and the title screen says "HUD layer: left out after a crash. See platform.log." Only that one session goes without it: the launch after tries again.
 
-## Installing the preview
+## Which builds have it
 
-For testers. The preview comes as one DLL under the platform's two names, `d3dcompiler_47.dll` and `DWrite.dll`.
+- **Platform 2.9.0 and newer** have the layer (interface version 2), so every mod zip that ships 2.9.0 brings it. Line 1 of `fh2-mods\platform.log` says which platform runs.
+- **The "2.8.0 + HUD layer preview 3" test build** had version 1, without the feed. It reported itself as 2.8.0, so line 1 of its `platform.log` ended "this is the 2.8.0 + HUD layer preview 3 build, not a release", and its Product version (Properties > Details) said the same. Testers who still have it: replace it with 2.9.0, as both `d3dcompiler_47.dll` and `DWrite.dll`.
+- **An older platform put back** by a mod zip that ships 2.8.0 or older takes the layer away, and the mod that needs it finds no interface: reinstall a mod that ships 2.9.0. Going back to 2.8.0 on purpose, delete `fh2-mods\notices\HUD layer.txt` if it's there (it only is after a session the crash marker left the layer out of, and 2.8.0 wouldn't clear it); the layer's other files can stay, and 2.8.0 removes its HUD page again at the next launch.
 
-- **Put it in as both files, replacing both,** next to `azimuth.exe`. Azimuth before 1.0.1 loads only `d3dcompiler_47.dll`, and 1.0.3 and later only `DWrite.dll`.
-- **Released 2.8.0 has the same version number,** so where both are beside `azimuth.exe`, `DWrite.dll` wins the tie. Every mod's zip ships released 2.8.0 as both files, so unpacking one over the install afterwards silently puts 2.8.0 back, and the mod that needs the layer finds no interface. Install the preview again after it.
-- **To check which one runs,** look at line 1 of `fh2-mods\platform.log`: the preview's ends "this is the 2.8.0 + HUD layer preview 3 build, not a release". The file's Properties > Details show it as Product version "2.8.0 + HUD layer preview 3".
-- **Going back to 2.8.0:** put its two files back, and delete `fh2-mods\notices\HUD layer.txt` if it's there (it only is after a session the crash marker left the layer out of, and 2.8.0 wouldn't clear it). The preview's other files can stay; 2.8.0 removes its HUD page again at the next launch.
-
-What the preview writes while a mod has a layer:
+What the platform writes while a mod has a layer:
 
 | File | What it is |
 |---|---|
-| `UI\Scenes\Anthem\A_Hud.xaml` | the HUD page with the layer, written where the platform writes its other pages (the game's `mediaoverride` folder), every launch. It's taken out again at the first launch without a layer. |
+| `UI\Scenes\Anthem\A_Hud.xaml` | the HUD page with the layer, written where the platform writes its other pages (the game's `mediaoverride` folder, or from 2.9.0 on Azimuth 1.0 or later without Extra Options, the Azimuth folder's own layer), every launch. It's taken out again at the first launch without a layer. |
 | `fh2-mods\platform-hudlayer-A_Hud.xaml` | a copy of that page, for checking it |
 | `fh2-mods\platform-hudlayer-props.txt` | the page's properties, one a line: name, type, default and values |
 | `fh2-mods\platform-hudlayer-marker.txt` | the crash marker, gone 10 s after the HUD page is first on screen |
 | `fh2-mods\platform-hudlayer.ini` | the Button prompts choice, made the first time the row is changed |
 | `fh2-mods\notices\HUD layer.txt` | the title-screen line, after a session the crash marker left the layer out of |
 
-`fh2-mods\platform-session.json` gets `"hud_layer": "preview 3: <mods with a layer>"`, and every crash report a line `platform: FH2 Mod Platform 2.8.0 + HUD layer preview 3` after the CRASH line, plus a `HUD layer:` line saying what the layer was doing.
+`fh2-mods\platform-session.json` gets `"hud_layer": "preview 3: <mods with a layer>"`, and every crash report a line `platform: FH2 Mod Platform <build>` after the CRASH line, plus a `HUD layer:` line saying what the layer was doing.
 
 **What to send back:** `fh2-mods\platform.log` from the session (the platform also keeps each session's copy in `fh2-mods\platform-logs\`, so an older one isn't lost when the game starts again), any `fh2-mods\crashes\crash-*.txt` from it, and the log of the mod that uses the layer.
 

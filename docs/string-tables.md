@@ -14,13 +14,13 @@ Mount\media\Stripped\StringTables\DEV.zip   developer English
 Mount\media\Stripped\StringTables\LOC.zip   placeholders ("Main:IDS_Press")
 ```
 
-Inside each zip are about 120 tables, one per area of the game: `Main.str`, `PauseMenu.str`, `LoadingMessages.str`, `AIPlayers.str` and so on. Don't edit the zips: `media\zipmanifest.xml` records where each zip's directory is, and the game relies on it. The platform writes edited copies to Extra Options' override folder instead, as `Mount\mediaoverride\Stripped\StringTables\<language>\<table>.str`, and Extra Options makes the game read those (or, when Extra Options isn't loaded, the platform from 2.7.3). From 2.9.0, on Azimuth 1.0 or later without Extra Options, they go to the Azimuth folder's own layer instead, `data\titles\1A96545B\tmp\fh2-platform\media\Stripped\StringTables\<language>\<table>.str`, which the game reads ahead of `mediaoverride` ([car-packs.md](car-packs.md#this-azimuth-folders-own-files)).
+Inside each zip are about 120 tables, one per area of the game: `Main.str`, `PauseMenu.str`, `LoadingMessages.str`, `AIPlayers.str` and so on. Don't edit the zips: `media\zipmanifest.xml` records where each zip's directory is, and the game relies on it. The platform writes edited copies to the override folder instead, as `Mount\mediaoverride\Stripped\StringTables\<language>\<table>.str`, and Extra Options makes the game read those (or, when Extra Options isn't loaded, the platform from 2.7.3). From 2.9.0, on Azimuth 1.0 or later without Extra Options, they go to the Azimuth folder's own layer instead, `data\titles\1A96545B\tmp\fh2-platform\media\Stripped\StringTables\<language>\<table>.str`, which the game reads ahead of `mediaoverride` ([car-packs.md](car-packs.md#this-azimuth-folders-own-files)).
 
 The game reads its string tables once, early in startup. Edits made in `fh2mod_init` are always in time; anything later shows from the next launch.
 
 ## Keys
 
-Every string has a 16-bit key, plus an `IDS_...` name used by the game's developers. Keys are the same in every language, so one `set_string` call covers them all. To find a key, list the table with the script in this repo:
+Every string has a 16-bit key, plus an `IDS_...` name used by the game's developers. Keys are the same in every language, so one `set_string` call covers them all, with the same text in each. For text in each language's own words, `set_string_tr` (API 10, platform 2.9.0) writes every table with its language's translation ([translating.md](translating.md)). To find a key, list the table with the script in this repo:
 
 ```
 python scripts/dump_strings.py "<Mount>/media/Stripped/StringTables/EN.zip"                       (lists the tables)
