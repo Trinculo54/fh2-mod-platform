@@ -181,11 +181,19 @@ if command -v python3 > /dev/null; then
     grep -q "pl_PL.po: its header says nplurals=4, but the platform reads 3 plural forms for Polish" "$po/warnings.txt" || tools_ok=0
     if python3 -I "$root/tools/l10n/po2inc.py" "$po/out2.inc" t "$po/pl.po" 2> "$po/error.txt"; then tools_ok=0; fi
     grep -q "pl.po:3 isn't UTF-8: save it as UTF-8" "$po/error.txt" || tools_ok=0
+    # of two files for one language, pl.po is used, though pl-PL.po sorts first; an escape that isn't UTF-8 is left out
+    mkdir "$po/two"
+    printf '%s\n' 'msgctxt "a"' 'msgid "A"' 'msgstr "Ok"' '' 'msgctxt "e"' 'msgid "E"' 'msgstr "Caf\xE9"' > "$po/two/pl.po"
+    printf '%s\n' 'msgctxt "a"' 'msgid "A"' 'msgstr "Hej"' > "$po/two/pl-PL.po"
+    python3 -I "$root/tools/l10n/po2inc.py" "$po/two.inc" t "$po/two/pl-PL.po" "$po/two/pl.po" 2> "$po/two.txt" || tools_ok=0
+    [ "$(grep -c '{"pl",' "$po/two.inc")" = 1 ] && grep -q 'msgstr \\"Ok\\"' "$po/two.inc" && ! grep -q 'Hej\|Caf' "$po/two.inc" || tools_ok=0
+    grep -q "pl-PL.po is Polish (pl) too, and pl.po is the one used; left out" "$po/two.txt" || tools_ok=0
+    grep -q "pl.po:6: \"e\": its text has an escape that isn't UTF-8 (such as \\\\xE9); left out" "$po/two.txt" || tools_ok=0
     if [ "$tools_ok" = 1 ]; then
         echo "ok   tools/l10n: po2inc.py reads pl_PL.po as pl and zh_TW.po as zh-Hant, and leaves out and warns as the platform does"
     else
         echo "FAIL tools/l10n: po2inc.py's tags and warnings"
-        cat "$po/warnings.txt" "$po/error.txt"
+        cat "$po/warnings.txt" "$po/error.txt" "$po/two.txt"
     fi
 fi
 wine "$b/wine_test.exe"

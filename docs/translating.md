@@ -31,7 +31,7 @@ The game's languages, and the names the PO files go by:
 | Czech | `cs` | `cs.po` | The game itself shows English |
 | Hungarian | `hu` | `hu.po` | The game itself shows English |
 
-A file named with the region translation tools often add is read as the game's language: `pl_PL.po` as `pl.po`, `de_DE.po`, `ja_JP.po` and the like as the language alone, and `zh_TW.po`, `zh_HK.po` and `zh_Hant_TW.po` as `zh_Hant.po`. Other names that none of the game's languages looks for (`es_AR.po`, `pt_PT.po`, `zh_CN.po`, `de_AT.po`) aren't used, and `po2inc.py` and `platform.log` say which name to use instead.
+A file named with the region translation tools often add is read as the game's language: `pl_PL.po` as `pl.po`, `de_DE.po`, `ja_JP.po` and the like as the language alone, and `zh_TW.po`, `zh_HK.po` and `zh_Hant_TW.po` as `zh_Hant.po`. Other names that none of the game's languages looks for (`es_AR.po`, `pt_PT.po`, `zh_CN.po`, `de_AT.po`) aren't used, and `po2inc.py` and `platform.log` say which name to use instead. Of two files for one language (`pl.po` and `pl_PL.po`), the one named for the language itself is used.
 
 ## For mod makers
 
@@ -84,7 +84,7 @@ python3 platform/tools/l10n/extract.py --domain MyMod src
 python3 platform/tools/l10n/po2inc.py src/mymod_l10n.inc mymod_translations l10n/*.po
 ```
 
-Both have `--check`, which writes nothing and fails when the file isn't up to date: run them in CI. `extract.py` stops, with the file and line, at a key or English in `FH2_TR` (or its siblings) that isn't a plain string literal, and at a key used for two different English texts. A call to `api->tr()` it can't read gets a warning instead and is passed over, since another object can have a `tr` of its own; use the macros, and nothing slips past. `po2inc.py` leaves out what the platform would refuse anyway (entries marked fuzzy, untranslated ones, ones whose placeholders don't match the English) and warns about the placeholders.
+Both have `--check`, which writes nothing and fails when the file isn't up to date: run them in CI. `extract.py` stops, with the file and line, at a key or English in `FH2_TR` (or its siblings) that isn't a plain string literal, and at a key used for two different English texts. A call to `api->tr()` it can't read gets a warning instead and is passed over, since another object can have a `tr` of its own; use the macros, and nothing slips past. `po2inc.py` leaves out what the platform would refuse anyway (entries marked fuzzy, untranslated ones, ones whose placeholders don't match the English or whose text has a control character or an escape that isn't UTF-8, and files no language of the game's looks for) and warns about all but the fuzzy and untranslated ones. It stops at a file that isn't UTF-8.
 
 Then hand them to the platform straight after `register_mod`:
 

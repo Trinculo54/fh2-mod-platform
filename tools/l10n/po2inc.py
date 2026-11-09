@@ -8,10 +8,11 @@ Each file's language comes from its name (pl.po, pt_BR.po or pt-BR.po; pl_PL.po 
 zh_TW.po as zh-Hant, as the platform reads them). The .inc holds an array of
 FH2Translation, one per file, with a copy of the PO file cut down to what the platform reads: the
 entries that are translated and not fuzzy, without comments. An entry whose {placeholders} don't match
-its English, or whose text has a control character other than \\n and \\t, is left out, with a warning
-naming its file and line (the platform would refuse it too). So is a file for a language none of the
-game's languages looks for (es_AR.po), with the name to use. A header whose nplurals isn't the
-platform's for the language gets a warning, and a file that isn't UTF-8 stops it.
+its English, or whose text has a control character other than \\n and \\t or an escape that isn't UTF-8
+(\\xE9), is left out, with a warning naming its file and line (the platform would refuse it too). So is a
+file for a language none of the game's languages looks for (es_AR.po), with the name to use, and of two
+files for one language (pl.po and pl_PL.po) the one not named for the language itself. A header whose
+nplurals isn't the platform's for the language gets a warning, and a file that isn't UTF-8 stops it.
 Then, in the mod:
 
     #include "fh2mod_l10n.h"
@@ -32,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pofile  # noqa: E402
 
 
-def tag_of(path):
+def tag_of(path, as_named=False):
     stem = os.path.splitext(os.path.basename(path))[0]
     parts = re.split(r'[-_]', stem)
     if not parts or not re.fullmatch(r'[A-Za-z]{2,3}', parts[0]):
@@ -47,7 +48,8 @@ def tag_of(path):
             out.append(p)
         else:
             raise SystemExit("%s: the file's name isn't a language (pl.po, pt_BR.po...)" % path)
-    return catalogue_tag('-'.join(out))
+    tag = '-'.join(out)
+    return tag if as_named else catalogue_tag(tag)
 
 
 # The game's languages' tags, and the catalogues each looks in (as the platform's fallbacks()).
@@ -116,7 +118,11 @@ def read_po(path):
 
 
 def compact(path, tag, warnings):
-    entries = pofile.parse(read_po(path), os.path.basename(path))
+    text = read_po(path)
+    entries = pofile.parse(text, os.path.basename(path))
+    # pofile reads an escape that makes bytes that aren't UTF-8 (\xE9) as U+FFFD, where the platform leaves the entry
+    # out; in a file with no U+FFFD of its own, that's where one comes from
+    own_fffd = '\ufffd' in text
     out = []
     kept = 0
     forms = max(pofile.plural_form(tag, n) for n in range(200)) + 1
@@ -135,6 +141,10 @@ def compact(path, tag, warnings):
         if control:
             warnings.append('%s:%d: "%s": its text has a control character (U+%04X), which the game can\'t show; left out' %
                             (path, e.line, e.ctxt if e.ctxt is not None else e.msgid, ord(control[0])))
+            continue
+        if not own_fffd and any('\ufffd' in t for t in e.forms()):
+            warnings.append('%s:%d: "%s": its text has an escape that isn\'t UTF-8 (such as \\xE9); left out' %
+                            (path, e.line, e.ctxt if e.ctxt is not None else e.msgid))
             continue
         bad = [t for i, t in enumerate(e.forms())
                if t and not pofile.placeholders_fit(e, t, e.plural is not None and pofile.form_only_for_one(tag, i))]
@@ -179,11 +189,21 @@ def build(name, files):
     warnings = []
     blocks = []
     rel = [f.replace('\\', '/') for f in files]
-    for path, shown in zip(files, rel):
-        tag = tag_of(path)
+    tags = [tag_of(f) for f in files]
+    # Of two files for one language, the one named for the language itself is used (pl.po, not pl_PL.po), else the
+    # first, as the platform reads its override folder
+    used = {}
+    for path, tag in zip(files, tags):
+        if tag not in used or (tag_of(path, True) == tag and tag_of(used[tag], True) != tag):
+            used[tag] = path
+    for path, shown, tag in zip(files, rel, tags):
         why = never_shown(tag)
         if why:
             warnings.append('%s: %s; left out' % (path, why))
+            continue
+        if used[tag] != path:
+            warnings.append('%s is %s (%s) too, and %s is the one used; left out' %
+                            (path, language_name(tag), tag, os.path.basename(used[tag])))
             continue
         text, kept = compact(path, tag, warnings)
         data = text.encode('utf-8')
