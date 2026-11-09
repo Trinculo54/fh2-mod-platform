@@ -81,7 +81,8 @@ target_sources(fh2mod_platform PRIVATE src/hud_layer.cpp src/hud_state.cpp src/h
 # Only kernel32/user32 (and the C runtime) at load time: azimuth.exe loads
 # this DLL very early, and an app-folder version.dll or winhttp.dll proxy
 # from some other mod must not get pulled in by us. WinHTTP is loaded from
-# System32 when the first update check runs.
+# System32 when the first update check runs. The platform test checks the
+# built DLL keeps to this, delay-loaded DLLs too (tests/imports_test.cpp).
 target_link_libraries(fh2mod_platform PRIVATE user32)
 set_target_properties(fh2mod_platform PROPERTIES OUTPUT_NAME d3dcompiler_47 PREFIX "")
 # Azimuth 1.0.3 no longer imports d3dcompiler_47.dll, while 1.0.1 and later import DWrite.dll.
@@ -223,6 +224,15 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_executable(wine_test tests/wine_test.cpp src/wine.cpp)
         target_include_directories(wine_test PRIVATE src)
         target_link_options(wine_test PRIVATE -static)
+        # What the platform DLL imports, load-time and delay-loaded (the rule above fh2mod_platform's
+        # target_link_libraries), read from the d3dcompiler_47.dll and DWrite.dll next to it: run imports_test.exe.
+        # It imports ADVAPI32.dll and delay-loads VERSION.dll itself, so the check is seen to find both.
+        add_executable(imports_test tests/imports_test.cpp)
+        target_compile_definitions(imports_test PRIVATE UNICODE _UNICODE)
+        target_compile_options(imports_test PRIVATE ${_warn})
+        target_link_libraries(imports_test PRIVATE advapi32 version)
+        target_link_options(imports_test PRIVATE -municode -static -Wl,--delayload=version.dll)
+        add_dependencies(imports_test fh2mod_platform)
         # The pad layer preview's rules (src/pad_engine.hpp), with no game: run pad_engine_test.exe.
         add_executable(pad_engine_test tests/pad_engine_test.cpp)
         target_include_directories(pad_engine_test PRIVATE include src)
