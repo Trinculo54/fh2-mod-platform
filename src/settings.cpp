@@ -3166,6 +3166,11 @@ void* g_fn_vt[7] = {reinterpret_cast<void*>(&fn_copy), reinterpret_cast<void*>(&
                     reinterpret_cast<void*>(&fn_get)};
 void handle_title_choice(PopupFn* self);
 void fn_call_title(PopupFn* self) { handle_title_choice(self); }
+// The box that says the MODS menus aren't showing: its one item (OK) only closes it.
+void fn_call_info(PopupFn*) {}
+void* g_info_fn_vt[7] = {reinterpret_cast<void*>(&fn_copy), reinterpret_cast<void*>(&fn_copy), reinterpret_cast<void*>(&fn_call_info),
+                         reinterpret_cast<void*>(&fn_type), reinterpret_cast<void*>(&fn_delete), reinterpret_cast<void*>(&fn_dtor),
+                         reinterpret_cast<void*>(&fn_get)};
 void* g_title_fn_vt[7] = {reinterpret_cast<void*>(&fn_copy), reinterpret_cast<void*>(&fn_copy), reinterpret_cast<void*>(&fn_call_title),
                           reinterpret_cast<void*>(&fn_type), reinterpret_cast<void*>(&fn_delete), reinterpret_cast<void*>(&fn_dtor),
                           reinterpret_cast<void*>(&fn_get)};
@@ -3232,6 +3237,22 @@ bool show_list(void* page, FakeLocString* title, FakeLocString* message, FakeLoc
         g_popup_ok = false;
         return false;
     }
+}
+
+// When the game doesn't read the platform's menu files (Extra Options refusing its patches, EnableMediaOverrides=0,
+// a layer that isn't mounted), the MODS tab, the Settings tile and the HUD notice are all missing, and only
+// platform.log says why. The message box is the game's own (A_MessageBox.xaml, not one of ours), with its text
+// from code, so it shows anyway.
+const wchar_t* const kMissingTitle   = L"MODS menus missing";
+const wchar_t* const kMissingMessage = L"The MODS tab and the mods' settings aren't showing, because the game isn't reading the platform's menu "
+                                       L"files. If you use Extra Options, update it and keep EnableMediaOverrides=1. fh2-mods\\platform.log "
+                                       L"has more.";
+const wchar_t* const kMissingOk      = L"OK";
+bool show_missing_box(void* page) {
+    static FakeLocString* title    = loc_string(kMissingTitle);
+    static FakeLocString* message  = loc_string(kMissingMessage);
+    static FakeLocString* labels[] = {loc_string(kMissingOk)};
+    return show_list(page, title, message, labels, 1, g_info_fn_vt);
 }
 
 bool show_popup(void* page) {
@@ -3485,6 +3506,28 @@ bool focus_named_inner(void* page, const char* name) {
     reinterpret_cast<FocusFn>(g_base + RVA_FOCUS)(out, iface);
     release(static_cast<uint8_t*>(out[1]));
     return true;
+}
+
+// Whether the pause menu has a tile called `name`, looked up the way the game finds its tiles to wire them
+// (0x140CBDB20, Button* (String** name, page), called at 0x140D9FA3A): 1 yes, 0 no, -1 it faulted.
+constexpr uintptr_t RVA_FIND_BUTTON      = 0x0CBDB20;
+constexpr uintptr_t RVA_FIND_BUTTON_CALL = 0x0D9FA3A;   // in the pause menu's wire-a-tile (0x140D9F9F0)
+bool g_find_button_ok = false;                          // both look as expected
+bool find_button_inner(void* page, const char* name) {
+    alignas(16) uint8_t str[0x80] = {};
+    reinterpret_cast<AvuiStringFn>(g_base + RVA_AVUI_STRING)(str, name, -1);
+    void* ref = str;
+    InterlockedIncrement(reinterpret_cast<volatile LONG*>(str + 0x10));
+    uint8_t* el = reinterpret_cast<FindNameFn>(g_base + RVA_FIND_BUTTON)(&ref, page);
+    reinterpret_cast<AvuiStringFreeFn>(g_base + RVA_AVUI_STRING_FREE)(str);
+    return el != nullptr;
+}
+int page_has_button(void* page, const char* name) {
+    __try {
+        return find_button_inner(page, name) ? 1 : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
 }
 
 bool focus_named(void* page, const char* name) {
@@ -3929,6 +3972,19 @@ void d_pause_menu_wire(void* page) {
     g_hub_builds = 0;
     o_pause_menu_wire(page);
     wire_installed_tile(page);
+    // the MODS tab's tiles aren't there: the game isn't reading the platform's files. Said once a session.
+    static bool looked = false;
+    if (!looked && page && g_find_button_ok && g_popup_ok) {
+        looked = true;
+        const int has = page_has_button(page, "PART_Button_FH2Mod_Installed");
+        if (has < 0) {
+            slog("couldn't look for the MODS tab's tiles on the pause menu");
+        } else if (!has) {
+            slog("the pause menu has no MODS tab: the game isn't reading the platform's menu files (for the mediaoverride folder, "
+                 "Extra Options needs EnableMediaOverrides=1 and its patches on). Telling the player once this session");
+            if (show_missing_box(page)) return;   // no restart question under it
+        }
+    }
     // a page's tile text may have changed since this page's bindings read it
     for (std::size_t t = 0; t < kTileCount; ++t)
         if (page && g_tile_obj[t].load() == page)
@@ -4062,6 +4118,15 @@ void hook_hub() {
     if (!show_marketplace_tab(m)) slog("the code that hides the Marketplace tab doesn't look as expected; MODS shows only with Extra Options' EnableMarketplace");
     g_sounds_ok = true;
     g_hub_ready = true;   // Pause > Settings > MODS opens YOUR MODS from now on
+    {
+        // the lookup the pause menu's own wiring uses, to tell when its MODS tiles are missing (d_pause_menu_wire)
+        static const uint8_t find_button[] = {0x48, 0x89, 0x4C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE,
+                                              0xFF, 0xFF, 0xFF, 0x48, 0x89, 0x5C, 0x24, 0x48, 0x48, 0x89, 0x74, 0x24, 0x58, 0x48, 0x8B, 0xC2,
+                                              0x48, 0x8B, 0xF9, 0x4C, 0x8D, 0x44, 0x24, 0x50, 0x48, 0x8B, 0x11, 0x48, 0x8B, 0xC8, 0xE8};
+        static const uint8_t call[] = {0xE8, 0xE1, 0xE0, 0xF1, 0xFF};   // call 0x140CBDB20
+        g_find_button_ok = code_matches(RVA_FIND_BUTTON, find_button, sizeof find_button) && code_matches(RVA_FIND_BUTTON_CALL, call, sizeof call);
+        if (!g_find_button_ok) slog("the pause menu's tile lookup doesn't look as expected; a missing MODS tab won't be told to the player");
+    }
     hook_tiles(m);
     if (g_hud_notice) {
         mod_notice_descriptor();   // made now, so the HUD hook knows there's a notice
