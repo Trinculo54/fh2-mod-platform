@@ -635,6 +635,8 @@ int wmain(int argc, wchar_t** argv) {
         g_game           = "PL";
         CHECK(std::string(l10n_tr(&two_mods[k], "greeting", "Hello, {name}!")) == "Cześć, {name}!");
         CHECK(logged("[" + who + "] fh2-mods\\lang\\" + who + "\\" + other_name + " is Polish (pl) too, and pl.po is the one used, so it isn't read"));
+        // and the one not used is never logged as read, whichever the folder lists first (NTFS puts pl-PL.po before pl.po)
+        CHECK(!logged("[" + who + "] translation: Polish (pl) from fh2-mods\\lang\\" + who + "\\" + other_name));
     }
 
     // ---- a mod that passes ever-changing English: past 20000 texts, tr() makes no more copies and gives the English

@@ -760,10 +760,18 @@ ModText& mod_text(FH2Mod* m, std::vector<std::string>& notes) {
     if (name.empty() || name == "." || name == ".." || name.find_first_of("\\/:*?\"<>|") != std::string::npos) return mt;
     const fs::path dir = azimuth_dir() / L"fh2-mods" / L"lang" / utf16(name);
     std::error_code ec;
-    for (const auto& e : fs::directory_iterator(dir, ec)) {
-        const std::string file = utf8(e.path().filename().wstring());
-        if (!e.is_regular_file(ec) || !ieq(utf8(e.path().extension().wstring()), ".po")) continue;
-        const std::string own = normal_tag(utf8(e.path().stem().wstring()));
+    std::vector<fs::path> paths;
+    for (const auto& e : fs::directory_iterator(dir, ec))
+        if (e.is_regular_file(ec) && ieq(utf8(e.path().extension().wstring()), ".po")) paths.push_back(e.path());
+    // Of two files for one language, the one named for the language itself is read (pl.po, not pl_PL.po or pl-PL.po),
+    // whatever order the folder lists them in (NTFS puts pl-PL.po first), so those files go first.
+    std::stable_partition(paths.begin(), paths.end(), [](const fs::path& p) {
+        const std::string own = normal_tag(utf8(p.stem().wstring()));
+        return !own.empty() && catalogue_tag(own) == own;
+    });
+    for (const fs::path& path : paths) {
+        const std::string file = utf8(path.filename().wstring());
+        const std::string own  = normal_tag(utf8(path.stem().wstring()));
         if (own.empty()) {
             notes.push_back("fh2-mods\\lang\\" + name + "\\" + file + " isn't named after a language (pl.po, pt-BR.po...), so it isn't read");
             continue;
@@ -773,14 +781,12 @@ ModText& mod_text(FH2Mod* m, std::vector<std::string>& notes) {
             notes.push_back("fh2-mods\\lang\\" + name + "\\" + file + " isn't read: " + why);
             continue;
         }
-        if (const auto f = mt.files.find(tag); f != mt.files.end()) {   // two files for one language: pl.po wins over pl_PL.po
-            std::string used = f->second, unused = file;
-            if (own == tag && normal_tag(used.substr(0, used.size() - 3)) != tag) std::swap(used, unused);
-            notes.push_back("fh2-mods\\lang\\" + name + "\\" + unused + " is " + language_name(tag) + " (" + tag + ") too, and " + used +
+        if (const auto f = mt.files.find(tag); f != mt.files.end()) {   // two files for one language: the first, pl.po if there is one
+            notes.push_back("fh2-mods\\lang\\" + name + "\\" + file + " is " + language_name(tag) + " (" + tag + ") too, and " + f->second +
                             " is the one used, so it isn't read");
-            if (used != file) continue;
+            continue;
         }
-        std::ifstream in{e.path(), std::ios::binary};
+        std::ifstream in{path, std::ios::binary};
         const std::string text{std::istreambuf_iterator<char>(in), {}};
         Catalogue c;
         std::vector<std::string> refused;
