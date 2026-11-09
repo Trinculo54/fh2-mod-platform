@@ -62,6 +62,7 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <set>
 #include <string>
@@ -3612,24 +3613,35 @@ struct FakeLocString {
     int32_t refs;
     int32_t pad2;
     const wchar_t* text;
+    // ours, after what the game reads: the platform's own English, which tr_w gives in the game's language; a mod's
+    // text is never swapped for the platform's translation of the same words (a choice that reads "Back")
+    bool platform;
 };
 void* g_loc_vt[11];
 // in the game's language, as it's shown: a mod's text from tr() (API 10), or the platform's own
 const wchar_t* fake_text(FakeLocString* self) {
-    const wchar_t* t = l10n_follow_w(self->text);
-    return t ? t : tr_w(self->text);
+    if (const wchar_t* t = l10n_follow_w(self->text)) return t;
+    return self->platform ? tr_w(self->text) : self->text;
 }
 void** fake_clone(FakeLocString* self, void** out) {
     InterlockedIncrement(reinterpret_cast<volatile LONG*>(&self->refs));
     *out = self;
     return out;
 }
+// The platform's own text (English, as lang.cpp's table has it).
 FakeLocString* loc_string(const wchar_t* text) {
-    auto* s  = static_cast<FakeLocString*>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(FakeLocString)));
-    s->vt    = g_loc_vt;
-    s->table = 0xFFFF;
-    s->refs  = 1 << 20;   // never freed
-    s->text  = text;
+    auto* s     = static_cast<FakeLocString*>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(FakeLocString)));
+    s->vt       = g_loc_vt;
+    s->table    = 0xFFFF;
+    s->refs     = 1 << 20;   // never freed
+    s->text     = text;
+    s->platform = true;
+    return s;
+}
+// A mod's text, shown as the mod gave it (or as its tr() text follows the game's language).
+FakeLocString* mod_loc_string(const wchar_t* text) {
+    FakeLocString* s = loc_string(text);
+    s->platform      = false;
     return s;
 }
 
@@ -5126,8 +5138,8 @@ void handle_title_choice(PopupFn* self) {
 // calls on_choose with FH2_BOX_BACK too when the box's B handler is as S6 found it (g_box_back_ok). A box from a
 // tile page's on_open waits for that page to load (show_pending_box). Everything here is on the game's UI thread.
 //
-// The game's box keeps pointers to its text, so a box's strings are copied once into memory that's never freed
-// (g_boxes isn't either): a few hundred bytes a box the player opens.
+// The game's box keeps pointers to its text, so each distinct text is copied once into memory that's never freed
+// (box_text). g_boxes isn't freed either: it keeps each box's spec for its answer, a few hundred bytes a box.
 struct ModBox {
     FH2Mod* mod = nullptr;
     BoxSpec spec;
@@ -5157,13 +5169,17 @@ bool g_box_back_ok    = false; // B can be wired (S6), checked against the exe o
 constexpr ULONGLONG kBoxSettleMs  = 500;
 constexpr ULONGLONG kBoxPendingMs = 10000;   // a page loads well within this; a box older than this is dropped
 
-// UTF-16 copy of `s` that's never freed (the game's box points at it).
-const wchar_t* keep_w(const std::string& s) {
-    const std::wstring w = widen(s);
-    auto* p = static_cast<wchar_t*>(HeapAlloc(GetProcessHeap(), 0, (w.size() + 1) * sizeof(wchar_t)));
-    if (!p) return L"";
-    std::memcpy(p, w.c_str(), (w.size() + 1) * sizeof(wchar_t));
-    return p;
+// A mod's box text for the game's box, which keeps pointers to it: one UTF-16 copy and one CLocString for each
+// distinct text, never freed, so a box shown again (or another with the same words) adds nothing.
+FakeLocString* box_text(const std::string& s) {
+    static std::mutex mu;
+    static std::set<std::wstring> kept;                     // the set's strings never move
+    static std::map<const wchar_t*, FakeLocString*> made;   // by the kept copy
+    std::scoped_lock lk{mu};
+    const wchar_t* w = kept.insert(widen(s)).first->c_str();
+    FakeLocString*& f = made[w];
+    if (!f) f = mod_loc_string(w);
+    return f;
 }
 
 bool show_box_page(void* page, int idx, int p) {
@@ -5935,19 +5951,20 @@ int settings_show_box(FH2Mod* m, const FH2MessageBox* box) {
         g_loc_previous = loc_string(L"Previous");   // in the game's language as it's shown (tr_w)
         g_loc_next     = loc_string(L"Next");
     }
+    static FakeLocString* const back = loc_string(L"Back");   // in the game's language as it's shown (tr_w), as title lists' Back
     ModBox& b       = g_boxes.emplace_back();
     const int idx   = static_cast<int>(g_boxes.size() - 1);
     b.mod           = m;
     b.spec          = spec;
     b.shown_title   = upper_game(spec.title);   // the game makes capitals too (A_StringToUpper), but not in every language
-    b.title         = loc_string(keep_w(b.shown_title));
-    b.message       = loc_string(keep_w(spec.message));
-    b.back          = loc_string(L"Back");     // in the game's language as it's shown (tr_w), as title lists' Back
-    for (const std::string& c : spec.choices) b.choices.push_back(loc_string(keep_w(c)));
+    b.title         = box_text(b.shown_title);
+    b.message       = box_text(spec.message);
+    b.back          = back;
+    for (const std::string& c : spec.choices) b.choices.push_back(box_text(c));
     const int pages = box_pages(spec.choices.size());
     for (int p = 0; pages > 1 && p < pages; ++p) {   // "PICK ONE  2/3", as title lists' pages
         const std::string numbered = b.shown_title + "  " + std::to_string(p + 1) + "/" + std::to_string(pages);
-        b.page_titles.push_back(loc_string(keep_w(numbered)));
+        b.page_titles.push_back(box_text(numbered));
     }
     b.page_index = cb->page_index;
     b.faults     = ui_mod_faults(m);
@@ -6149,9 +6166,11 @@ int title_add(FH2Mod* m, const FH2TitleEntry* e) {
         t.list_message = widen(e->list_message ? e->list_message : "");
         for (const std::string& c : t.choices) t.wchoices.push_back(widen(c));
         t.wchoices.push_back(L"Back");   // in the game's language as it's shown (tr_w)
-        t.loc.push_back(loc_string(t.list_title.c_str()));
-        t.loc.push_back(loc_string(t.list_message.c_str()));
-        for (const std::wstring& c : t.wchoices) t.loc.push_back(loc_string(c.c_str()));
+        // the mod's own text as it gave it (or its tr() text in the game's language); only Back is the platform's
+        t.loc.push_back(mod_loc_string(t.list_title.c_str()));
+        t.loc.push_back(mod_loc_string(t.list_message.c_str()));
+        for (std::size_t c = 0; c < t.wchoices.size(); ++c)
+            t.loc.push_back(c + 1 < t.wchoices.size() ? mod_loc_string(t.wchoices[c].c_str()) : loc_string(t.wchoices[c].c_str()));
         // tr()'s text, in the game's language as the list shows (API 10)
         // without a list_title it's the label, cut to kMaxTitleLabel as the label is
         const bool own_title    = e->list_title && *e->list_title;
@@ -6165,7 +6184,7 @@ int title_add(FH2Mod* m, const FH2TitleEntry* e) {
             for (std::size_t p = 0; p < pages; ++p)
                 t.page_titles.push_back(t.list_title + L"  " + std::to_wstring(p + 1) + L"/" + std::to_wstring(pages));
             for (const std::wstring& pt : t.page_titles) {
-                t.page_loc.push_back(loc_string(pt.c_str()));
+                t.page_loc.push_back(mod_loc_string(pt.c_str()));
                 l10n_note_w(m, pt.c_str(), given_title, pt.substr(t.list_title.size()), cut);
             }
             if (!g_loc_previous) {
