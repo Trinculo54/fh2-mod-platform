@@ -373,6 +373,15 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(slurp(ov / "drivatarglobalcache" / "DefaultCache.bin") == "from AaaMod");
         CHECK(has(log, "[TestMod] can't replace media\\drivatarglobalcache\\DefaultCache.bin: AaaMod already does"));
         CHECK(has(log, "media\\Stripped\\StringTables\\EN\\Main.str is managed by the platform"));
+        // the platform's own UI files: refused, however they're spelt (platform 2.9.0)
+        CHECK(has(log, "[TestMod] set_file: \"UI\\Scenes\\Anthem\\A_PauseMenu.xaml\" is the FH2 Mod Platform's own UI\\Scenes\\Anthem\\A_PauseMenu.xaml "
+                       "(the pause menu's MODS tab), which no mod can replace; it wasn't changed"));
+        CHECK(has(log, "[TestMod] set_file: \"media\\UI.zip\\Scenes\\Anthem\\a_modpage_80.XAML.\" is the FH2 Mod Platform's own "
+                       "UI\\Scenes\\Anthem\\A_ModPage_NN.xaml (the MODS tab's pages and the mods' pages)"));
+        CHECK(has(log, "[TestMod] set_file: \"stateflow\\pause.xml\" is the FH2 Mod Platform's own stateflow\\pause.xml"));
+        CHECK(has(log, "[TestMod] the platform's own files were refused"));
+        CHECK(!has(slurp("fh2-mods\\platform-files.txt"), "A_PauseMenu.xaml\tTestMod") && !has(slurp("fh2-mods\\platform-files.txt"), "pause.xml\tTestMod"));
+        CHECK(slurp(ov / "UI" / "Scenes" / "Anthem" / "A_PauseMenu.xaml") != "<xml/>" && slurp(ov / "stateflow" / "pause.xml") != "<xml/>");
         CHECK(has(log, "\"UI/../../evil.txt\" isn't a path under media"));
         CHECK(slurp(ov / "UI" / "keep.xml") == "<xml/>");
         CHECK(slurp(ov / "UI" / "handmade.xml") == "<xml/>");

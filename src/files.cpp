@@ -5,6 +5,7 @@
 // removed, or a feature turned off) get deleted.
 #include "platform.hpp"
 #include "updates.hpp"
+#include "xaml_safety.hpp"
 
 #include <windows.h>
 
@@ -164,6 +165,19 @@ int set_file(FH2Mod* mod, const char* media_path, const void* data, std::size_t 
     write_files_manifest(manifest);
     log_line(mod->name, (same ? "replaces " : "replaced ") + shown(rel) + " (" + std::to_string(size) + " bytes)");
     return 1;
+}
+
+int mod_set_file(FH2Mod* mod, const char* media_path, const void* data, std::size_t size) {
+    // The platform's own UI files (platform 2.9.0): before, the first to set one won, and a mod's fh2mod_init runs
+    // before the platform writes its menus, so a mod's A_PauseMenu.xaml took the MODS tab away.
+    if (const PlatformUiFile* own = mod && media_path ? platform_ui_file(media_path) : nullptr) {
+        std::string shown_path = media_path;
+        std::replace(shown_path.begin(), shown_path.end(), '/', '\\');
+        log_line(mod->name, "set_file: \"" + shown_path + "\" is the FH2 Mod Platform's own " + own->path + " (" + own->what +
+                                "), which no mod can replace; it wasn't changed");
+        return 0;
+    }
+    return set_file(mod, media_path, data, size);
 }
 
 void clear_file(FH2Mod* mod, const char* media_path) {

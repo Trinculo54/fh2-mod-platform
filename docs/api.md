@@ -126,7 +126,22 @@ void clear_file(FH2Mod* mod, const char* media_path);
 
 `set_file` replaces a file the game reads from `game:\media`. Give the path relative to `media`, with forward or back slashes. For a file inside a zip, use the zip's name without `.zip` as a folder: `media\UI.zip\x.xml` is `"UI/x.xml"`. The file is written straight away to the `mediaoverride` folder, which Extra Options mounts over `media`, or the platform from 2.7.3 when Extra Options isn't loaded. From 2.9.0, on Azimuth 1.0 or later without Extra Options, it goes to the Azimuth folder's own layer instead, which the game reads ahead of `mediaoverride`. If the file there already has the same content, it isn't rewritten.
 
-Only one mod can replace a file. `set_file` returns 1 when the file is yours and written. It returns 0 if another mod already replaces it, if the path isn't a plain path under `media`, or if the write failed, and the log says which. String tables and the game database can't be replaced whole; use the functions for those. If someone had put a file at that spot by hand, it's kept next to it as `<name>.bak` the first time.
+Only one mod can replace a file. `set_file` returns 1 when the file is yours and written. It returns 0 if another mod already replaces it, if the path isn't a plain path under `media`, if it's one of the platform's own files (below), or if the write failed, and the log says which. String tables and the game database can't be replaced whole; use the functions for those. If someone had put a file at that spot by hand, it's kept next to it as `<name>.bak` the first time.
+
+**The platform's own files.** From 2.9.0 these are the platform's alone, and `set_file` refuses them in any spelling (any case, `/` or `\`, with `media\` in front or not, `UI.zip\` for `UI\`, or the path inside the zip on its own):
+
+| File under `media` | What the platform uses it for |
+|---|---|
+| `UI\Scenes\Anthem\A_Hud.xaml` | the HUD notice about mods that didn't load, and the HUD layer |
+| `UI\Scenes\Anthem\A_Splash.xaml` | the title screen's mod entries |
+| `UI\Scenes\Anthem\A_PauseMenu.xaml` | the pause menu's MODS tab |
+| `UI\Scenes\Anthem\A_PauseOptions.xaml` | the Mods tile in the pause menu's Settings |
+| `UI\Scenes\Anthem\A_ModOptions.xaml` | the Mods page |
+| `UI\Scenes\Anthem\A_ModPage_NN.xaml` (any number) | the MODS tab's pages and the mods' pages |
+| `stateflow\pause.xml` | how the pause menu opens the MODS tab's pages |
+| `stateflow\ui_screens.xml` | the MODS tab's screens |
+
+Before 2.9.0 the first to set one of these won, and since mods start before the platform writes its menus, a mod that replaced one took the MODS tab (or the title screen's entries, or the notice) away from every player. Other UI files, a HUD control such as `UI\Controls\HUDSpeedometerControl.xaml` say, are still yours to replace. For a page of your own, use [pages](#pages-api-8).
 
 `clear_file` deletes your override, so the game reads its own file again. Pass null to clear every file you replace. The files the platform wrote are listed in `fh2-mods\platform-files.txt`. About 15 seconds after startup, any listed file that no mod has claimed this launch is deleted. That's what cleans up after a mod that was removed.
 

@@ -170,7 +170,11 @@ typedef struct FH2ModApi {
        file: returns 1 if written (or already identical), 0 if another mod
        already replaces it or the write failed (the log says which). String
        tables and the game database have their own functions above and
-       below, and can't be replaced whole. */
+       below, and can't be replaced whole. From platform 2.9.0 the
+       platform's own UI files are refused too (A_Hud, A_Splash,
+       A_PauseMenu, A_PauseOptions, A_ModOptions and A_ModPage_NN in
+       UI\Scenes\Anthem, stateflow\pause.xml and ui_screens.xml; api.md
+       lists them). */
     int (*set_file)(FH2Mod* mod, const char* media_path, const void* data, size_t size);
     /* Stop replacing a file (or all of yours, if NULL): the override is
        deleted and the game reads its own copy again. Files a mod no longer

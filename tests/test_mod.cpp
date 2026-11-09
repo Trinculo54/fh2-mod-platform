@@ -41,6 +41,10 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->set_file(g_mod, "media/UI/keep.xml", x, sizeof x - 1);
     api->set_file(g_mod, "UI/handmade.xml", x, sizeof x - 1);
     api->set_file(g_mod, "UI/temp.xml", x, sizeof x - 1);
+    // the platform's own UI files (platform 2.9.0): refused, however they're spelt
+    if (!api->set_file(g_mod, "UI/Scenes/Anthem/A_PauseMenu.xaml", x, sizeof x - 1) &&
+        !api->set_file(g_mod, "media\\UI.zip\\Scenes\\Anthem\\a_modpage_80.XAML.", x, sizeof x - 1) && !api->set_file(g_mod, "stateflow/pause.xml", x, sizeof x - 1))
+        api->log(g_mod, "the platform's own files were refused");
     api->add_sql(g_mod, "UPDATE AIPlayers SET XP = 12345 WHERE Id = 1; UPDATE AIPlayers SET XP = 777 WHERE Id = 2");
     api->publish_interface(g_mod, "TestMod.Math", 1, &g_math);
 
