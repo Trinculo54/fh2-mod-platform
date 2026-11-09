@@ -19,7 +19,9 @@
 //    loading or while a profile is loaded or swapped, when the game itself doesn't read it either.
 //  - Page tracking: the free-roam HUD's vtable slots +0x488 (shown), +0x4F8 (hidden) and 0 (the deleting
 //    destructor), chained with the HUD layer's and the notice's. The game's HUD suspend is read, never set: the
-//    HUD modules' prioritiser byte +0xA8, found as the HUD layer finds it.
+//    HUD modules' prioritiser byte +0xA8, found as the HUD layer finds it. A HUD layer's hold_game_hud sets the same
+//    byte, so while a mod holds the game's HUD hidden, pop-ups and tips wait as well: the notification is part of
+//    the HUD it hides.
 //  - Text: titles in capitals in the game's language (text.cpp), cut at 28 and 45 characters, and folded to ASCII
 //    for the narrow MakeDisplayString (its MultiByteToWideChar uses the Windows code page). The wide path (design
 //    1.7: the same allocation, the wide constructor 0x141239840 and the AddRef) is behind WideText=1 in
@@ -378,8 +380,9 @@ bool walk_modules(Modules& out) {
     return out.found;
 }
 
-// Whether the game has its HUD suspended now: the modules cached, checked each tick, walked again once a second
-// while none are known.
+// Whether the game's HUD is suspended now, by the game or by a HUD layer's hold_game_hud (the hold suspends the same
+// modules, so it can't be told apart here, and the notification is hidden either way): the modules cached, checked
+// each tick, walked again once a second while none are known.
 bool suspended_now(double now) {
     if (!g_suspend_ok.load()) return false;
     if (g_mods.found) {

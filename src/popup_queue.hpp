@@ -62,7 +62,9 @@ struct PopupEnv {
 struct PopupTick {
     double now     = 0;      // ms, any origin, never going back
     bool on_screen = false;  // the free-roam HUD page is on screen
-    bool suspended = false;  // the game has suspended its HUD (and the platform doesn't hold it)
+    bool suspended = false;  // the game's HUD is suspended: by the game (a car meet), or held hidden by a mod's HUD
+                             // layer (hold_game_hud sets the same flag); the notification is part of that HUD, so
+                             // pop-ups and tips wait either way
     int option     = -1;     // the game's Notifications option: 1 on, 0 off, -1 not known (yet, or can't be read)
     bool keyboard  = false;  // the keyboard or mouse was used last
     bool ready     = false;  // Show can be called now (a notification component is there to show it on)

@@ -968,7 +968,8 @@ struct FH2PageRow {
                                           row, or the game's Minor notifications option it follows */
 #define FH2_UI_TIPS_OFF        0x0004  /* the player turned tips off */
 #define FH2_UI_ON_SCREEN       0x0008  /* the free-roam HUD page is on screen now */
-#define FH2_UI_GAME_HUD_HIDDEN 0x0010  /* the game has suspended its HUD (a car meet, a Rivals event) */
+#define FH2_UI_GAME_HUD_HIDDEN 0x0010  /* the game's HUD is suspended (a car meet, a Rivals event), or a mod's
+                                          HUD layer holds it hidden (hold_game_hud): pop-ups and tips wait */
 #define FH2_UI_KEYBOARD        0x0020  /* the keyboard or mouse was used last: buttons are written as keys */
 
 /* ui_uses bits (API 10). */
