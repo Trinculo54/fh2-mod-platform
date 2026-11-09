@@ -14,7 +14,9 @@
 //    the gate stores a new object there only when it lets the pop-up through. So the platform sees every Show the
 //    game shows, whoever made it, and knows whether its own was drawn. Without the watch, pop-ups are 5.5 s apart.
 //  - The Notifications option (Options/MinorNotifications in the player's profile, S2): read on the tick's thread
-//    by the gate's own four calls, once a second and again just before each Show, published in an atomic.
+//    by the gate's own four calls, published in an atomic: once a second only while the HUD page is on screen and
+//    something waits (or it read Off last), and again just before each Show. Never at the title screen, while
+//    loading or while a profile is loaded or swapped, when the game itself doesn't read it either.
 //  - Page tracking: the free-roam HUD's vtable slots +0x488 (shown), +0x4F8 (hidden) and 0 (the deleting
 //    destructor), chained with the HUD layer's and the notice's. The game's HUD suspend is read, never set: the
 //    HUD modules' prioritiser byte +0xA8, found as the HUD layer finds it.
@@ -423,7 +425,8 @@ __attribute__((noinline)) void option_thunk(void* p) {
     reinterpret_cast<void (*)(void*)>(c->base + RVA_VARIANT_DTOR)(v);
 }
 
-// The tick only. The game reads it when a pop-up is sent, so once a second and just before each Show is enough.
+// The tick only. The game reads it when a pop-up is sent, so the platform reads it only around its own: once a second
+// while one waits on the driving view (on_tick), and just before each Show.
 void read_option(double now) {
     g_option_at = now;
     if (!g_option_ok.load()) return;
@@ -538,11 +541,14 @@ void on_tick(FH2Context*, void*) {
     const double now = now_ms();
     DWORD none       = 0;
     g_tick_thread.compare_exchange_strong(none, GetCurrentThreadId());
-    if (now - g_option_at >= 1000) read_option(now);
     PopupTick in;
     in.now       = now;
     in.on_screen = !g_tracking.load() || g_on_screen.load();   // untracked: as if always on screen
     in.suspended = suspended_now(now);
+    // The game's Notifications option, once a second only while a pop-up could show now and something waits, or
+    // while it read Off (so the player turning it back on is seen, and show_toast stops refusing); show_now reads it
+    // again just before each Show. Otherwise the last value read stands.
+    if (now - g_option_at >= 1000 && in.on_screen && !in.suspended && (g_option.load() == 0 || queue().waiting() > 0)) read_option(now);
     in.option    = g_option.load();
     in.keyboard  = keyboard_last();
     in.ready     = have_component();
