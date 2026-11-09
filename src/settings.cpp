@@ -62,6 +62,7 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <set>
 #include <string>
@@ -367,7 +368,12 @@ void slider_set(Row* r, void* obj, uint8_t* value) {
     if (!r->choices.empty()) {   // a choice row (API 9): its index, to on_change
         const int v = static_cast<int>(std::lround(f));
         r->value    = v;
-        log_set(r, r->choices[static_cast<std::size_t>(v)]);
+        std::string name;   // copied under g_mu: set_setting_text (API 10) can rename the choices from a mod's thread
+        {
+            std::scoped_lock lk{g_mu};
+            name = static_cast<std::size_t>(v) < r->choices.size() ? r->choices[static_cast<std::size_t>(v)] : std::to_string(v);
+        }
+        log_set(r, name);
         if (r->on_change) {
             UiCallback cb{r->mod, UiCb::setting, g_last_hud_page.load()};
             ui_note_callback(r->mod);
@@ -2309,10 +2315,14 @@ std::string page_left_out(const ModPage& pg) {
     if (pg.xaml_refused)
         return trf("This page from {0} has a mistake that would crash the game, so it's left out. fh2-mods\\platform.log has more.", {pg.mod->name});
     if (page_guard_skipped(pg.mod, pg.key))
-        return trf("The game crashed opening this page last time, so it's left out until {0} is updated. fh2-mods\\platform.log has more.",
+        return trf("The game crashed opening this page last time, so it's left out until {0} is updated or you choose to try it again. "
+                   "fh2-mods\\platform.log has more.",
                    {pg.mod->name});
     return "";
 }
+// What A does on the row a page left out by the crash guard shows on its tile (its select; a mod's row keys are
+// letters, digits and _, so never this): page_guard_retry.
+const char* const kRetryPage = "*retry";
 
 // A page's rows, as its list shows them (under g_mu).
 std::vector<PageItem> page_items(const ModPage& pg) {
@@ -3107,6 +3117,11 @@ bool write_hub_page(int p) {
                 g_pages[j].xaml_written = content;
             } else if (!left_out.empty()) {   // left out: the platform's own row says why, rather than the game crashing
                 items = {info(tr("This page couldn't be shown"), left_out)};
+                if (!pg.xaml_refused) {   // the crash guard's: A gives it another try (a mod that never chose the guard can undo it)
+                    items[0].hint   = tr("Press A to try it again the next time you open it.");
+                    items[0].select = kRetryPage;
+                    select          = true;
+                }
                 title = pg.title;
                 g_pages[j].xaml_written.clear();
             } else {
@@ -3598,24 +3613,35 @@ struct FakeLocString {
     int32_t refs;
     int32_t pad2;
     const wchar_t* text;
+    // ours, after what the game reads: the platform's own English, which tr_w gives in the game's language; a mod's
+    // text is never swapped for the platform's translation of the same words (a choice that reads "Back")
+    bool platform;
 };
 void* g_loc_vt[11];
 // in the game's language, as it's shown: a mod's text from tr() (API 10), or the platform's own
 const wchar_t* fake_text(FakeLocString* self) {
-    const wchar_t* t = l10n_follow_w(self->text);
-    return t ? t : tr_w(self->text);
+    if (const wchar_t* t = l10n_follow_w(self->text)) return t;
+    return self->platform ? tr_w(self->text) : self->text;
 }
 void** fake_clone(FakeLocString* self, void** out) {
     InterlockedIncrement(reinterpret_cast<volatile LONG*>(&self->refs));
     *out = self;
     return out;
 }
+// The platform's own text (English, as lang.cpp's table has it).
 FakeLocString* loc_string(const wchar_t* text) {
-    auto* s  = static_cast<FakeLocString*>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(FakeLocString)));
-    s->vt    = g_loc_vt;
-    s->table = 0xFFFF;
-    s->refs  = 1 << 20;   // never freed
-    s->text  = text;
+    auto* s     = static_cast<FakeLocString*>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(FakeLocString)));
+    s->vt       = g_loc_vt;
+    s->table    = 0xFFFF;
+    s->refs     = 1 << 20;   // never freed
+    s->text     = text;
+    s->platform = true;
+    return s;
+}
+// A mod's text, shown as the mod gave it (or as its tr() text follows the game's language).
+FakeLocString* mod_loc_string(const wchar_t* text) {
+    FakeLocString* s = loc_string(text);
+    s->platform      = false;
     return s;
 }
 
@@ -4339,7 +4365,9 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
                 j      = g_tile_page[t];
                 custom = j >= 0 && g_pages[j].custom && !left_out(g_pages[j]);
             }
-            if (custom) return custom_page_button(page, j, button, pressed);
+            // the crash guard's message is what's on screen until the page opens again, even once A has given it another try
+            const bool retry_shown = !g_tile_acts[t].empty() && g_tile_acts[t][0].select == kRetryPage;
+            if (custom && !retry_shown) return custom_page_button(page, j, button, pressed);
         }
     for (std::size_t t = 0; t < kTileCount; ++t)
         if (page && page == g_tile_page_obj[t].load() && button == kButtonA) {
@@ -4347,11 +4375,18 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
             const int n = g_selected.load();
             if (pressed && n >= 0 && static_cast<std::size_t>(n) < g_tile_acts[t].size() && !g_tile_acts[t][n].select.empty()) {
                 int j = -1;
+                FH2Mod* mod = nullptr;
+                std::string key;
                 {
                     std::scoped_lock lk{g_mu};
                     j = g_tile_page[t];
+                    if (j >= 0) mod = g_pages[j].mod, key = g_pages[j].key;
                 }
-                select_on_page(j, g_tile_acts[t][n].select, page);
+                if (g_tile_acts[t][n].select == kRetryPage) {   // a page the crash guard left out: tried again next time
+                    if (page_guard_retry(mod, key)) play_sound(kSoundSelect);
+                } else {
+                    select_on_page(j, g_tile_acts[t][n].select, page);
+                }
             }
             return true;
         }
@@ -4508,6 +4543,16 @@ void hook_tiles(FH2Mod* m) {
     }
 }
 
+// Whether a mod has anything of its own under YOUR MODS or on a tile (settings, hotkeys, links, pages): what the player
+// misses while the MODS menus aren't showing. The Load switches and the platform's own page don't count.
+bool mods_have_settings() {
+    const auto a_mods = [](const FH2Mod* m) { return m && m != &g_hub_owner && m != &g_owner_mod && m != platform_self(); };
+    std::scoped_lock lk{g_mu};
+    return std::any_of(g_rows.begin(), g_rows.end(), [&](const Row& r) { return a_mods(r.mod); }) ||
+           std::any_of(g_links.begin(), g_links.end(), [&](const LinkRow& l) { return a_mods(l.mod); }) ||
+           std::any_of(g_pages.begin(), g_pages.end(), [&](const ModPage& p) { return a_mods(p.mod); });
+}
+
 void hook_hud_shown(FH2Mod* m);
 bool g_hud_notice = false;   // A_Hud.xaml has the notice
 void d_pause_menu_wire(void* page) {
@@ -4523,7 +4568,8 @@ void d_pause_menu_wire(void* page) {
     g_hub_builds = 0;
     o_pause_menu_wire(page);
     wire_installed_tile(page);
-    // the MODS tab's tiles aren't there: the game isn't reading the platform's files. Said once a session.
+    // the MODS tab's tiles aren't there: the game isn't reading the platform's files. Logged once a session; the
+    // player is told only when a mod has settings, links or pages there to miss, and once for each platform version.
     static bool looked = false;
     if (!looked && page && g_find_button_ok && g_popup_ok) {
         looked = true;
@@ -4532,8 +4578,16 @@ void d_pause_menu_wire(void* page) {
             slog("couldn't look for the MODS tab's tiles on the pause menu");
         } else if (!has) {
             slog("the pause menu has no MODS tab: the game isn't reading the platform's menu files (for the mediaoverride folder, "
-                 "Extra Options needs EnableMediaOverrides=1 and its patches on). Telling the player once this session");
-            if (show_missing_box(page)) return;   // no restart question under it
+                 "Extra Options needs EnableMediaOverrides=1 and its patches on)");
+            if (!mods_have_settings()) {
+                slog("no mod has settings, links or pages to miss there, so the player isn't told");
+            } else if (seen_get(kSeenPlatform, "menus.missing.told") == FH2MOD_PLATFORM_VERSION) {
+                slog("the player has been told about it with this platform version already, so not again");
+            } else if (show_missing_box(page)) {
+                seen_set(kSeenPlatform, "menus.missing.told", FH2MOD_PLATFORM_VERSION);
+                slog("told the player in a message box (once for platform " FH2MOD_PLATFORM_VERSION ")");
+                return;   // no restart question under it
+            }
         }
     }
     // a page's tile text may have changed since this page's bindings read it
@@ -4682,23 +4736,34 @@ void hook_hub() {
         if (!g_find_button_ok) slog("the pause menu's tile lookup doesn't look as expected; a missing MODS tab won't be told to the player");
     }
     hook_tiles(m);
-    if (g_hud_notice) {
-        mod_notice_descriptor();   // made now, so the HUD hook knows there's a notice
-        hook_hud_shown(m);
+    // The freeroam HUD shown: for the HUD's notice, and for the crash guard when a mod's page is on a tile (its mark
+    // comes off once the player is back driving). The notice's property is made on the game's thread (d_hud_shown).
+    bool tile_page = false;
+    {
+        std::scoped_lock lk{g_mu};
+        for (const int j : g_tile_page) tile_page = tile_page || j >= 0;
     }
+    if (g_hud_notice || tile_page) hook_hud_shown(m);
     slog("MODS tab ready");
 }
 
 // The freeroam HUD page (Hud, vtable 0x142DEF9C8): +0x488 runs each time it's shown (in
 // freeroam, and again after every menu), +0x4F8 when it's hidden. The first time, the notice
-// about mods that didn't load plays (FH2Mod_ModNotice); the next, it's done.
+// about mods that didn't load plays (FH2Mod_ModNotice); the next, it's done. Every time, the
+// player is back from the menus, so no page of a mod's own design is opening (the crash guard).
 constexpr uintptr_t RVA_HUD_SHOWN_SLOT = 0x2DEFE50;   // Hud vtable +0x488
 constexpr uintptr_t RVA_HUD_SHOWN      = 0x0D38DD0;
 using HudShownFn = uint64_t (*)(void*, void*, void*, void*);
 HudShownFn o_hud_shown = nullptr;
 uint64_t d_hud_shown(void* page, void* b, void* c, void* d) {
     const uint64_t r = o_hud_shown(page, b, c, d);
-    if (!g_mod_notice_desc) return r;
+    page_guard_closed();
+    if (!g_hud_notice || g_mod_notice_done.load()) return r;
+    // The notice's property, made here on the game's UI thread (if the page's binding hasn't made it already): it
+    // runs game code (the model descriptor's first-time build, AVUI::Object's constructor), never on a thread of
+    // the platform's own.
+    uint8_t* const desc = mod_notice_descriptor();
+    if (!desc) return r;
     ULONGLONG none = 0;
     if (g_mod_notice_at.compare_exchange_strong(none, GetTickCount64())) {   // first shown: it plays
         if (g_notice_kind == kNoticeWelcome) {   // one of its sessions
@@ -4717,7 +4782,7 @@ uint64_t d_hud_shown(void* page, void* b, void* c, void* d) {
             slog("the title screen has said mod settings have moved; from the next start it says where they are");
     } else if (g_mod_notice_done.exchange(true))
         return r;                                                       // over already
-    notify_changed(page, g_mod_notice_desc);
+    notify_changed(page, desc);
     return r;
 }
 // The HUD layer and the pop-ups (their page tracking, API 10) hook this slot too, and their hooks can go
@@ -4733,7 +4798,9 @@ bool hud_shown_slot_ok(void** slot) {
 void hook_hud_shown(FH2Mod* m) {
     void** slot = reinterpret_cast<void**>(g_base + RVA_HUD_SHOWN_SLOT);
     if (!hud_shown_slot_ok(slot)) {
-        slog("the freeroam HUD's vtable doesn't look as expected; no notice about mods that didn't load");
+        slog(g_hud_notice ? "the freeroam HUD's vtable doesn't look as expected; no notice about the mods on the HUD"
+                          : "the freeroam HUD's vtable doesn't look as expected; a mod's page that was opening keeps its crash mark "
+                            "until the player opens another page or the page has been up for 10 s");
         return;
     }
     if (FH2Hook* k = g_api->hook_pointer(m, "freeroam HUD: shown", slot, reinterpret_cast<void*>(&d_hud_shown),
@@ -5071,8 +5138,8 @@ void handle_title_choice(PopupFn* self) {
 // calls on_choose with FH2_BOX_BACK too when the box's B handler is as S6 found it (g_box_back_ok). A box from a
 // tile page's on_open waits for that page to load (show_pending_box). Everything here is on the game's UI thread.
 //
-// The game's box keeps pointers to its text, so a box's strings are copied once into memory that's never freed
-// (g_boxes isn't either): a few hundred bytes a box the player opens.
+// The game's box keeps pointers to its text, so each distinct text is copied once into memory that's never freed
+// (box_text). g_boxes isn't freed either: it keeps each box's spec for its answer, a few hundred bytes a box.
 struct ModBox {
     FH2Mod* mod = nullptr;
     BoxSpec spec;
@@ -5102,13 +5169,17 @@ bool g_box_back_ok    = false; // B can be wired (S6), checked against the exe o
 constexpr ULONGLONG kBoxSettleMs  = 500;
 constexpr ULONGLONG kBoxPendingMs = 10000;   // a page loads well within this; a box older than this is dropped
 
-// UTF-16 copy of `s` that's never freed (the game's box points at it).
-const wchar_t* keep_w(const std::string& s) {
-    const std::wstring w = widen(s);
-    auto* p = static_cast<wchar_t*>(HeapAlloc(GetProcessHeap(), 0, (w.size() + 1) * sizeof(wchar_t)));
-    if (!p) return L"";
-    std::memcpy(p, w.c_str(), (w.size() + 1) * sizeof(wchar_t));
-    return p;
+// A mod's box text for the game's box, which keeps pointers to it: one UTF-16 copy and one CLocString for each
+// distinct text, never freed, so a box shown again (or another with the same words) adds nothing.
+FakeLocString* box_text(const std::string& s) {
+    static std::mutex mu;
+    static std::set<std::wstring> kept;                     // the set's strings never move
+    static std::map<const wchar_t*, FakeLocString*> made;   // by the kept copy
+    std::scoped_lock lk{mu};
+    const wchar_t* w = kept.insert(widen(s)).first->c_str();
+    FakeLocString*& f = made[w];
+    if (!f) f = mod_loc_string(w);
+    return f;
 }
 
 bool show_box_page(void* page, int idx, int p) {
@@ -5880,19 +5951,20 @@ int settings_show_box(FH2Mod* m, const FH2MessageBox* box) {
         g_loc_previous = loc_string(L"Previous");   // in the game's language as it's shown (tr_w)
         g_loc_next     = loc_string(L"Next");
     }
+    static FakeLocString* const back = loc_string(L"Back");   // in the game's language as it's shown (tr_w), as title lists' Back
     ModBox& b       = g_boxes.emplace_back();
     const int idx   = static_cast<int>(g_boxes.size() - 1);
     b.mod           = m;
     b.spec          = spec;
     b.shown_title   = upper_game(spec.title);   // the game makes capitals too (A_StringToUpper), but not in every language
-    b.title         = loc_string(keep_w(b.shown_title));
-    b.message       = loc_string(keep_w(spec.message));
-    b.back          = loc_string(L"Back");     // in the game's language as it's shown (tr_w), as title lists' Back
-    for (const std::string& c : spec.choices) b.choices.push_back(loc_string(keep_w(c)));
+    b.title         = box_text(b.shown_title);
+    b.message       = box_text(spec.message);
+    b.back          = back;
+    for (const std::string& c : spec.choices) b.choices.push_back(box_text(c));
     const int pages = box_pages(spec.choices.size());
     for (int p = 0; pages > 1 && p < pages; ++p) {   // "PICK ONE  2/3", as title lists' pages
         const std::string numbered = b.shown_title + "  " + std::to_string(p + 1) + "/" + std::to_string(pages);
-        b.page_titles.push_back(loc_string(keep_w(numbered)));
+        b.page_titles.push_back(box_text(numbered));
     }
     b.page_index = cb->page_index;
     b.faults     = ui_mod_faults(m);
@@ -6094,9 +6166,11 @@ int title_add(FH2Mod* m, const FH2TitleEntry* e) {
         t.list_message = widen(e->list_message ? e->list_message : "");
         for (const std::string& c : t.choices) t.wchoices.push_back(widen(c));
         t.wchoices.push_back(L"Back");   // in the game's language as it's shown (tr_w)
-        t.loc.push_back(loc_string(t.list_title.c_str()));
-        t.loc.push_back(loc_string(t.list_message.c_str()));
-        for (const std::wstring& c : t.wchoices) t.loc.push_back(loc_string(c.c_str()));
+        // the mod's own text as it gave it (or its tr() text in the game's language); only Back is the platform's
+        t.loc.push_back(mod_loc_string(t.list_title.c_str()));
+        t.loc.push_back(mod_loc_string(t.list_message.c_str()));
+        for (std::size_t c = 0; c < t.wchoices.size(); ++c)
+            t.loc.push_back(c + 1 < t.wchoices.size() ? mod_loc_string(t.wchoices[c].c_str()) : loc_string(t.wchoices[c].c_str()));
         // tr()'s text, in the game's language as the list shows (API 10)
         // without a list_title it's the label, cut to kMaxTitleLabel as the label is
         const bool own_title    = e->list_title && *e->list_title;
@@ -6110,7 +6184,7 @@ int title_add(FH2Mod* m, const FH2TitleEntry* e) {
             for (std::size_t p = 0; p < pages; ++p)
                 t.page_titles.push_back(t.list_title + L"  " + std::to_wstring(p + 1) + L"/" + std::to_wstring(pages));
             for (const std::wstring& pt : t.page_titles) {
-                t.page_loc.push_back(loc_string(pt.c_str()));
+                t.page_loc.push_back(mod_loc_string(pt.c_str()));
                 l10n_note_w(m, pt.c_str(), given_title, pt.substr(t.list_title.size()), cut);
             }
             if (!g_loc_previous) {

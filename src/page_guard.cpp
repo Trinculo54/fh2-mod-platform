@@ -3,10 +3,11 @@
 // The crash guard's file, fh2-mods\platform-pages.txt (format in xaml_safety.cpp, guard_text), is written by the
 // game's UI thread as a page opens: CreateFileW and WriteFile only, small, and not flushed (a crash of the game
 // doesn't lose what Windows has been given). The mark is taken off once the page has been up for 10 s, or as soon as
-// the player leaves it, so a session that ends any other way leaves nothing behind. A mark found at the next start
-// leaves the page out only by the HUD layer's crash marker's rule: a crash report in fh2-mods\crashes newer than the
-// mark, or the page left opening in two sessions running (the player closing Azimuth's window as a page opens leaves
-// a mark too, and that alone isn't a crash).
+// the player leaves it (another page, the pause menu, or the freeroam HUD again), so a session that ends any other
+// way leaves nothing behind. A mark found at the next start leaves the page out only by the HUD layer's crash
+// marker's rule: a crash report in fh2-mods\crashes from within 30 s after the mark, or the page left opening in two
+// sessions running (the player closing Azimuth's window as a page opens leaves a mark too, and that alone isn't a
+// crash). A page left out says so on its tile, where A gives it another try (page_guard_retry).
 #include "page_guard.hpp"
 
 #include "platform.hpp"
@@ -232,6 +233,18 @@ bool page_guard_skipped(const FH2Mod* mod, const std::string& page) {
     return false;
 }
 
+bool page_guard_retry(const FH2Mod* mod, const std::string& page) {
+    if (!mod) return false;
+    const std::string dll = narrow(mod->dll);
+    {
+        std::scoped_lock lk{g_guard_mu};
+        if (!guard_retry(g_guard, dll, page)) return false;
+        write_guard();
+    }
+    plog("pages: " + dll + "'s page " + page + " gets another try, as the player chose: it's shown the next time it opens");
+    return true;
+}
+
 void page_guard_opening(const FH2Mod* mod, const std::string& page) {
     if (!mod || mod->dll.empty()) return;
     const std::string dll = narrow(mod->dll);
@@ -259,12 +272,18 @@ void page_guard_loaded() {
         if (std::none_of(g_guard.begin(), g_guard.end(), [](const GuardEntry& e) { return e.state == "opening"; })) return;
         gen = g_opening;
     }
-    // 10 s on screen, as the HUD layer's marker has it: a missing image only fails once it's drawn
-    std::thread([gen] {
-        Sleep(10000);
-        std::scoped_lock lk{g_guard_mu};
-        if (g_opening == gen) clear_marks();
-    }).detach();
+    // 10 s on screen, as the HUD layer's marker has it: a missing image only fails once it's drawn. This runs in the
+    // game's page-loaded hook, so nothing may be thrown into the game's frames: without a thread (Windows out of
+    // them), the mark stays until the player leaves the page, as page_guard_closed takes it off then.
+    try {
+        std::thread([gen] {
+            Sleep(10000);
+            std::scoped_lock lk{g_guard_mu};
+            if (g_opening == gen) clear_marks();
+        }).detach();
+    } catch (...) {
+        plog("pages: the page's 10-second timer couldn't be started; its mark comes off when the player leaves it");
+    }
 }
 
 void page_guard_closed() {

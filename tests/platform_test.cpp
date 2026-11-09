@@ -357,23 +357,33 @@ int wmain(int argc, wchar_t** argv) {
         SetUnhandledExceptionFilter(after_crash); // Windows' (or Azimuth's) handler, to the platform
     }
     if (phase == L"crash-chained") SetUnhandledExceptionFilter(after_chained_crash);
+    char crashy_mark[17] = "";   // the "full" phase's mark for Crashy, as the guard's file has it
     if (phase == L"full") {
         // The page crash guard (platform 2.9.0): as if the game had crashed while TestMod's page Crashy was opening
-        // (TestMod.dll as it is now: a crash report newer than the mark, made in 2015), had stopped while Other was
-        // opening with no crash report since (marked in 2286), and while Stats was opening in an older TestMod.dll; and
-        // a note about a mod that's gone. The stamp is page_guard.cpp's: the DLL's size, then its last-write time in
-        // hex. The "removed" phase takes the crash report away again.
+        // (TestMod.dll as it is now: the crash report, written just below, is 5 s after the mark), crashed two minutes
+        // after Late started opening (too late to be Late's), had stopped while Other was opening with no crash report
+        // since (marked in 2286), and while Stats was opening in an older TestMod.dll; and a note about a mod that's
+        // gone. The stamp is page_guard.cpp's: the DLL's size, then its last-write time in hex. The "removed" phase
+        // takes the crash report away again.
         WIN32_FILE_ATTRIBUTE_DATA a{};
         GetFileAttributesExW(L"fh2-mods\\TestMod.dll", GetFileExInfoStandard, &a);
         char stamp[64];
         std::snprintf(stamp, sizeof stamp, "%llu-%08lX%08lX", (static_cast<unsigned long long>(a.nFileSizeHigh) << 32) | a.nFileSizeLow,
                       a.ftLastWriteTime.dwHighDateTime, a.ftLastWriteTime.dwLowDateTime);
-        std::ofstream{"fh2-mods\\platform-pages.txt", std::ios::binary}
-            << "# written by the test\r\nopening\tTestMod.dll\tCrashy\t" << stamp << "\t2026-11-07\t1\t01D0000000000000\r\n"
-            << "opening\tTestMod.dll\tOther\t" << stamp << "\t2026-11-07\t1\t0300000000000000\r\n"
-            << "opening\ttestmod.dll\tStats\t1-0000000000000000\t2026-11-06\r\nskip\tGone.dll\tList\t1-1\t2026-11-01\r\n";
+        // the marks go by the crash report's own time, as the platform reads it (a network share's clock may differ)
         fs::create_directories("fh2-mods\\crashes");
         std::ofstream{"fh2-mods\\crashes\\crash-page-guard-test.txt"} << "a crash report, as far as the page crash guard can tell\n";
+        WIN32_FILE_ATTRIBUTE_DATA cr{};
+        GetFileAttributesExW(L"fh2-mods\\crashes\\crash-page-guard-test.txt", GetFileExInfoStandard, &cr);
+        const unsigned long long crashed = (static_cast<unsigned long long>(cr.ftLastWriteTime.dwHighDateTime) << 32) | cr.ftLastWriteTime.dwLowDateTime;
+        char late_mark[17];
+        std::snprintf(crashy_mark, sizeof crashy_mark, "%016llX", crashed - 5 * 10000000ull);
+        std::snprintf(late_mark, sizeof late_mark, "%016llX", crashed - 120 * 10000000ull);
+        std::ofstream{"fh2-mods\\platform-pages.txt", std::ios::binary}
+            << "# written by the test\r\nopening\tTestMod.dll\tCrashy\t" << stamp << "\t2026-11-07\t1\t" << crashy_mark << "\r\n"
+            << "opening\tTestMod.dll\tLate\t" << stamp << "\t2026-11-07\t1\t" << late_mark << "\r\n"
+            << "opening\tTestMod.dll\tOther\t" << stamp << "\t2026-11-07\t1\t0300000000000000\r\n"
+            << "opening\ttestmod.dll\tStats\t1-0000000000000000\t2026-11-06\r\nskip\tGone.dll\tList\t1-1\t2026-11-01\r\n";
     }
     if (phase == L"removed") fs::remove("fh2-mods\\crashes\\crash-page-guard-test.txt");
     if (phase == L"full") {
@@ -548,14 +558,19 @@ int wmain(int argc, wchar_t** argv) {
         // opening, with no crash report since, so that stays in; Stats was opening too, but in a TestMod.dll that has
         // changed since, so it gets another try
         CHECK(has(log, "pages: the game crashed while TestMod.dll's page Crashy was opening last session (crash report crash-page-guard-test.txt); "
-                       "the page is left out until TestMod.dll changes (an update or a reinstall)"));
+                       "the page is left out until TestMod.dll changes (an update or a reinstall) or the player gives it another try"));
+        // a crash long after a page started opening isn't that page's (30 s at most): Late stays in, and its mark goes
+        CHECK(has(log, " s after TestMod.dll's page Late started opening last session (crash report crash-page-guard-test.txt), too long after "
+                       "for the page to be the cause, so the page stays in"));
         CHECK(has(log, "pages: the game stopped while TestMod.dll's page Other was opening last session, but there's no crash report since, so "
                        "the page stays in"));
         CHECK(has(log, "pages: testmod.dll has changed since testmod.dll's page Stats was opening when the game stopped, so the page gets another try"));
         CHECK(has(log, "pages: Gone.dll isn't in fh2-mods any more, so the note about Gone.dll's page List is dropped"));
         const std::string guard = slurp("fh2-mods\\platform-pages.txt");
-        CHECK(has(guard, "\r\nskip\tTestMod.dll\tCrashy\t") && has(guard, "\t2026-11-07\t1\t01D0000000000000\r\n") && !has(guard, "Stats") &&
-              !has(guard, "Gone.dll") && !has(guard, "\tOther\t"));
+        CHECK(has(guard, "\r\nskip\tTestMod.dll\tCrashy\t") && has(guard, (std::string("\t2026-11-07\t1\t") + crashy_mark + "\r\n").c_str()) &&
+              !has(guard, "Stats") && !has(guard, "Gone.dll") && !has(guard, "\tOther\t") && !has(guard, "\tLate\t"));
+        // the file says how to give a page another try in game
+        CHECK(has(guard, "To try a page again, press A on the message\r\n# its tile shows instead, or delete its line here."));
         // title-screen entries (API 9)
         CHECK(has(log, "[TestMod] title-screen entry: (Y) DRIVE THE TEST GARAGE") &&
               has(log, "[TestMod] title-screen entry: (X) SECOND ENTRY (a list of 2)"));
@@ -782,7 +797,8 @@ int wmain(int argc, wchar_t** argv) {
             // TestMod's pages that can't be shown say why on its page under Installed mods, in red (the platform's own text
             // is English until the game has its language)
             CHECK(has(installed, "Icon=\"This page from TestMod has a mistake that would crash the game, so it's left out. fh2-mods\\platform.log has more.\""));
-            CHECK(has(installed, "Icon=\"The game crashed opening this page last time, so it's left out until TestMod is updated. fh2-mods\\platform.log has more.\""));
+            CHECK(has(installed, "Icon=\"The game crashed opening this page last time, so it's left out until TestMod is updated or you choose to try "
+                                 "it again. fh2-mods\\platform.log has more.\""));
             CHECK(has(installed, "Heading=\"Footer &lt;line&gt; &#183; dot\"") && has(installed, "local:BindingProxy.B=\"Alert\""));
             // the tile: the page of TestMod's own design, in the options page's frame
             CHECK(has(tile, "<Grid x:Name=\"TestContent\">") && !has(tile, "BasicOptions") && has(tile, "x:Key=\"FH2Mod_ShowIf\"") &&

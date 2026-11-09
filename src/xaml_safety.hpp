@@ -74,8 +74,12 @@ struct FragmentCheck {
 // Checks a page of a mod's own design, its three parts as set_page_xaml takes them (any may be empty): every
 // {StaticResource K} and {DynamicResource K} (and <StaticResource ResourceKey="K"/>) names a key of the
 // application's, of the frame's or of the fragment's own (any x:Key in any part), and every image path is an entry
-// of the game's texture zips. False, with `why` naming the first key or path that isn't, and which part it's in.
-// The tags are checked before this (settings.cpp's balanced_xml).
+// of the game's texture zips. A {StaticResource} of a key that's only the fragment's must come after the key's
+// definition is complete, in the order the parts are in the page (resources, help, content), except inside a
+// template (ControlTemplate, DataTemplate...), which is built later. Scope isn't looked at (a key in one element's
+// own Resources counts for the whole fragment), nor are element types, x:Type and x:Static. False, with `why` naming
+// the first key or path that isn't, and which part it's in. The tags are checked before this (settings.cpp's
+// balanced_xml).
 bool check_page_fragment(const AppKeys& app, std::string_view resources, std::string_view content, std::string_view help,
                          const TextureLookup& textures, FragmentCheck& out, std::string& why);
 
@@ -102,14 +106,22 @@ struct CrashReport {
     std::string name;
 };
 
+// How soon after a page's "opening" mark a crash report has to be for the page to count as the cause: 30 s, in
+// FILETIME's 100 ns ticks. A page that crashes the game does so as it loads, within a second or two.
+inline constexpr std::uint64_t kGuardCrashWindow = 30ull * 10000000ull;
+
 // Last session's entries as this session starts, by the rule the HUD layer's crash marker has. A page still
-// "opening" is left out only with something to show the game went down loading it: a crash report newer than the
-// mark (`file_time`, the guard file's last-write time, stands in for a line without one), or the same page left
-// opening in two sessions running. Otherwise the mark is dropped, and it goes into `carried`, so a mark this session
-// counts it (page_guard_opening). A page left out stays so until its DLL changes. `stamp_of` gives a DLL's stamp now
-// ("" if it's gone). `lines` gets a log line for each entry.
+// "opening" is left out only with something to show the game went down loading it: a crash report from within
+// kGuardCrashWindow after the mark (`file_time`, the guard file's last-write time, stands in for a line without one),
+// or the same page left opening in two sessions running. A crash report from later than that is another crash: the
+// mark is dropped. With no crash report since, the mark is dropped too, and it goes into `carried`, so a mark this
+// session counts it (page_guard_opening). A page left out stays so until its DLL changes or guard_retry takes it
+// out. `stamp_of` gives a DLL's stamp now ("" if it's gone). `lines` gets a log line for each entry.
 std::vector<GuardEntry> guard_at_start(const std::vector<GuardEntry>& last, const std::function<std::string(const std::string&)>& stamp_of,
                                        const CrashReport& newest, std::uint64_t file_time, std::vector<GuardEntry>& carried,
                                        std::vector<std::string>& lines);
+
+// The player gives a left-out page another try: its "skip" entry (the DLL in any case) goes. True if there was one.
+bool guard_retry(std::vector<GuardEntry>& entries, std::string_view dll, std::string_view page);
 
 } // namespace fh2platform

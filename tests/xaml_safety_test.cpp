@@ -337,6 +337,44 @@ void fragments(Media& m, const AppKeys& app) {
     }
     check(refused("", "<Grid><Button></Grid>", "", "the tags in the content don't balance: </Grid> closes <Button>"), "tags that don't balance: refused");
 
+    // A {StaticResource} only finds a key defined above it, in the page's order: resources, help, content (platform 2.9.0)
+    check(refused("<Style x:Key=\"Mod_A\" BasedOn=\"{StaticResource Mod_B}\" />\r\n<Style x:Key=\"Mod_B\" />", "", "",
+                  "the resource key Mod_B, in the resources, is used by a {StaticResource} before the fragment defines it"),
+          "a style based on one the fragment defines further down: refused");
+    check(refused("<Style x:Key=\"Mod_Self\" BasedOn=\"{StaticResource Mod_Self}\" />", "", "", "the resource key Mod_Self, in the resources, is used by"),
+          "a style based on itself, with no key of the game's by that name: refused");
+    check(refused("<Style x:Key=\"Mod_Outer\">\r\n<Setter Property=\"Tag\" Value=\"{StaticResource Mod_Outer}\" />\r\n</Style>", "", "",
+                  "the resource key Mod_Outer, in the resources, is used by"),
+          "a use inside its own key's definition (not there until the element is complete): refused");
+    check(refused("", "<Grid Style=\"{StaticResource Mod_Late}\"><Grid.Resources><Style x:Key=\"Mod_Late\" /></Grid.Resources></Grid>", "",
+                  "the resource key Mod_Late, in the content, is used by"),
+          "content using a key from Resources further down: refused");
+    check(refused("", "<Grid><Grid.Resources><Style x:Key=\"Mod_InContent\" /></Grid.Resources></Grid>", "<Grid Style=\"{StaticResource Mod_InContent}\" />",
+                  "the resource key Mod_InContent, in the help, is used by"),
+          "the help bar comes before the content in the page, so a key the content defines is after it: refused");
+    check(refused("", "<Grid><Grid.Background><StaticResource ResourceKey=\"Mod_Brush\" /></Grid.Background><Grid.Resources><Color x:Key=\"Mod_Brush\">#FF000000</Color></Grid.Resources></Grid>",
+                  "", "the resource key Mod_Brush, in the content, is used by"),
+          "<StaticResource ResourceKey=\"...\"/> before its key: refused too");
+    check(check_page_fragment(app, "<Style x:Key=\"A_Style_FZTextBlock_Heading\" TargetType=\"local:FZTextBlock\" BasedOn=\"{StaticResource A_Style_FZTextBlock_Heading}\" />",
+                              "", "", tex, c, why),
+          "a style of the game's key based on the game's own of that key passes (the game's is there first)");
+    check(check_page_fragment(app, "<Style x:Key=\"Mod_D1\" BasedOn=\"{DynamicResource Mod_D2}\" />\r\n<Style x:Key=\"Mod_D2\" />", "", "", tex, c, why),
+          "a {DynamicResource} may come before its key: it's looked up later");
+    check(check_page_fragment(app, "<DataTemplate x:Key=\"Mod_Row\"><Grid Style=\"{StaticResource Mod_Later}\" /></DataTemplate>\r\n<Style x:Key=\"Mod_Later\" />",
+                              "", "", tex, c, why),
+          "inside a template, as the game's own dictionaries have it, a key from further down passes (a template is built when it's used)");
+    check(check_page_fragment(app,
+                              "<Style x:Key=\"Mod_T1\"><Setter Property=\"Template\"><Setter.Value><ControlTemplate><Border Style=\"{StaticResource Mod_T2}\" />"
+                              "</ControlTemplate></Setter.Value></Setter></Style>\r\n<Style x:Key=\"Mod_T2\" />",
+                              "", "", tex, c, why),
+          "a ControlTemplate in a style's setter: the same");
+    check(refused("<Style x:Key=\"Mod_P1\"><Setter Property=\"ItemTemplate\" Value=\"{StaticResource Mod_P2}\" /></Style>\r\n<DataTemplate x:Key=\"Mod_P2\" />",
+                  "", "", "the resource key Mod_P2, in the resources, is used by"),
+          "a setter's value isn't inside a template, even for a template property: refused");
+    check(check_page_fragment(app, "<Style x:Key=\"Mod_Res\" />", "<Grid Style=\"{StaticResource Mod_Res}\" />", "<Grid Style=\"{StaticResource Mod_Res}\" />",
+                              tex, c, why),
+          "the resources' keys in the help and the content pass");
+
     // a zip that can't be read: the image is let through, and counted as unchecked
     Media gone{m.root / "nowhere"};
     check(check_page_fragment(app, "", "<Image Source=\"/Textures/Anthem/Icons/Anything.png\" />", "",
@@ -417,6 +455,42 @@ void guard() {
     lines.clear();
     const std::vector<GuardEntry> old = guard_at_start(e, stamp_of, {0x01DD000000000100ull, "crash-old.txt"}, 0x01DD000000000150ull, carried, lines);
     check(old.size() == 2 && carried.size() == 2, "a crash report older than the mark doesn't count");
+
+    // only a crash soon after the mark counts (30 s): later, the game had gone on, and the crash was something else's
+    {
+        const std::uint64_t mark = 0x01DD000100000000ull;
+        const std::vector<GuardEntry> one = {{"opening", "TestMod.dll", "Stats", "100-01D9", "2026-11-08", 1, mark},
+                                             {"opening", "TestMod.dll", "Twice", "100-01D9", "2026-11-08", 2, mark}};
+        lines.clear();
+        const std::vector<GuardEntry> soon = guard_at_start(one, stamp_of, {mark + 29 * 10000000ull, "crash-soon.txt"}, 0, carried, lines);
+        check(soon.size() == 2 && soon[0].state == "skip" && soon[1].state == "skip" && carried.empty(),
+              "a crash report 29 s after the mark: the page is left out");
+        check(said("the page is left out until TestMod.dll changes (an update or a reinstall) or the player gives it another try"),
+              "the log says the player can give it another try");
+        lines.clear();
+        const std::vector<GuardEntry> late = guard_at_start(one, stamp_of, {mark + 31 * 10000000ull, "crash-late.txt"}, 0, carried, lines);
+        check(late.empty() && carried.empty(),
+              "a crash report 31 s after the mark: not the page's, so the mark is dropped (not carried), even after two sessions");
+        check(said("the game crashed 31 s after TestMod.dll's page Stats started opening last session (crash report crash-late.txt), too long "
+                   "after for the page to be the cause, so the page stays in"),
+              "the log says how long after, and that the page stays in");
+        lines.clear();
+        guard_at_start({{"opening", "TestMod.dll", "Stats", "100-01D9", "2026-11-08"}}, stamp_of, {mark, "crash-old-form.txt"}, mark - 60 * 10000000ull,
+                       carried, lines);
+        check(said("the game crashed 60 s after TestMod.dll's page Stats started opening"),
+              "a line in the first form (no time of its own): the file's time stands in, with the same window");
+    }
+
+    // the player gives a left-out page another try (A on the message its tile shows)
+    {
+        std::vector<GuardEntry> left = after;
+        check(guard_retry(left, "testmod.DLL", "Stats") && left.size() == 2 && left[0].page == "List" && left[1].page == "Twice",
+              "another try: the page's skip goes (the DLL in any case), the others stay");
+        check(!guard_retry(left, "TestMod.dll", "Stats") && !guard_retry(left, "TestMod.dll", "Nope") && left.size() == 2,
+              "nothing to retry: false, and nothing changes");
+        std::vector<GuardEntry> marks = {{"opening", "TestMod.dll", "Stats", "1-1", ""}};
+        check(!guard_retry(marks, "TestMod.dll", "Stats") && marks.size() == 1, "a page that's only marked as opening isn't touched");
+    }
 
     const std::string written = guard_text(after);
     check(parse_guard(written).size() == 3 && written.find("skip\tTestMod.dll\tStats\t100-01D9\t2026-11-08\t1\t0000000000000000\r\n") != std::string::npos &&
