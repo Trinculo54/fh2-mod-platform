@@ -410,7 +410,7 @@ void start_media_overrides() {
              "list of loaded DLLs can't be read to see whether it has; mediaoverride is left to it");
         plog("media overrides: the platform's files go to mediaoverride for this whole session");
         move_old_overrides();
-        car_packs_unavailable("Extra Options is set to load");
+        car_packs_unavailable(later("Extra Options is loaded."));   // counted as loaded; in each language on the title screen
         std::thread(wait_for_extra_options).detach();
         return;
     }
