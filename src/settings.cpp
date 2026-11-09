@@ -497,14 +497,33 @@ uint8_t* flag_descriptor(uint8_t*& slot, const std::string& name) {
 // with 0x141663220 and never freed; the property's type is the one the game gives the tabs'
 // badge properties (0x1416A4B30).
 constexpr uintptr_t RVA_BADGE_TYPE = 0x16A4B30;
-uint8_t* g_badge_desc = nullptr;
 alignas(16) uint8_t g_badge_on[0x80], g_badge_off[0x80];
 bool g_badge_strings = false;
 bool any_update_out();
 int updates_out();
 bool any_problem();
-uint8_t* g_error_badge_desc = nullptr;   // FH2Mod_ErrorBadge: "!" while a mod didn't load or start
-void** __cdecl badge_get(void** out, void* desc, void*) {
+bool new_to_player();   // the NEW badge's cue (with the first-run cues, below)
+uint8_t* tile_string(const std::string& text);
+// The MODS tab shows one badge at a time: red (a mod isn't working), else yellow (an update is out), else NEW
+// (the player hasn't opened YOUR MODS yet, or a mod is new). Each is repeated on the tile that resolves it:
+// red and NEW on YOUR MODS, yellow on UPDATES, whatever the tab shows.
+enum BadgeKind { kBadgeError, kBadgeUpdate, kBadgeNew, kBadgeTileUpdate, kBadgeTileNew, kBadgeKinds };
+const char* const kBadgeNames[kBadgeKinds] = {"FH2Mod_ErrorBadge", "FH2Mod_UpdateBadge", "FH2Mod_NewBadge", "FH2Mod_TileUpdateBadge",
+                                              "FH2Mod_TileNewBadge"};
+uint8_t* g_badge_descs[kBadgeKinds] = {};
+std::atomic<void*> g_badge_obj{nullptr};   // the pause menu page that read them
+std::string badge_text(int kind) {
+    const bool problem = any_problem(), update = any_update_out();
+    switch (kind) {
+        case kBadgeError: return problem ? "!" : "";
+        case kBadgeUpdate: return update && !problem ? "!" : "";
+        case kBadgeNew: return !problem && !update && new_to_player() ? tr("NEW") : "";
+        case kBadgeTileUpdate: return update ? "!" : "";
+        case kBadgeTileNew: return !problem && new_to_player() ? tr("NEW") : "";
+        default: return "";
+    }
+}
+void** __cdecl badge_get(void** out, void* desc, void* obj) {
     *out = nullptr;
     if (!g_badge_strings) {
         reinterpret_cast<void (*)(void*, const char*, int)>(g_base + 0x1663220)(g_badge_on, "!", -1);
@@ -513,22 +532,23 @@ void** __cdecl badge_get(void** out, void* desc, void*) {
         *reinterpret_cast<int32_t*>(g_badge_off + 0x10) += 1 << 20;
         g_badge_strings = true;
     }
-    // a mod that didn't load wins: the red badge shows, the yellow one doesn't
-    const bool on = desc == g_error_badge_desc ? any_problem() : any_update_out() && !any_problem();
-    uint8_t* v    = on ? g_badge_on : g_badge_off;
+    if (obj) g_badge_obj = obj;
+    int kind = kBadgeError;
+    while (kind < kBadgeKinds && g_badge_descs[kind] != desc) ++kind;
+    const std::string text = badge_text(kind);
+    uint8_t* v = text.empty() ? g_badge_off : text == "!" ? g_badge_on : tile_string(text);
     InterlockedIncrement(reinterpret_cast<volatile LONG*>(v + 0x10));   // the caller releases it
     *out = v;
     return out;
 }
 void __cdecl badge_set(void*, void*, uint8_t*) {}
-uint8_t* badge_descriptor(bool error) {
+uint8_t* badge_descriptor(int kind) {
     std::scoped_lock lk{g_desc_mu};
     static const uint8_t expect[] = {0x48, 0x8D, 0x05, 0x59, 0xB0, 0x02, 0x02, 0xC3};
-    uint8_t*& d = error ? g_error_badge_desc : g_badge_desc;
+    uint8_t*& d = g_badge_descs[kind];
     if (!d && code_matches(RVA_BADGE_TYPE, expect, sizeof expect)) {
         void* type = reinterpret_cast<TypeFn>(g_base + RVA_BADGE_TYPE)(0);
-        d = new_descriptor(error ? "FH2Mod_ErrorBadge" : "FH2Mod_UpdateBadge", reinterpret_cast<void*>(&badge_get),
-                           reinterpret_cast<void*>(&badge_set), type);
+        d = new_descriptor(kBadgeNames[kind], reinterpret_cast<void*>(&badge_get), reinterpret_cast<void*>(&badge_set), type);
     }
     return d;
 }
@@ -629,16 +649,19 @@ uint8_t* tile_descriptor(int prop, std::size_t t) {
 
 // The MODS tab's own tiles' names, FH2Mod_HubTile_<k> (as their Button's Tag, the way FH2Mod_TileText_ is): asked for
 // as the pause menu shows them, so they're in the game's language then (it has none yet when A_PauseMenu.xaml is
-// written), with the number of mods and of updates as they are then. Strings like FH2Mod_TileText_'s.
+// written), with the number of updates as it is then. Strings like FH2Mod_TileText_'s. After the five names come
+// the tiles' other lines (kHubLine...): YOUR MODS' subtitle and the mods' names, GET MODS' line, and the Settings
+// page's MODS tile's.
 constexpr int kHubTiles = 5;   // YOUR MODS, UPDATES, GET MODS, ABOUT, HELP: write_pause_menu's order
-uint8_t* g_hub_tile_desc[kHubTiles] = {};
-std::atomic<void*> g_hub_tile_obj{nullptr};   // the pause menu page that read them
+enum HubLine { kHubLineMods = kHubTiles, kHubLineName1, kHubLineName4 = kHubLineName1 + 3, kHubLineGetMods, kHubLineSettings, kHubTexts };
+uint8_t* g_hub_tile_desc[kHubTexts] = {};
+std::atomic<void*> g_hub_tile_obj[kHubTexts] = {};   // the page that read each (the pause menu; Settings for its tile)
 std::string hub_tile_text(int k);               // with the MODS tab's pages, below
 void** __cdecl hub_tile_get(void** out, void* desc, void* obj) {
     *out = nullptr;
-    for (int k = 0; k < kHubTiles; ++k)
+    for (int k = 0; k < kHubTexts; ++k)
         if (g_hub_tile_desc[k] == desc) {
-            if (obj) g_hub_tile_obj = obj;
+            if (obj) g_hub_tile_obj[k] = obj;
             uint8_t* v = tile_string(hub_tile_text(k));
             InterlockedIncrement(reinterpret_cast<volatile LONG*>(v + 0x10));   // the caller releases it
             *out = v;
@@ -941,8 +964,8 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     if (std::wcscmp(n, L"FH2Mod_PanelShown") == 0) return panel_descriptor(false);
     if (std::wcscmp(n, L"FH2Mod_Selected") == 0) return selected_descriptor();
     if (std::wcscmp(n, L"FH2Mod_ViewSelected") == 0) return view_selected_descriptor();
-    if (std::wcscmp(n, L"FH2Mod_UpdateBadge") == 0) return badge_descriptor(false);
-    if (std::wcscmp(n, L"FH2Mod_ErrorBadge") == 0) return badge_descriptor(true);
+    for (int kind = 0; kind < kBadgeKinds; ++kind)
+        if (std::wcscmp(n, widen(kBadgeNames[kind]).c_str()) == 0) return badge_descriptor(kind);
     if (std::wcscmp(n, L"FH2Mod_ModNotice") == 0) return mod_notice_descriptor();
     if (std::wcscmp(n, L"FH2Mod_TitleReady") == 0) return title_ready_descriptor();
     if (const int k = name_number(n, L"FH2Mod_View_", kMaxViews); k >= 0) return flag_descriptor(g_view_desc[k], "FH2Mod_View_" + std::to_string(k));
@@ -953,7 +976,7 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     if (const int b = name_number(n, L"FH2Mod_Bar_", kViewKinds); b >= 0) return flag_descriptor(g_bar_desc[b], "FH2Mod_Bar_" + std::to_string(b));
     for (int prop = 0; prop < kTileProps; ++prop)
         if (const int t = name_number(n, kTilePropNames[prop], static_cast<int>(kTileCount)); t >= 0) return tile_descriptor(prop, t);
-    if (const int k = name_number(n, L"FH2Mod_HubTile_", kHubTiles); k >= 0) return hub_tile_descriptor(k);
+    if (const int k = name_number(n, L"FH2Mod_HubTile_", kHubTexts); k >= 0) return hub_tile_descriptor(k);
     if (std::wcsncmp(n, L"FH2Mod_Slot_", 12) == 0) return slot_descriptor(n);
     if (std::wcsncmp(n, L"FH2Mod_Hud_", 11) == 0) return hud_layer_find(n);
     Row* r = row_by_prop(n);
@@ -1852,7 +1875,24 @@ std::string pending_restart_names() {
 }
 
 const char* const kHubTileNames[kHubTiles] = {"YOUR MODS", "UPDATES", "GET MODS", "ABOUT", "HELP"};
+std::string mod_problem(const ModEntry& e);   // below
+
 std::string hub_tile_text(int k) {
+    if (k >= kHubLineName1 && k <= kHubLineName4) {
+        // the mods' names on YOUR MODS: up to four, then "<4th> and N more"; "(off)" after one turned off, a ! before
+        // one that isn't working
+        const std::size_t n = static_cast<std::size_t>(k - kHubLineName1);
+        auto name = [](const ModEntry& e) {
+            if (!mod_problem(e).empty()) return "! " + e.name;
+            return e.enabled ? e.name : trf("{0} (off)", {e.name});
+        };
+        if (n >= g_entries.size()) return "";
+        if (n == 3 && g_entries.size() > 4) return trf("{0} and {1} more", {name(g_entries[3]), std::to_string(g_entries.size() - 4)});
+        return name(g_entries[n]);
+    }
+    if (k == kHubLineMods) return tr("Settings for each mod");
+    if (k == kHubLineGetMods) return tr("Opens in your browser");
+    if (k == kHubLineSettings) return tr("Same as Pause > MODS");
     if (k == 1)
         if (const int out = updates_out(); out > 0) return trf("UPDATES ({0})", {std::to_string(out)});
     return tr(kHubTileNames[k]);
@@ -2114,6 +2154,8 @@ std::string mods_folder();             // with About, below
 // A mod that's new since the player last looked: added to fh2-mods after the platform had seen others there, and
 // its page not opened since (fh2-mods\platform-seen.txt).
 bool mod_is_new(const ModEntry&) { return false; }
+// The NEW badge's cue: YOUR MODS not opened yet, or a mod that's new.
+bool new_to_player() { return false; }
 
 // What A on a mod's row on YOUR MODS shows, counted from what the mod added (its rows, links and
 // pages), as the last sentence of the row's description. Counts go in as {0} alone, so each language
@@ -2532,6 +2574,7 @@ bool swap_all(std::string& s, const std::string& from, const std::string& to) {
 
 bool red_badge(std::string& page, std::size_t tab_at) {
     std::string tab_style = xaml_block(page, "A_Style_Button_TabTitle_Pause", "<Style", "</Style>");
+    std::string new_badge;   // the game's own badge, for NEW
     const std::string badge = xaml_block(read_ui("Resources/Anthem/Global_Controls.xaml"), "A_Style_ContentControl_NotificationBadge", "<Style",
                                          "</Style>");
     std::string red = badge, yellow = badge;
@@ -2549,11 +2592,14 @@ bool red_badge(std::string& page, std::size_t tab_at) {
     const std::size_t c1 = c0 == std::string::npos ? c0 : tab_style.find("/>", c0);
     if (c1 == std::string::npos) return false;
     std::string tag_badge = tab_style.substr(c0, c1 + 2 - c0), update_badge = tag_badge;
+    new_badge = tag_badge;
     if (!swap_all(tag_badge, "{StaticResource A_Style_ContentControl_NotificationBadge}", "{StaticResource FH2Mod_Style_NotificationBadge_Red}") ||
         !swap_all(update_badge, "{StaticResource A_Style_ContentControl_NotificationBadge}", "{StaticResource FH2Mod_Style_NotificationBadge_Yellow}") ||
-        !swap_all(update_badge, "{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}", "{Binding FH2Mod_UpdateBadge}"))
+        !swap_all(update_badge, "{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}", "{Binding FH2Mod_UpdateBadge}") ||
+        !swap_all(new_badge, "{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}", "{Binding FH2Mod_NewBadge}"))
         return false;
-    tab_style.replace(c0, c1 + 2 - c0, tag_badge + "\r\n                                    " + update_badge);
+    // a third, in the game's own colour, for NEW (it shows only when neither of the others does)
+    tab_style.replace(c0, c1 + 2 - c0, tag_badge + "\r\n                                    " + update_badge + "\r\n                                    " + new_badge);
     // the MODS tab uses the copy
     const std::size_t end = page.find("/>", tab_at), st = page.find("Style=\"{StaticResource A_Style_Button_TabTitle_Pause}\"", tab_at);
     if (end == std::string::npos || st == std::string::npos || st > end) return false;
@@ -2570,13 +2616,25 @@ bool red_badge(std::string& page, std::size_t tab_at) {
     return true;
 }
 
-int g_pause_menu_updates = 0;   // the count in the UPDATES tile as last written
+// A line of text on a MODS tab tile, under its name: FH2Mod_HubTile_<k> (a HubLine), at the bottom left in `style`,
+// collapsed while it's empty (the game's converter for its badges).
+std::string hub_line(int k, const char* style) {
+    const std::string bind = "{Binding FH2Mod_HubTile_" + std::to_string(k) + ", RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type Page}}";
+    return "                                <local:FZTextBlock Text=\"" + bind + "}\" Style=\"{StaticResource " + style +
+           "}\" Visibility=\"" + bind + ", Converter={StaticResource A_StringVisConverter}}\" />\r\n";
+}
+// A badge in a MODS tab tile's top right corner: the tab's, repeated on the tile that resolves it (BadgeKind).
+std::string tile_badge(int kind, const std::string& style) {
+    return "                        <ContentControl Content=\"{Binding " + std::string(kBadgeNames[kind]) +
+           ", RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type Page}}}\" Style=\"{StaticResource " + style +
+           "}\" HorizontalAlignment=\"Right\" VerticalAlignment=\"Top\" Height=\"30\" Panel.ZIndex=\"1\" Margin=\"0,20,20,0\" />\r\n";
+}
 
 // A MODS tab tile: the game's icon tile (HorizontalIconTile), with an icon of our own drawn
 // in its place: Paths in the light grey of the game's icons, big and cut off at the tile's
 // edges as theirs are. `strokes` are lines, `fills` solid shapes, `rings` circles with the
 // tile's colour inside (a slider's knob).
-std::string tile_template(const std::string& key, const char* strokes, const char* fills, const char* rings) {
+std::string tile_template(const std::string& key, const char* strokes, const char* fills, const char* rings, const std::string& extra = "") {
     const std::string grey = "#FFDCDCDC", sw = "26";
     std::string icon;
     if (*strokes) icon += "                        <Path Data=\"" + std::string(strokes) + "\" Stroke=\"" + grey + "\" StrokeThickness=\"" + sw + "\" />\r\n";
@@ -2602,7 +2660,7 @@ std::string tile_template(const std::string& key, const char* strokes, const cha
            "                        <Grid Margin=\"{StaticResource A_Thickness_TilePadding}\">\r\n"
            "                            <local:FZTextBlock Text=\"{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}\" "
            "Style=\"{StaticResource A_Style_FZTextBlock_TileTitle}\" HorizontalAlignment=\"Left\" TextAlignment=\"Left\" />\r\n"
-           "                        </Grid>\r\n"
+           "                        </Grid>\r\n" + extra +
            "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_TileSelectionBar}\" />\r\n"
            "                    </Grid>\r\n"
            "                </Grid>\r\n"
@@ -2692,17 +2750,49 @@ bool write_pause_menu() {
          "M410,30 L410,190 M335,120 L410,195 485,120 M270,170 L270,250 530,250 530,170", "", "", 2, 1},
         {"PART_Button_Extras", "FH2Mod_Tile_About", "ABOUT", "2x1",   // an i in a circle
          "M420,40 A130,130 0 0 1 420,300 A130,130 0 0 1 420,40 Z M420,140 L420,250", "M420,72 A20,20 0 0 1 420,112 A20,20 0 0 1 420,72 Z", "", 4, 0},
-        {"PART_Button_VIPMembership", "FH2Mod_Tile_AllSettings", "ALL SETTINGS", "2x1",   // three sliders
-         "M250,115 L600,115 M250,185 L600,185 M250,255 L600,255", "",
-         "M320,87 A28,28 0 0 1 320,143 A28,28 0 0 1 320,87 Z M480,157 A28,28 0 0 1 480,213 A28,28 0 0 1 480,157 Z M380,227 A28,28 0 0 1 380,283 A28,28 0 0 1 380,227 Z", 4, 1},
+        {"PART_Button_VIPMembership", "FH2Mod_Tile_Help", "HELP", "2x1",   // a ? in a circle
+         "M420,40 A130,130 0 0 1 420,300 A130,130 0 0 1 420,40 Z M372,140 A48,48 0 1 1 440,182 L420,200 L420,232",
+         "M420,252 A18,18 0 0 1 420,288 A18,18 0 0 1 420,252 Z", "", 4, 1},
     };
+    // The badges in the tiles: copies of the game's badge style (Global_Controls.xaml) in red and yellow, with keys
+    // and colours of their own (red_badge's copies for the tab come later in the page). NEW uses the game's own.
     std::string res, buttons = "\r\n";
+    const std::string badge_style = xaml_block(read_ui("Resources/Anthem/Global_Controls.xaml"), "A_Style_ContentControl_NotificationBadge", "<Style", "</Style>");
+    std::string red = badge_style, yellow = badge_style;
+    const bool tile_badges =
+        !badge_style.empty() && swap_all(red, "x:Key=\"A_Style_ContentControl_NotificationBadge\"", "x:Key=\"FH2Mod_Style_TileBadge_Red\"") &&
+        swap_all(red, "{StaticResource A_Color_TileSelected_Background}", "{StaticResource FH2Mod_Color_TileBadgeRed}") &&
+        swap_all(yellow, "x:Key=\"A_Style_ContentControl_NotificationBadge\"", "x:Key=\"FH2Mod_Style_TileBadge_Yellow\"") &&
+        swap_all(yellow, "{StaticResource A_Color_TileSelected_Background}", "{StaticResource FH2Mod_Color_TileBadgeYellow}") &&
+        swap_all(yellow, "{StaticResource A_Color_TileSelected_Text}", "{StaticResource FH2Mod_Color_TileBadgeDark}");
+    if (tile_badges)
+        res += "\r\n            <Color x:Key=\"FH2Mod_Color_TileBadgeRed\">#FFE0141E</Color>"
+               "\r\n            <Color x:Key=\"FH2Mod_Color_TileBadgeYellow\">#FFFFC400</Color>"
+               "\r\n            <Color x:Key=\"FH2Mod_Color_TileBadgeDark\">#FF14181E</Color>\r\n            " +
+               red + "\r\n            " + yellow;
+    else
+        slog("the game's badge style doesn't look as expected; the MODS tab's tiles show no badges");
+    // The tiles' lines: YOUR MODS' in the club tile's count style (this page's own) and the names in the tiles' text
+    // style; GET MODS' the same.
+    const bool club_style = page.find("x:Key=\"A_Style_FZTextBlock_TileClubMemberCount\"") < page.find(items_at);
+    const char* const first_style = club_style ? "A_Style_FZTextBlock_TileClubMemberCount" : "A_Style_FZTextBlock_TileText";
+    std::string mods_lines = "                        <StackPanel Margin=\"{StaticResource A_Thickness_TilePadding}\" VerticalAlignment=\"Bottom\" "
+                             "HorizontalAlignment=\"Left\">\r\n" + hub_line(kHubLineMods, first_style);
+    for (int k = kHubLineName1; k <= kHubLineName4; ++k) mods_lines += hub_line(k, "A_Style_FZTextBlock_TileText");
+    mods_lines += "                        </StackPanel>\r\n";
+    if (tile_badges) mods_lines += tile_badge(kBadgeError, "FH2Mod_Style_TileBadge_Red");
+    mods_lines += tile_badge(kBadgeTileNew, "A_Style_ContentControl_NotificationBadge");
+    const std::string extras[] = {
+        mods_lines,
+        tile_badges ? tile_badge(kBadgeTileUpdate, "FH2Mod_Style_TileBadge_Yellow") : "",
+        "                        <StackPanel Margin=\"{StaticResource A_Thickness_TilePadding}\" VerticalAlignment=\"Bottom\" HorizontalAlignment=\"Left\">\r\n" +
+            hub_line(kHubLineGetMods, first_style) + "                        </StackPanel>\r\n",
+        "", ""};
     int index = 1;
-    g_pause_menu_updates = updates_out();
     for (const Tile& t : tiles) {
         // The name shown is the Button's Tag, FH2Mod_HubTile_<k>: in the game's language, with the counts
         res += std::string("\r\n            <local:TileMenuDataItem x:Key=\"") + t.item + "\" Heading=\"" + t.heading + "\" />";
-        res += tile_template(std::string(t.item) + "_Template", t.strokes, t.fills, t.rings);
+        res += tile_template(std::string(t.item) + "_Template", t.strokes, t.fills, t.rings, extras[&t - tiles]);
         buttons += std::string("                        <Button Canvas.Left=\"{StaticResource A_Double_TileCoord_X_") + std::to_string(t.x) +
                    "}\"\r\n                                Canvas.Top=\"{StaticResource A_Double_TileCoord_Y_" + std::to_string(t.y) +
                    "}\"\r\n                                DataContext=\"{StaticResource " + t.item +
@@ -3667,10 +3757,12 @@ void d_pause_menu_wire(void* page) {
         if (page && g_tile_obj[t].load() == page)
             for (int prop = 0; prop < kTileProps; ++prop)
                 if (g_tile_desc[prop][t]) notify_changed(page, g_tile_desc[prop][t]);
-    // and the MODS tab's own tiles' names: the game's language, the number of updates
-    if (page && g_hub_tile_obj.load() == page)
-        for (int k = 0; k < kHubTiles; ++k)
-            if (g_hub_tile_desc[k]) notify_changed(page, g_hub_tile_desc[k]);
+    // and the MODS tab's own tiles' names and lines: the game's language, the number of updates; and the badges
+    for (int k = 0; k < kHubTexts; ++k)
+        if (page && g_hub_tile_desc[k] && g_hub_tile_obj[k].load() == page) notify_changed(page, g_hub_tile_desc[k]);
+    if (page && g_badge_obj.load() == page)
+        for (uint8_t* d : g_badge_descs)
+            if (d) notify_changed(page, d);
     // back from the MODS tab with a change that needs a restart?
     const bool from_hub = g_in_hub;
     g_in_hub            = false;
@@ -5018,18 +5110,6 @@ void settings_start(const FH2ModApi* api) {
     slog(std::to_string(n) + " row(s) on the Mods page, " + std::to_string(g_entries.size()) + " mod(s) on the MODS tab" +
          (g_hub_files ? "" : " (not shown)"));
     if (g_hub_files || g_settings_tile || g_title_page || hud_layer_wants_page()) std::thread(hook_game).detach();
-    if (g_hub_files)
-        // Update checks finish after this (from the cache, usually within a second or two): the
-        // UPDATES tile's count is rewritten while the game is likely still to read the page.
-        std::thread([] {
-            for (int i = 0; i < 60; ++i) {
-                Sleep(1000);
-                if (updates_out() != g_pause_menu_updates) {
-                    std::scoped_lock lk{g_page_mu};
-                    write_pause_menu();
-                }
-            }
-        }).detach();
     hud_layer_start();
 }
 
