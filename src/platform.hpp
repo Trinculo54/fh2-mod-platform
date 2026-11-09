@@ -289,5 +289,8 @@ bool hotkey_binding(const FH2Mod* mod, const std::string& key, uint32_t* vk, uin
 
 // commands.cpp: mods' commands, run through a named pipe (API 9).
 int command_add(FH2Mod* mod, const char* name, const char* help, FH2CommandFn fn, void* user);
+// The platform's own command (ui_player.cpp's "Platform ui"): listed and run like a mod's, but it starts the pipe
+// only with `start_pipe`; otherwise it can be run whenever a mod's command has started it.
+int command_add_platform(FH2Mod* mod, const char* name, const char* help, FH2CommandFn fn, void* user, bool start_pipe);
 
 } // namespace fh2platform
