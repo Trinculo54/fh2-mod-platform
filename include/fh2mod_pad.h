@@ -1,8 +1,9 @@
 /*
  * fh2mod_pad.h -- the pad layer preview of the FH2 Mod Platform (MIT licensed, see LICENSE).
  *
- * A preview: not part of any API version yet. Platform 2.9.0 is the first to offer it, as an
- * interface, so a mod that uses it still loads on a platform without it (2.8.0 and older):
+ * A preview: not part of any API version yet. Platform 2.9.0 is the first to offer it, as a
+ * preview interface (version 1), so a mod that uses it still loads on a platform without it
+ * (2.8.0 and older):
  *
  *     const FH2PadInterface* pad = (const FH2PadInterface*)api->get_interface(FH2_PAD_INTERFACE, 1);
  *     if (!pad) ...   (no pad layers on this platform: say so in your log, carry on without)
@@ -18,6 +19,18 @@
  *
  * The modifier itself always reaches the game: pick one that does nothing harmful while held,
  * and let the player change it (set_modifier).
+ *
+ * A layer is on in every game state: the title screen, the pause menu and the MODS tab, the
+ * map and photo mode as well as driving. There, too, the game doesn't see the layer's buttons
+ * while the modifier is held, and on_press still comes. LB is the menus' tab-left, so a player
+ * holding it in a menu and pressing the d-pad would send your action from the menu. If your
+ * layer is for driving, ignore presses while a menu is open: FH2_HUD_ON_SCREEN in hud_status
+ * (with a HUD layer of your own, fh2mod_hud.h), or FH2_UI_ON_SCREEN in ui_status (API 10, in a
+ * session with pop-ups or tips: declare them with ui_uses), is set while the free-roam HUD page
+ * is on screen. Without FH2_HUD_AVAILABLE, or FH2_UI_TOASTS, the platform may not be following
+ * that page and the bit may never come, so then let presses through rather than drop them all.
+ * A flag for layers that are only on in the world is planned for 2.9.1, in the reserved
+ * `flags`.
  */
 #ifndef FH2MOD_PAD_H
 #define FH2MOD_PAD_H
@@ -41,7 +54,7 @@ typedef struct FH2PadLayer {
     const char* key;        /* unique within your mod: letters, digits and '_', like "QuickChat" */
     uint32_t modifier;      /* FH2_PAD_ bits, all held to open the layer, like FH2_PAD_LB; 0 = off for now */
     uint32_t buttons;       /* FH2_PAD_ bits the layer takes while open, like the four d-pad bits */
-    uint32_t flags;         /* 0 (reserved) */
+    uint32_t flags;         /* 0 (reserved: a flag for a layer only on in the world is planned) */
     FH2PadPressFn on_press;
     void* user;             /* passed to on_press */
 } FH2PadLayer;

@@ -990,7 +990,7 @@ Plays one of the game's own UI sounds, wherever the player is. You don't need a 
 | `FH2_SOUND_TICK`, `_TICK_LOW`, `_TICK_END` | the race countdown's beeps | over the driving view only |
 | `FH2_SOUND_SHUTTER` | the photo shutter | everywhere |
 
-All eleven were heard in game, through the same player the game itself uses for them (the HUD layer preview's tests). The same numbers are the HUD layer preview's sounds ([hud-layer-preview.md](hud-layer-preview.md)).
+All eleven were heard in game, through the same player the game itself uses for them (the HUD layer preview's tests). The same numbers are the HUD layer preview's sounds ([hud-layer-preview.md](hud-layer-preview.md)). Use this call in new code, layer or not: the HUD layer's own `play_ui_sound` has its own gate and its own count of repeats, so a sound sent through both can play twice.
 
 - **When.** From one of your page, setting, title-screen or message box callbacks it plays at once. From anywhere else (a hotkey, a command, a thread of your own) it plays at the game's next tick, on the game's thread: the game's sound player isn't safe to call from other threads. Four can wait for your mod at once (a fifth drops your oldest), one plays a tick, and one that waited half a second is dropped. The first time a mod plays a sound from outside its callbacks, the platform hooks the game's tick for it, so it may take a moment the first time.
 - **The world-only four.** NOTIFY and the three countdown beeps are silent under the game's menus, so they're refused from your callbacks (a menu or the title screen is up) and while the driving view is known to be off screen. For an answer the player can hear to a hotkey press while driving, use SHUTTER, SELECT or BACK.

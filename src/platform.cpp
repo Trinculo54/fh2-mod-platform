@@ -1282,8 +1282,10 @@ DWORD WINAPI load_mods(LPVOID) {
         std::scoped_lock lk{g_log_mu};
         g_log_copy = copy;
     }
+    // A build named other than its version (-DFH2MOD_PLATFORM_BUILD="2.9.0 dev", CMakeLists.txt) says it isn't a release.
+    const bool release = std::strcmp(PLATFORM_BUILD_STR, FH2MOD_PLATFORM_VERSION) == 0;
     plog(std::string("FH2 Mod Platform ") + FH2MOD_PLATFORM_VERSION + " (API " + std::to_string(FH2MOD_API_VERSION) +
-         ") in " + narrow(g_azimuth.wstring()) + "; this is the " PLATFORM_BUILD_STR " build, not a release");
+         ") in " + narrow(g_azimuth.wstring()) + (release ? "" : "; this is the " PLATFORM_BUILD_STR " build, not a release"));
     plog("loaded as " + narrow(g_self_name) + (g_copies.empty() ? "" : "; " + g_copies));
     plog(session_line());
     plog(g_game.empty() ? "couldn't find the game's Mount folder; game text, file and database changes are off"

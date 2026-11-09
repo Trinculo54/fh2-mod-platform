@@ -28,12 +28,18 @@ Mod makers: this zip has
   include\fh2mod.h          the API (C/C++)
   include\fh2game.h         names for the game addresses mods use, and the
                             sites the platform hooks
+  include\fh2mod_l10n.h,    header-only helpers for translations and the
+  fh2mod_ui.h and           UI templates (pop-ups, tips, message boxes),
+  fh2mod_helpers.h          which do nothing on an older platform
+  include\fh2mod_hud.h,     the HUD layer and pad layer previews'
+  fh2mod_pad.h              interfaces
   examples\HelloMod.dll     an example mod; put it in fh2-mods to try it
   tools\fh2mod.exe          runs mods' commands in the running game:
                             fh2mod list, fh2mod <mod> <command> [args]
-Docs, the example's source and build setup, the helper headers for
-translations and pop-ups (fh2mod_l10n.h, fh2mod_ui.h), and the 2.9.0
-release notes:
+  tools\l10n\               the translation scripts (Python 3): extract.py
+                            lists a mod's texts for translators, and
+                            po2inc.py builds their PO files into its DLL
+Docs, the example's source and build setup, and the 2.9.0 release notes:
   https://github.com/Trinculo54/FH2-Mod-Platform
 
 Everything the platform does is logged to fh2-mods\platform.log. If the

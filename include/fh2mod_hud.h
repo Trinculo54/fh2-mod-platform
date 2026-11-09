@@ -2,11 +2,11 @@
  * fh2mod_hud.h -- the HUD layer, a preview (MIT licensed, see LICENSE).
  *
  * PREVIEW. This isn't part of the API in fh2mod.h: it's an interface the
- * platform publishes. Platform 2.9.0 offers version 2 (with the feed); the
- * "2.8.0 + HUD layer preview 3" test build offered version 1, and released
- * 2.8.0 and older don't offer it. When the layer moves into the API, its
- * names, limits and behaviour may all change, and this interface may go.
- * Never make it the only way your mod works.
+ * platform publishes, and platform 2.9.0 publishes it as a preview, version
+ * 2 (with the feed). Version 1 was only in a test build before 2.9.0, and
+ * released 2.8.0 and older don't offer it. When the layer moves into the
+ * API, its names, limits and behaviour may all change, and this interface
+ * may go. Never make it the only way your mod works.
  *
  * The layer is a heads-up display of your own, drawn by the game's own UI
  * inside its free-roam HUD page, in the game's look and fonts:
@@ -40,8 +40,8 @@
  *     if (!hud)
  *         api->log(mod, "no HUD layer on this platform; carrying on without the bar");
  *
- * get_interface came with API 2, hence the version check. Every released
- * platform returns NULL there.
+ * get_interface came with API 2, hence the version check. Platform 2.8.0
+ * and older return NULL there.
  *
  * Where it shows. Only while the game's free-roam HUD page is on screen.
  * In testing, the pause menu, the map, photo mode, the rewind (with its
@@ -184,8 +184,9 @@ extern "C" {
 #define FH2_HUD_MARK_DIM      2       /* faded white */
 
 /* Sounds (play_ui_sound): the game's own, FH2_SOUND_ in fh2mod.h (API 10),
-   shared with the UI templates. This preview plays only 5 to 11; 1 to 4
-   are the menus' own sounds, which it doesn't play:
+   shared with the UI templates, whose api->play_ui_sound plays all eleven
+   with no layer (see play_ui_sound below). This preview plays only 5 to 11;
+   1 to 4 are the menus' own sounds, which it doesn't play:
      FH2_SOUND_ERROR    the menus' "can't do that"; quiet in the world
      FH2_SOUND_NOTIFY   the game's notification chime; in the world only
      FH2_SOUND_INFO     a pop-up opening; faint in the world
@@ -396,7 +397,14 @@ typedef struct FH2HudInterface {
     int (*hold_game_hud)(FH2Mod* mod, int hold);
 
     /* Plays one of the game's UI sounds (FH2_SOUND_) once, at the next
-       frame. NOTIFY and the three TICKs only sound in the world, so they're
+       frame. New code should use the API's play_ui_sound (api->play_ui_sound,
+       API 10, in fh2mod.h) instead: it needs no layer and plays all eleven.
+       This one has its own gate and its own repeat rule. It needs the MODS
+       tab's hooks, so in a session where they didn't go in it plays nothing
+       while the API's still plays; and its 100 ms between repeats is counted
+       apart from the API's, so a sound sent through both can play twice in
+       one frame. Use one of the two for a sound, not both.
+       NOTIFY and the three TICKs only sound in the world, so they're
        refused while the free-roam HUD page isn't on screen (a menu, the map,
        photo mode); the others play anywhere. The same sound at most once per
        100 ms from your mod. Never make a sound the only cue. Any thread.

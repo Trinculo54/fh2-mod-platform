@@ -33,6 +33,7 @@
 // data\titles folder (Azimuth before 1.0, or Extra Options loaded), where the platform's files go
 // to mediaoverride; then with one (Azimuth 1.0 or later without Extra Options), where they go to
 // the folder's own layer, data\titles\1A96545B\tmp\fh2-platform\media (car_packs.cpp).
+#include "platform_version.h"
 #include "strings.hpp"
 #include "updates.hpp"
 
@@ -407,6 +408,10 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (phase == L"home")
         std::ofstream{"fh2-mods\\platform-popups.ini", std::ios::binary} << "[popups]\r\nDeveloper=1\r\n[player]\r\nModPopups=0\r\nTips=0\r\n";
+    if (phase == L"hud") {   // the HUD layer's diagnostics (Debug=1 in its ini): on in the second layout's run, off in the first
+        if (own_layer()) std::ofstream{"fh2-mods\\platform-hudlayer.ini", std::ios::binary} << "[HudLayer]\r\nDebug=1\r\n";
+        else fs::remove("fh2-mods\\platform-hudlayer.ini");
+    }
     if (phase == L"full" && own_layer()) {   // a save, for the snapshot TestMod asks for (platform 2.8.0)
         fs::create_directories(L"data\\titles\\1A96545B\\saves\\1A96545B");
         std::ofstream{"data\\titles\\1A96545B\\saves\\1A96545B\\test.sav", std::ios::binary} << "save data";
@@ -971,7 +976,7 @@ int wmain(int argc, wchar_t** argv) {
             }
         }
         // No mod adds a HUD layer here, so the preview behaves as 2.8.0: nothing of the layer in the log,
-        // no file of its own, no layer in any A_Hud.xaml written; only line 1 names the build.
+        // no file of its own, no layer in any A_Hud.xaml written.
         CHECK(!has(log, "[HUD layer]"));
         bool hud_files = false;
         for (const auto& e : fs::directory_iterator("fh2-mods")) hud_files = hud_files || e.path().filename().wstring().rfind(L"platform-hudlayer", 0) == 0;
@@ -980,7 +985,13 @@ int wmain(int argc, wchar_t** argv) {
         for (const auto& e : fs::recursive_directory_iterator("."))
             if (e.path().filename() == L"A_Hud.xaml") hud_page = hud_page || has(slurp(e.path()), "FH2 Mod Platform: HUD layer");
         CHECK(!hud_page);
-        CHECK(has(log.substr(0, log.find('\n')), "; this is the 2.9.0 dev build, not a release"));
+        // Line 1 says the build isn't a release only when it's named other than its version (FH2MOD_PLATFORM_BUILD in
+        // CMakeLists.txt, "2.9.0 dev" say); a release's, as CI's tag build makes it, ends with the folder.
+        const std::string line1 = log.substr(0, log.find('\n'));
+        if (std::string(PLATFORM_BUILD_STR) == PLATFORM_VERSION_STR)
+            CHECK(has(line1, "FH2 Mod Platform " PLATFORM_VERSION_STR " (API ") && !has(line1, "not a release") && !has(line1, "; this is the"));
+        else
+            CHECK(has(line1, "; this is the " PLATFORM_BUILD_STR " build, not a release"));
     } else if (hud_phase) {
         // HudTestMod adds a layer with every part; a second one and one after fh2mod_init are refused
         CHECK(has(log, "[HudTestMod] interface found"));
@@ -992,6 +1003,8 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[HudTestMod] set_hud_state: 1"));
         CHECK(has(log, "[HUD layer] 1 mod(s) asked for a HUD layer: HudTestMod; the HUD page gets BAR, CHIPS, TIP, PANEL, COUNTDOWN"));
         CHECK(has(log, "[HUD layer] button prompts: Automatic (fh2-mods\\platform-hudlayer.ini)"));
+        CHECK(has(log, "[HUD layer] Debug=1 (fh2-mods\\platform-hudlayer.ini): the HUD layer's stats every 10 s and its page lines go to the log") ==
+              own_layer());
         CHECK(has(log, "[HudTestMod] MODS row: Button prompts"));   // settings_add's own line, as the hotkeys' rows
         CHECK(has(log, "[HUD layer] crash marker: none from last session"));
         const std::string props  = slurp("fh2-mods\\platform-hudlayer-props.txt");
@@ -1018,7 +1031,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(log, "[HUD layer] page: the layer is left out: A_Hud.xaml couldn't be read from the game's UI.zip"));
             CHECK(!fs::exists("fh2-mods\\platform-hudlayer-A_Hud.xaml") && marker.empty());
         }
-        CHECK(has(slurp("fh2-mods\\platform-session.json"), "\"hud_layer\": \"preview 3: HudTestMod\""));
+        CHECK(has(slurp("fh2-mods\\platform-session.json"), "\"hud_layer\": \"" PLATFORM_BUILD_STR " preview: HudTestMod\""));
         if (argc > 2 && !menus) {
             // the game mapped, but with the layer left out (no UI.zip) its start thread doesn't run: no code checks, no hooks
             CHECK(!has(log, "[HUD layer] hooks:") && !hud_started(log));

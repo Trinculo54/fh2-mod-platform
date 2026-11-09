@@ -39,7 +39,7 @@ pad->add_layer(mod, &chat);
 
 - **The modifier always reaches the game.** Only the layer's buttons are kept from it. Pick a modifier that does nothing harmful while held. LB is the clutch for players who drive manual with clutch, so give them a choice.
 - **Letting go of the modifier first** doesn't hand the button to the game: it stays the layer's until it goes up, so the game never sees a press nobody made.
-- **Menus.** A layer works wherever the game reads the controller, menus too. If your mod only means it for driving, check that yourself before acting on a press.
+- **Menus.** A layer is on in every game state: the title screen, the pause menu and the MODS tab, the map and photo mode as well as driving. While its modifier is held there, the menu doesn't get the layer's buttons and your `on_press` still comes, so a player holding LB (the menus' tab-left) in the pause menu and pressing the d-pad would send your action from the menu. If your layer is for driving, ignore presses while a menu is open: `FH2_HUD_ON_SCREEN` in `hud_status` (with a [HUD layer](hud-layer-preview.md) of your own), or `FH2_UI_ON_SCREEN` in `ui_status` (API 10, in a session with pop-ups or tips: declare them with `ui_uses`), is set while the free-roam HUD page is on screen. Without `FH2_HUD_AVAILABLE`, or `FH2_UI_TOASTS` (in a session where no mod declared pop-ups or tips, say), the platform may not be following that page and the bit may never come, so then let presses through rather than drop them all. A flag for layers that are only on in the world is planned for 2.9.1, in `FH2PadLayer.flags`, which is reserved until then.
 
 ## Changing the modifier
 
@@ -64,8 +64,8 @@ if (pad->buttons(&held) && (held & FH2_PAD_LB)) ...
 
 Each frame the game builds a reading of every controller: a mask of the controls held, and the pad's raw buttons. The platform hooks the function the game calls straight after that (game+0x10768D0), and takes the held buttons of each open layer out of the reading, so every part of the game that reads the controller sees them as not pressed. It also marks them in the game's own mask of taken controls, the one that stops a button that closed a menu from acting in the game behind it. A button the layer has taken stays out of the reading until it goes up. The game keeps the same pad in more than one slot, so presses only count from the slot the game is using. Everything runs on the game's own thread, in the game's own order.
 
-If the game's code doesn't match, `platform.log` says "pad layers are off: the game code doesn't match at ...", `add_layer` still succeeds, and no presses come. If no mod adds a layer, nothing is hooked.
+If the game's code doesn't match, `platform.log` says "pad layers are off: the game code doesn't match at ...", `add_layer` still succeeds, and no presses come. If no mod adds a layer, nothing is hooked, but `buttons` rests on the same code and is checked the same way: if it doesn't match, the log says "the pad's buttons() is off: ..." and `buttons` returns 0. The game's memory is read through a guarded copy, so a controller manager that isn't there or isn't what the platform expects means no presses and no buttons, never a crash.
 
 ## Tests
 
-`tests/pad_engine_test.cpp` checks the rules; `tests/run_pad_test.sh <forza_durango_release_final.exe>` also runs `tests/pad_hook_test.cpp`, which maps the real exe and calls the game's own function through the hook with a controller slot of its own.
+`tests/pad_engine_test.cpp` checks the rules; `tests/run_pad_test.sh <forza_durango_release_final.exe>` also runs `tests/pad_hook_test.cpp`, which maps the real exe and calls the game's own function through the hook with a controller slot of its own, and then with a manager pointer that can't be read and a slot that can't be written.

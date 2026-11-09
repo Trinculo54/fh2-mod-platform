@@ -5,7 +5,9 @@
 #   dist/examples/HelloMod.dll   the example mod (not for players)
 #   dist/include/fh2mod.h        the API header
 #   dist/include/fh2game.h       names for the game addresses mods use
+#   dist/include/fh2mod_*.h      the helpers (translations, UI templates) and the previews' interfaces
 #   dist/tools/fh2mod.exe        runs mods' commands in the running game
+#   dist/tools/l10n/*.py         the translation scripts (docs/translating.md)
 #   dist/README.txt, dist/LICENSE.txt, dist/LICENSE-MinHook.txt
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -18,7 +20,9 @@ cp "$root/build/d3dcompiler_47.dll" "$root/build/DWrite.dll" "$root/dist/"
 cp "$root/build/HelloMod.dll" "$root/dist/examples/"
 mkdir -p "$root/dist/tools"
 cp "$root/build/fh2mod.exe" "$root/dist/tools/"
-cp "$root/include/fh2mod.h" "$root/include/fh2game.h" "$root/dist/include/"
+cp "$root"/include/fh2mod*.h "$root/include/fh2game.h" "$root/dist/include/"
+mkdir -p "$root/dist/tools/l10n"
+cp "$root"/tools/l10n/*.py "$root/dist/tools/l10n/"
 cp "$root/scripts/dist-readme.txt" "$root/dist/README.txt"
 cp "$root/LICENSE" "$root/dist/LICENSE.txt"
 cp "$root/third_party/minhook/LICENSE.txt" "$root/dist/LICENSE-MinHook.txt"

@@ -47,6 +47,7 @@ The language and UI release. Mod settings get one home, the platform's menus fol
 - **UI templates.** `ui_status`, `ui_uses`, `play_ui_sound`, `show_toast`, `clear_toast`, `show_tip`, `tip_seen`, `set_tip_seen`, `show_message_box`, `set_page_help`, `set_page_hints` and `show_page_hint`: the game's own notification, message box and UI sounds, and your pages' help bar and hint line, filled with your text. The platform draws them, decides when they show, logs what they showed, and never takes XAML from you. `include/fh2mod_ui.h` wraps every one so it does nothing on an older platform, with no version checks of your own. `fh2mod Platform ui` says what's on screen and waiting, and `Developer=1` under `[popups]` in `fh2-mods\platform-popups.ini` adds a test page and test commands.
 - **For FH2MP:** the `FH2Platform.Online` interface, with `going_online` to call before connecting. It reports before it changes anything: over 0, nothing changed, so stay offline.
 - **Previews:** `FH2Platform.HudLayer` (version 2, adding a shared feed over the minimap) and `FH2Platform.PadLayer` (version 1). See [hud-layer-preview.md](hud-layer-preview.md) and [pad-layer-preview.md](pad-layer-preview.md).
+- **The release zip** has every header in `include/` now, the helpers (`fh2mod_l10n.h`, `fh2mod_ui.h`, `fh2mod_helpers.h`) and the previews' interfaces (`fh2mod_hud.h`, `fh2mod_pad.h`) as well as `fh2mod.h` and `fh2game.h`, and the translation scripts in `tools\l10n`.
 
 [api.md](api.md) covers every member, and [writing-a-mod.md](writing-a-mod.md#showing-things-to-the-player) has a table of which template to use for what.
 
@@ -78,7 +79,7 @@ When you release a mod built on 2.9.0, bump your `platform` submodule to the v2.
 - **Message boxes' help bar** reads "(A) Select (B) Cancel" while the box's last item says Back. Both do the same: none of the game's eight help bars for its message box pairs Select with Back.
 - **Car packs aren't read with Extra Options loaded.** They need Azimuth 1.0 or later without it.
 - **A saved upgrade whose part no longer exists** (a car pack or mod that changed the database, then removed) can still stop the game as the car loads. That one isn't guarded yet; game-notes.md says why.
-- **The HUD layer and pad layer are previews.** They aren't part of an API version, and their names, limits and behaviour may change before they are.
+- **The HUD layer and pad layer are previews.** They aren't part of an API version, and their names, limits and behaviour may change before they are. A pad layer is on in every game state, menus and the title screen too, so a layer meant for driving has to ignore presses while a menu is open; a flag for layers that are only on in the world is planned for 2.9.1. The HUD layer's own `play_ui_sound` has its own gate and repeat rule: use the API's `play_ui_sound` in new code.
 - **Under Wine and Proton**, hotkeys and commands (from 2.8.0) and the new pop-ups, tips and message boxes haven't been tried in game yet.
 
 ## Credits

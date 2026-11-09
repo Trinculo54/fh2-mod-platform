@@ -75,7 +75,7 @@ The game's menus have room for so many characters, and translations are often lo
 
 ### Make the files
 
-Run these from your repo; Python 3 is all they need.
+Run these from your repo; Python 3 is all they need. They're in the platform's repo (your `platform` submodule, as below) and, from 2.9.0, in its release zip's `tools\l10n`.
 
 ```sh
 # the English, with notes and limits: l10n/MyMod.pot (commit it)

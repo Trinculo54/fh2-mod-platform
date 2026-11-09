@@ -1,6 +1,6 @@
 # The HUD layer (preview)
 
-**This is a preview, and it will change.** Platform 2.9.0 is the first release with the HUD layer; before that it was only in a test build, "2.8.0 + HUD layer preview 3", for the testers of a mod that needed it. It still isn't part of the API in `fh2mod.h`: it's an interface the platform publishes, and when it moves into the API its names, limits and behaviour may all change, and this interface may go. Never make it the only way your mod works.
+**This is a preview, and it will change.** Platform 2.9.0 is the first release with the HUD layer, which it publishes as a preview interface; before that it was only in a test build, "2.8.0 + HUD layer preview 3", for the testers of a mod that needed it. It still isn't part of the API in `fh2mod.h`: it's an interface the platform publishes, and when it moves into the API its names, limits and behaviour may all change, and this interface may go. Never make it the only way your mod works.
 
 The layer is a heads-up display of your own, drawn by the game's own UI inside its free-roam HUD page, in the game's look and fonts: a bar along the bottom of the screen with tabs, two status lines, a strip of marks and button prompts; small labels (chips) at the top; a tip card; a panel of rows; a countdown in the middle of the screen; and a white blink across the picture. You fill the parts with text and numbers; the platform owns the layout, so nothing you set can break the game's HUD page. The header, [`include/fh2mod_hud.h`](../include/fh2mod_hud.h), is the reference for every member; this page explains how it behaves. Testers of the old test build: see [Which builds have it](#which-builds-have-it) at the end.
 
@@ -214,7 +214,7 @@ You need a layer to hold the game's HUD, even if you never show it.
 int play_ui_sound(FH2Mod* mod, uint32_t sound);
 ```
 
-Plays one of the game's own UI sounds once, at the next frame. Never make a sound the only cue. Platform 2.9.0's API has the same call for every mod, with no layer needed and the same numbers, rules and player (`play_ui_sound` in [api.md](api.md)); this one is for a layer's own sounds, played with its frame.
+Plays one of the game's own UI sounds once, at the next frame. Never make a sound the only cue. Platform 2.9.0's API has the same call for every mod, with no layer needed, all eleven sounds and the same player (`play_ui_sound` in [api.md](api.md)): use that one in new code. This one has its own gate and its own repeat rule. It needs the MODS tab's hooks, so in a session where they didn't go in it plays nothing (the log says the sound player isn't ready) while the API's still plays; and its 100 ms between repeats is counted apart from the API's, so a sound sent through both can play twice in one frame. Use one of the two for a sound, not both.
 
 | Sound | What it is | Where it plays |
 |---|---|---|
@@ -281,7 +281,7 @@ Letting go brings the speedometer and map back in one frame.
 Prompts follow the device the player used last: the game's own controller pictures, or key names on key caps.
 
 - **Automatic** (the default): the newest input wins. A key going down, a mouse button or the mouse moving (in two readings running and by 3 px or more, so the window placing the pointer doesn't count) picks key caps; a button, a trigger or a stick on an Xbox-style (XInput) pad picks pad pictures. The modifiers, the Windows keys, any key while a Windows key is down (Win+Alt+R starts a recording, say) and the platform's hotkeys' own keys don't count. It switches at most every 150 ms, and only watches while the game is in front. At start-up it shows pad pictures if an XInput pad is connected, otherwise key caps; until it knows, key caps.
-- **The "Button prompts" row:** Automatic, Controller or Keyboard and mouse, on the first layer mod's page under Pause > MODS > YOUR MODS (Pause > Settings > MODS opens the same list). A change applies straight away and is kept in `fh2-mods\platform-hudlayer.ini`. The row's description also names the build. Controller or Keyboard and mouse there also decides how every mod's tips (API 10's `show_tip`) write their buttons, and what `ui_status`'s `FH2_UI_KEYBOARD` says; Automatic leaves both following the device used last.
+- **The "Button prompts" row:** Automatic, Controller or Keyboard and mouse, on the first layer mod's page under Pause > MODS > YOUR MODS (Pause > Settings > MODS opens the same list). A change applies straight away and is kept in `fh2-mods\platform-hudlayer.ini`. Controller or Keyboard and mouse there also decides how every mod's tips (API 10's `show_tip`) write their buttons, and what `ui_status`'s `FH2_UI_KEYBOARD` says; Automatic leaves both following the device used last.
 - **Pads that aren't XInput** (a DualSense without Steam Input, or a keyboard that Azimuth reads as a controller) aren't seen: choose Controller.
 - `FH2_HUD_KEYBOARD` and `FH2_HUD_DEVICE_FORCED` say what the prompts show and whether the player chose.
 
@@ -398,10 +398,12 @@ What the platform writes while a mod has a layer:
 | `fh2-mods\platform-hudlayer-A_Hud.xaml` | a copy of that page, for checking it |
 | `fh2-mods\platform-hudlayer-props.txt` | the page's properties, one a line: name, type, default and values |
 | `fh2-mods\platform-hudlayer-marker.txt` | the crash marker, gone 10 s after the HUD page is first on screen |
-| `fh2-mods\platform-hudlayer.ini` | the Button prompts choice, made the first time the row is changed |
+| `fh2-mods\platform-hudlayer.ini` | the Button prompts choice, made the first time the row is changed; `Debug=1` under `[HudLayer]` (added by hand) puts the layer's diagnostics in the log |
 | `fh2-mods\notices\HUD layer.txt` | the title-screen line, after a session the crash marker left the layer out of |
 
-`fh2-mods\platform-session.json` gets `"hud_layer": "preview 3: <mods with a layer>"`, and every crash report a line `platform: FH2 Mod Platform <build>` after the CRASH line, plus a `HUD layer:` line saying what the layer was doing.
+`fh2-mods\platform-session.json` gets `"hud_layer": "2.9.0 preview: <mods with a layer>"` (the build's own name in place of 2.9.0, for a build that isn't a release), and every crash report a line `platform: FH2 Mod Platform <build>` after the CRASH line, plus a `HUD layer:` line saying what the layer was doing.
+
+**Diagnostics.** The layer's stats every 10 s, each page its getters meet, and every time the HUD page is shown or hidden go to `platform.log` only with `Debug=1` under `[HudLayer]` in `fh2-mods\platform-hudlayer.ini`, or `Developer=1` under `[popups]` in `fh2-mods\platform-popups.ini`, read as the game starts. Without either, the log has the first time the HUD page is shown and hidden, and the rest of the lines below. Turn it on for a session you'll send back about the layer.
 
 **What to send back:** `fh2-mods\platform.log` from the session (the platform also keeps each session's copy in `fh2-mods\platform-logs\`, so an older one isn't lost when the game starts again), any `fh2-mods\crashes\crash-*.txt` from it, and the log of the mod that uses the layer.
 
@@ -417,7 +419,7 @@ The layer's own lines start with `[HUD layer]`; lines about one mod's layer carr
 | `[HUD layer] code: <group>: as expected` / `doesn't match the exe on disk; ...` | the game's code for the layer, group by group |
 | `[HUD layer] the HUD layer is off: the game exe couldn't be read from the game folder ...` | there was no exe to check the layer's code against, so none of it was used |
 | `[HUD layer] hooks: 4 of 4 made and on; the HUD layer is ready` | start-up is done |
-| `[HUD layer] HUD page 0x... (Hud) shown at frame ...` / `hidden` / `destroyed` | the HUD page coming and going |
+| `[HUD layer] HUD page 0x... (Hud) shown at frame ...` / `hidden` / `destroyed` | the HUD page coming and going (shown and hidden the first time in a session, and every time with `Debug=1`) |
 | `[HUD layer] the HUD page was shown without the layer's values ...` | the game didn't read the platform's page; the layer is off |
 | `[<mod>] HUD layer shown: ...` / `HUD layer hidden ...` / `... showed its layer, so this one is hidden` | showing and hiding, and the screen changing hands |
 | `[<mod>] HUD layer: no call for ... s while on screen ...` | a lease ran out |
@@ -425,4 +427,4 @@ The layer's own lines start with `[HUD layer]`; lines about one mod's layer carr
 | `[HUD layer] button prompts: ...` / `device: ...` | the Button prompts choice, and the device as it changes |
 | `[<mod>] sound: ... played` / `dropped: ...` | sounds |
 | `... crashed in the game's code ...` | a fault, and what it turned off |
-| `[HUD layer] stats: ...`, then `Strings: ...` | every 10 s: frames, cost, values told, and the texts in use. The `Strings` line's "left with the game" should stay near 0, and its references steady while the car is parked. "left with the page while off screen" may grow by one for each text that changed during a visit of more than 2 s to the pause menu or the map: the game frees those once the HUD page is back, so only "left with the game" growing points to a leak |
+| `[HUD layer] stats: ...`, then `Strings: ...` | with `Debug=1`, every 10 s: frames, cost, values told, and the texts in use. The `Strings` line's "left with the game" should stay near 0, and its references steady while the car is parked. "left with the page while off screen" may grow by one for each text that changed during a visit of more than 2 s to the pause menu or the map: the game frees those once the HUD page is back, so only "left with the game" growing points to a leak |
