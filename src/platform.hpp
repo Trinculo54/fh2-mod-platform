@@ -153,6 +153,13 @@ std::map<uint16_t, std::wstring> database_strings();
 // other installs don't show it). Only looked for while a pack adds cars. For the MODS tab.
 std::string car_pack_sql_warning(const std::string& pack);
 std::string mod_sql_warning(const std::string& mod);
+// Where the database the game reads comes from, for the database guards (db_guards.hpp): the files as they are
+// now, told apart as apply_database tells them.
+struct DbFacts;
+DbFacts database_facts();
+// The cars in that database whose powertrain isn't in its Powertrains table, as "MEDIANAME (Id)" (db_guards.hpp's
+// query), or none when there are none or it can't be read.
+std::vector<std::string> cars_without_powertrain();
 
 // hooks.cpp: the hook API, and what crash reports say about hooks.
 // The folder of Extra Options' winmm.dll if it's loaded, else empty. Extra Options is recognised

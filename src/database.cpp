@@ -34,6 +34,7 @@
 // puts the server's database in mediaoverride for online play, which needs
 // exactly that one, so the database is built there as before.
 #include "car_ids.hpp"
+#include "db_guards.hpp"
 #include "platform.hpp"
 #include "text.hpp"
 #include "updates.hpp"
@@ -958,6 +959,59 @@ static std::string shown_warnings(const std::map<std::string, std::vector<std::s
 std::string car_pack_sql_warning(const std::string& pack) { return shown_warnings(g_pack_warnings, pack); }
 
 std::string mod_sql_warning(const std::string& mod) { return shown_warnings(g_mod_warnings, mod); }
+
+// The files as the game finds them now: this folder's own database on the temp drive (only ever the platform's),
+// mediaoverride's told apart as apply_database tells it, and whether mediapc has one of its own.
+DbFacts database_facts() {
+    std::scoped_lock lk{g_db_mu};
+    DbFacts d;
+    if (game_mount().empty()) return d;
+    const Files f = files();
+    d.layer = instance_layer() && is_file(f.layer);
+    switch (classify(f, read_state(f.state))) {
+    case Found::missing: d.override_db = OverrideDb::none; break;
+    case Found::ours:
+    case Found::ours_old:
+    case Found::marked: d.override_db = OverrideDb::platform; break;
+    case Found::fh2ml: d.override_db = OverrideDb::fh2ml; break;
+    case Found::fh2mp: d.override_db = OverrideDb::fh2mp; break;
+    case Found::game: d.override_db = same_bytes(f.target, f.media) ? OverrideDb::copy_of_media : OverrideDb::copy_of_mediapc; break;
+    case Found::foreign: d.override_db = OverrideDb::other; break;
+    }
+    d.mediapc               = is_file(f.mediapc);
+    d.mediapc_same_as_media = d.mediapc && same_bytes(f.mediapc, f.media);
+    return d;
+}
+
+std::vector<std::string> cars_without_powertrain() {
+    std::vector<std::string> cars;
+    fs::path read;
+    {
+        std::scoped_lock lk{g_db_mu};
+        if (game_mount().empty()) return cars;
+        const Files f = files();
+        for (const fs::path* p : {&f.layer, &f.target, &f.mediapc, &f.media})
+            if ((p != &f.layer || instance_layer()) && is_file(*p)) {
+                read = *p;
+                break;
+            }
+    }
+    sqlite3* db = nullptr;
+    if (read.empty() || sqlite3_open_v2(narrow(read.wstring()).c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        sqlite3_close(db);
+        return cars;
+    }
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db, kCarsWithoutPowertrainSql, -1, &st, nullptr) == SQLITE_OK)
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            const auto* name = reinterpret_cast<const char*>(sqlite3_column_text(st, 0));
+            cars.push_back(std::string(name ? name : "?") + " (" +
+                           (sqlite3_column_type(st, 1) == SQLITE_NULL ? std::string("none") : std::to_string(sqlite3_column_int64(st, 1))) + ")");
+        }
+    sqlite3_finalize(st);
+    sqlite3_close(db);
+    return cars;
+}
 
 void apply_database(const std::vector<FH2Mod*>& mods) {
     std::scoped_lock lk{g_db_mu};

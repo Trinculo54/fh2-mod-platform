@@ -19,6 +19,7 @@
 #include <windows.h>
 #include <psapi.h>
 
+#include "db_guards.hpp"
 #include "hud_layer.hpp"
 #include "l10n.hpp"
 #include "lang.hpp"
@@ -1359,6 +1360,7 @@ DWORD WINAPI load_mods(LPVOID) {
     }
     apply_all();
     build_database();
+    db_guards_start(&g_api);   // the guards for a database missing a car's rows, once the game's code is ready
     settings_start(&g_api);
     pad_layer_start(&g_api);
     plog(std::to_string(loaded.size()) + " mod(s) loaded");
