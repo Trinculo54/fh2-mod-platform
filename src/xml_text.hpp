@@ -6,7 +6,8 @@
 namespace fh2platform {
 
 // `s` as text for a XAML attribute value: & < > " escaped, and a line break as a space (FZTextBlock
-// doesn't break lines, not even at &#10;).
+// doesn't break lines, not even at &#10;). Text that starts with { and ends with } gets a no-break
+// space (&#160;) on the end, so the game doesn't take it for a markup extension ("{0}" stays text).
 //
 // Anything beyond ASCII is written as a character reference (&#183;). The game reads the platform's
 // page files as Windows-1252, so UTF-8 written as it is came out as two or three wrong letters
