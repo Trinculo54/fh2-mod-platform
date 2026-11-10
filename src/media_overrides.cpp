@@ -401,7 +401,13 @@ void start_media_overrides() {
         plog("media overrides: Extra Options is here, so mediaoverride is left to it");
         plog("media overrides: the platform's files go to mediaoverride for this whole session");
         move_old_overrides();
-        car_packs_unavailable(later("Extra Options is loaded."));
+        if (eo_packs()) {
+            plog("car packs: with Extra Options loaded, the packs in fh2-cars could be read, but this build doesn't add them "
+                 "behind Extra Options' file lookup yet");
+            car_packs_unavailable(later("Extra Options is loaded."));
+        } else {
+            car_packs_unavailable(eo_packs_off_reason());
+        }
         return;
     }
     if (extra_options_expected()) {
@@ -427,6 +433,7 @@ void start_media_overrides() {
         // Nothing the platform writes for the game can be used, and there's no MODS tab: nothing for the player here.
         plog("media overrides: the game's Mount folder wasn't found, so the platform writes nothing for the game this session "
              "(to this Azimuth folder's own layer or anywhere else), and car packs aren't read");
+        write_engine_synths();   // so an engine sound mod isn't told about cars from a session that read them
     } else if (instance_layer_missing() == NoLayer::no_scratch) {
         plog("media overrides: this Azimuth folder has data\\titles\\1A96545B, but no tmp\\Turn10Temp.scratch in it (the game makes "
              "that folder on its T:\\ drive the first time it starts), so it can't be told that the game's T:\\ is there; for this "

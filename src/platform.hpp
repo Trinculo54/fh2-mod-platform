@@ -133,6 +133,18 @@ bool instance_layer();
 // Why instance_layer() is false, decided with it: the first of those it didn't find (none when it's true).
 enum class NoLayer { none, no_game, extra_options, no_titles, no_scratch };
 NoLayer instance_layer_missing();
+// Car packs with Extra Options loaded (platform 2.9.0): the platform reads fh2-cars itself and chains its file lookup
+// behind Extra Options' (media_overrides.cpp). Decided once, as the platform starts, and logged with its reason: Extra
+// Options found by its export (not only expected, under Wine), its FH2_ExtraOptions.ini there and not saying [Global]
+// Enabled=0, its media overrides on or a mod of its own there (without either it mounts nothing), its status not
+// already final ("REFUSED" or "DISABLED"), the game's Mount folder known, T:\ there (instance_layer's checks), no
+// fh2mp folder, and a pack in fh2-cars.
+bool eo_packs();
+// Why not, while Extra Options is loaded and eo_packs() is false: a message from later(), or "" when there's nothing
+// to tell the player (no pack in fh2-cars, no game folder).
+std::string eo_packs_off_reason();
+// Car packs are read this session: in this folder's own layer, or with Extra Options.
+bool car_packs_mountable();
 // Where overrides are written: instance_media(), else the game's mediaoverride.
 std::filesystem::path override_root();
 // The two places the platform writes files for the game (its roots): mediaoverride, and this Azimuth folder's own
@@ -156,14 +168,16 @@ void move_old_tables();
 int move_old_override(unsigned root, const std::filesystem::path& rel, std::string& error);
 const std::vector<CarPack>& car_packs();
 // Finds the packs, puts their files on the temp drive, and writes the merged zipmanifest.xml to
-// instance_media(). Their SQL goes into the database with the mods' (apply_database).
+// instance_media(), or with Extra Options to eo_media(). Their SQL goes into the database with the mods'
+// (apply_database) in the layer; with Extra Options it isn't run yet.
 void prepare_car_packs();
-// That merged zipmanifest.xml is in the layer this session (a pack has zips): set_file refuses a mod's.
+// That merged zipmanifest.xml is the platform's this session (a pack has zips): set_file refuses a mod's.
 bool car_packs_manifest();
 // Once a pack's cars have their Ids (database.cpp): the part Ids of their own that their carbins
 // name (<car>.part-ids.txt), set in their zips on the temp drive.
 void place_car_ids(const CarPack& pack, const std::vector<std::pair<std::string, int64_t>>& cars);
-// Without the layer the packs in fh2-cars aren't read: says so (with `why`) when there are any.
+// When the packs in fh2-cars aren't read (no layer, and not with Extra Options): says so (with `why`) when there are
+// any, and removes fh2-mods\platform-engine-synths.txt.
 void car_packs_unavailable(const std::string& why);   // why: a sentence, as a message from later() (text.hpp)
 // Why the packs in fh2-cars aren't read this session (for the MODS tab), or "".
 std::string car_packs_unread();
@@ -205,6 +219,23 @@ std::vector<std::string> cars_without_powertrain();
 // of the one beside azimuth.exe unless told otherwise (WINEDLLOVERRIDES="winmm=n,b"), and still
 // report that file's path for it.
 std::filesystem::path extra_options_dir();
+// That DLL itself (its HMODULE), or nullptr.
+void* extra_options_module();
+// What's known about it without importing anything (platform 2.9.0, car packs with Extra Options): its file, where its
+// image is in memory (from its PE header), its version (the "Forza Horizon 2 Extra Options x.y.z" in its image; "" when
+// it has none), its PE TimeDateStamp and its file's size. All empty when it isn't loaded.
+struct ExtraOptionsFacts {
+    std::filesystem::path module;
+    uintptr_t lo = 0, hi = 0;
+    std::string version;
+    uint32_t timestamp = 0;
+    uint64_t file_size = 0;
+};
+ExtraOptionsFacts extra_options_facts();
+// Its status now, as its Fh2TweaksStatus export gives it: "Not initialized" and "Waiting for Azimuth to prepare the
+// loaded game." before the game is mapped, then "OK: ...", "REFUSED: ...", "DISABLED: ..." or "INACTIVE: ...".
+// "" when it isn't loaded.
+std::string extra_options_status();
 // Under Wine or Proton, when the list of loaded DLLs can't be read, so whether Extra Options is
 // loaded can't be told: whether its winmm.dll is next to azimuth.exe and Wine is set to load it
 // rather than its own (WINEDLLOVERRIDES, or winecfg's DLL overrides). It then counts as loaded:

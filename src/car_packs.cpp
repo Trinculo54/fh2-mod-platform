@@ -38,10 +38,13 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <set>
 #include <sstream>
 
 namespace fh2platform {
@@ -450,6 +453,146 @@ NoLayer instance_layer_missing() {
 
 bool instance_layer() { return instance_layer_missing() == NoLayer::none; }
 
+namespace {
+
+// Extra Options' own mods (its mods loader) that have a media folder: mods\Forza Horizon 2\<mod>\ from 0.6, and
+// mods\<mod>\ as 0.4 has them (0.6 moves those as it starts). A folder that folder's loadorder.txt lists as "#<mod>"
+// is turned off; one it doesn't list at all, Extra Options adds to the list as it starts, turned on.
+struct EoMod {
+    std::string name;   // as the log shows it: "Forza Horizon 2\<mod>" or "<mod>"
+    fs::path media;
+};
+
+std::vector<EoMod> eo_mods() {
+    std::vector<EoMod> out;
+    const fs::path mods = azimuth_dir() / L"mods";
+    for (const bool newer : {true, false}) {
+        const fs::path dir = newer ? mods / L"Forza Horizon 2" : mods;
+        std::set<std::string> off;
+        std::istringstream order{read_all(dir / L"loadorder.txt")};
+        for (std::string l; std::getline(order, l);) {
+            if (l.rfind("\xEF\xBB\xBF", 0) == 0) l.erase(0, 3);
+            const auto first = l.find_first_not_of(" \t");
+            if (first == std::string::npos || l[first] != '#') continue;
+            l.erase(0, first + 1);
+            l.erase(0, std::min(l.size(), l.find_first_not_of(" \t")));
+            l.erase(l.find_last_not_of(" \t\r") + 1);
+            off.insert(lower(l));
+        }
+        std::error_code ec;
+        for (const auto& e : fs::directory_iterator(dir, ec)) {
+            const std::string name = narrow(e.path().filename().wstring());
+            if (!e.is_directory(ec) || off.count(lower(name)) || !fs::is_directory(e.path() / L"media", ec)) continue;
+            if (!newer && (lower(name) == "forza horizon 2" || lower(name) == "forza motorsport 5" ||
+                           lower(name) == "forza horizon 3" || lower(name) == "cache"))
+                continue;   // its own folders, not mods
+            out.push_back({(newer ? "Forza Horizon 2\\" : "") + name, e.path() / L"media"});
+        }
+    }
+    return out;
+}
+
+int packs_in_fh2_cars() {
+    std::error_code ec;
+    int n = 0;
+    for (const auto& e : fs::directory_iterator(azimuth_dir() / "fh2-cars", ec))
+        n += e.is_directory(ec) && fs::is_directory(e.path() / "media", ec);
+    return n;
+}
+
+struct EoDecision {
+    bool on = false;
+    std::string why;   // why not, for the player (a message from later()), or ""
+};
+
+// Logged as it's made: what Extra Options is, then whether the packs are read with it, and why not.
+EoDecision decide_eo_packs() {
+    EoDecision d;
+    if (extra_options_dir().empty()) {
+        if (extra_options_expected())   // under Wine, counted as loaded: what it does can't be seen, so as in rc1
+            d.why = later("Extra Options is loaded.");
+        return d;
+    }
+    const ExtraOptionsFacts eo = extra_options_facts();
+    const std::string status   = extra_options_status();
+    char built[96] = "its PE header couldn't be read";
+    if (eo.lo) {
+        const time_t t = eo.timestamp;
+        tm utc{};
+        if (eo.timestamp && gmtime_s(&utc, &t) == 0)
+            std::snprintf(built, sizeof built, "PE time stamp 0x%08X (%04d-%02d-%02d %02d:%02d UTC)", eo.timestamp,
+                          utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min);
+        else
+            std::snprintf(built, sizeof built, "PE time stamp 0x%08X", eo.timestamp);
+    }
+    plog("car packs: Extra Options is " + narrow(eo.module.wstring()) + " (version " +
+         (eo.version.empty() ? std::string("unknown: its image doesn't say") : eo.version) + ", " + built + ", " +
+         std::to_string(eo.file_size) + " bytes); its status now: \"" + status + "\"");
+    const auto off = [&](const std::string& why, const std::string& log) {
+        d.why = why;
+        if (const int n = packs_in_fh2_cars())
+            plog("car packs: with Extra Options loaded, the " + std::to_string(n) + " pack(s) in fh2-cars aren't read this session: " + log);
+        return d;
+    };
+    const fs::path ini = extra_options_dir() / L"FH2_ExtraOptions.ini";
+    std::error_code ec;
+    if (!fs::is_regular_file(ini, ec))
+        return off(later("Extra Options can't read its FH2_ExtraOptions.ini, so it doesn't start."),
+                   "there's no FH2_ExtraOptions.ini next to Extra Options' winmm.dll, so it refuses to start");
+    // As Extra Options reads them: 0 or 1, [General] being an older name for [Global]. Its media overrides are off when
+    // the line isn't there.
+    const auto flag = [&](const wchar_t* section, const wchar_t* key, int fallback) {
+        return static_cast<int>(GetPrivateProfileIntW(section, key, fallback, ini.c_str()));
+    };
+    if (flag(L"Global", L"Enabled", 1) == 0 || flag(L"General", L"Enabled", 1) == 0)
+        return off(later("Extra Options is switched off in its FH2_ExtraOptions.ini ([Global] Enabled=0)."),
+                   "FH2_ExtraOptions.ini says [Global] Enabled=0, so Extra Options makes no changes");
+    if (status.rfind("REFUSED", 0) == 0 || status.rfind("DISABLED", 0) == 0 || status.rfind("INACTIVE", 0) == 0)
+        return off(later("Extra Options made no changes to the game: {0}", {status}), "Extra Options has already given up: " + status);
+    if (game_mount().empty()) return off({}, "the game's Mount folder wasn't found");
+    if (fs::is_directory(azimuth_dir() / L"fh2mp", ec))
+        return off(later("FH2MP is in this Azimuth folder; with Extra Options, car packs aren't read here yet."),
+                   "this Azimuth folder has an fh2mp folder (FH2MP copies its server's database over mediaoverride's, which "
+                   "the packs' folder would hide)");
+    const bool media = flag(L"Files", L"EnableMediaOverrides", 0) != 0;
+    const std::vector<EoMod> mods = eo_mods();
+    plog("car packs: Extra Options' media overrides are " + std::string(media ? "on" : "off") +
+         " (EnableMediaOverrides in FH2_ExtraOptions.ini), and it has " + std::to_string(mods.size()) +
+         " mod(s) of its own with a media folder, turned on");
+    if (!media && mods.empty())
+        return off(later("Extra Options' media overrides are off (EnableMediaOverrides=0 in FH2_ExtraOptions.ini) and it has no "
+                         "mods, so it doesn't let the game read other folders."),
+                   "Extra Options' media overrides are off and it has no mods of its own, so it mounts no folders at all");
+    if (!fs::is_directory(temp_drive().parent_path(), ec))
+        return off(later("This Azimuth folder has no data\\titles\\1A96545B folder yet: Azimuth makes it the first time the game starts."),
+                   "this Azimuth folder has no data\\titles\\1A96545B yet (Azimuth makes it the first time the game starts)");
+    if (!fs::is_directory(temp_drive() / L"Turn10Temp.scratch", ec))
+        return off(later("This Azimuth folder has no data\\titles\\1A96545B\\tmp\\Turn10Temp.scratch folder yet: the game makes it "
+                         "the first time it starts."),
+                   "there's no data\\titles\\1A96545B\\tmp\\Turn10Temp.scratch yet (the game makes it on its T:\\ drive the first "
+                   "time it starts)");
+    if (!packs_in_fh2_cars()) {
+        plog("car packs: Extra Options is loaded and fh2-cars has no pack, so there's nothing to read with it");
+        return d;
+    }
+    d.on = true;
+    return d;
+}
+
+const EoDecision& eo_decision() {
+    // Once, as instance_layer: the whole session goes by it.
+    static const EoDecision d = decide_eo_packs();
+    return d;
+}
+
+} // namespace
+
+bool eo_packs() { return eo_decision().on; }
+
+std::string eo_packs_off_reason() { return eo_decision().why; }
+
+bool car_packs_mountable() { return instance_layer() || eo_packs(); }
+
 fs::path override_root() {
     return instance_layer() ? instance_media() : game_mount() / "mediaoverride";
 }
@@ -478,14 +621,14 @@ const std::vector<CarPack>& car_packs() { return g_packs; }
 bool car_packs_manifest() { return g_merged.load(); }
 
 void car_packs_unavailable(const std::string& why) {
-    std::error_code ec;
-    int n = 0;
-    for (const auto& e : fs::directory_iterator(azimuth_dir() / "fh2-cars", ec))
-        n += e.is_directory(ec) && fs::is_directory(e.path() / "media", ec);
-    if (!n) return;
+    // No pack is read, so an engine sound mod mustn't be told about any (the list from a session that read them would
+    // have it load sounds for cars that aren't in the game).
+    write_engine_synths();
+    const int n = packs_in_fh2_cars();
+    if (!n || why.empty()) return;
     g_unread_why = why;
-    g_unread = later("The {0} car pack(s) in fh2-cars aren't read: {1} They need Azimuth 1.0 or later, without Extra Options.",
-                     {std::to_string(n), why});
+    // (2.9.0 rc1 added "They need Azimuth 1.0 or later, without Extra Options.", which is no longer so.)
+    g_unread = later("The {0} car pack(s) in fh2-cars aren't read: {1}", {std::to_string(n), why});
     plog("car packs: " + english(g_unread));
 }
 
@@ -669,7 +812,9 @@ void write_engine_synths() {
     const fs::path out = azimuth_dir() / "fh2-mods" / "platform-engine-synths.txt";
     std::error_code ec;
     if (text.empty()) {
-        if (fs::remove(out, ec)) plog("car packs: no pack has an engine sound of its own; removed platform-engine-synths.txt");
+        if (fs::remove(out, ec))
+            plog(g_packs.empty() ? "car packs: no pack is read this session; removed platform-engine-synths.txt"
+                                 : "car packs: no pack has an engine sound of its own; removed platform-engine-synths.txt");
         return;
     }
     if (read_all(out) != text && !write_all(out, text))
