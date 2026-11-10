@@ -10,7 +10,7 @@ b=$root/build-test
 exe=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 other=
 [ -n "${2:-}" ] && other=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
-phases="plain eo eo-hidden wine-builtin changed-code crash"
+phases="plain eo eo-hidden eo-packs eo-packs-refused eo-packs-late eo-packs-changed wine-builtin changed-code crash"
 [ -n "$other" ] && phases="$phases other-game skip-launcher"
 status=0
 for phase in $phases; do
@@ -18,7 +18,8 @@ for phase in $phases; do
     mkdir -p "$dir/fh2-mods" "$dir/FH2/Mount/media/Stripped/StringTables"
     cp "$b/hook_test.exe" "$dir/azimuth.exe"
     cp "$b/d3dcompiler_47.dll" "$dir/"
-    cp "$b/HookMod.dll" "$b/Legacy.dll" "$dir/fh2-mods/"
+    # The car packs with Extra Options phases have no mods: only what the platform does to the game's file lookup.
+    case $phase in eo-packs*) ;; *) cp "$b/HookMod.dll" "$b/Legacy.dll" "$dir/fh2-mods/" ;; esac
     ln -s "$exe" "$dir/FH2/Mount/forza_durango_release_final.exe"
     mapped=$exe
     args=()
@@ -38,6 +39,17 @@ for phase in $phases; do
         printf "another mod's database" > "$dir/FH2/Mount/mediaoverride/Stripped/gamedbRC.slt"
     fi
     overrides=
+    case $phase in eo-packs*)
+        # Extra Options (the stand-in) with its media overrides on, the game's T:\ drive as Azimuth keeps it, and a
+        # car pack with one (empty) zip, next to the game's own list of zips.
+        cp "$b/winmm.dll" "$dir/"
+        overrides="winmm=n,b"
+        printf '[Global]\r\nEnabled=1\r\n[Files]\r\nEnableMediaOverrides=1\r\n' > "$dir/FH2_ExtraOptions.ini"
+        mkdir -p "$dir/data/titles/1A96545B/tmp/Turn10Temp.scratch" "$dir/fh2-cars/TestPack/media/cars"
+        printf 'PK\005\006\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' > "$dir/fh2-cars/TestPack/media/cars/TEST_Car.zip"
+        printf '<ZipFiles>\r\n</ZipFiles>\r\n' > "$dir/FH2/Mount/media/zipmanifest.xml"
+        ;;
+    esac
     if [ "$phase" = eo ] || [ "$phase" = eo-hidden ] || [ "$phase" = wine-builtin ]; then
         cp "$b/winmm.dll" "$dir/"
         # As on Linux: Extra Options' winmm.dll loads only with this override. Without it (the

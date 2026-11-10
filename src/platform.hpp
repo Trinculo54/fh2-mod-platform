@@ -98,7 +98,8 @@ void clean_leftover_files(const std::vector<FH2Mod*>& mods);
 // Removes one override from an earlier launch now, if no mod replaces it this time.
 void remove_leftover_file(const char* media_path);
 
-// media_overrides.cpp: mounts mediaoverride and mediapc itself when Extra Options isn't loaded.
+// media_overrides.cpp: mounts mediaoverride and mediapc itself when Extra Options isn't loaded, and with Extra
+// Options, the car packs behind its file lookup (eo_packs).
 void start_media_overrides();
 
 // car_packs.cpp: this Azimuth folder's own media layer, and car packs.
@@ -118,6 +119,9 @@ struct CarPack {
         std::string car, sound, base, synth; // media name; PG_ bank names without "PG_"; .synth file under the pack
     };
     std::vector<EngineSound> engine_sounds;
+    // Left out whole this session (with Extra Options: a file of it is also somewhere Extra Options has the game read
+    // ahead of the packs): not mounted, no zip lines, no SQL. Its row says why (car_pack_problem).
+    bool left_out = false;
 };
 // <Azimuth>\data\titles\1A96545B\tmp, the folder Azimuth gives the game as its T:\ drive.
 std::filesystem::path temp_drive();
@@ -145,6 +149,18 @@ bool eo_packs();
 std::string eo_packs_off_reason();
 // Car packs are read this session: in this folder's own layer, or with Extra Options.
 bool car_packs_mountable();
+// temp_drive()\fh2-platform\eo-media: with Extra Options, the folder mounted ahead of every other, which holds the
+// packs' merged zipmanifest.xml. The platform owns it outright: anything else in it is removed at start.
+std::filesystem::path eo_media();
+// With Extra Options, once the packs were read: they aren't in the game this session after all (`why`: a message from
+// later()). Each pack's row says so in red, over any other problem it had, and the log and fh2-mods\platform-eo-packs.txt
+// say why. The first reason given is kept. Any thread.
+void car_packs_lost(const std::string& why);
+// fh2-mods\platform-eo-packs.txt, this session's outcome with Extra Options: "on" (read; the game hasn't looked
+// anything up yet), "in" (their folders are ahead of Extra Options') or "lost", a tab, and why or how in English.
+// Written as it's known; "" removes it (a session where the packs aren't read with Extra Options). Once lost, it
+// stays so.
+void note_eo_packs_outcome(const std::string& outcome, const std::string& why);
 // Where overrides are written: instance_media(), else the game's mediaoverride.
 std::filesystem::path override_root();
 // The two places the platform writes files for the game (its roots): mediaoverride, and this Azimuth folder's own

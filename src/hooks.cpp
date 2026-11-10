@@ -621,8 +621,15 @@ ExtraOptionsFacts extra_options_facts() {
 
 std::string extra_options_status() {
     using StatusFn = const char* (*)();
-    HMODULE w = static_cast<HMODULE>(extra_options_module());
-    const auto status = w ? reinterpret_cast<StatusFn>(reinterpret_cast<void*>(GetProcAddress(w, "Fh2TweaksStatus"))) : nullptr;
+    // Looked up once: GetProcAddress waits for the loader, which is busy with the game's own DLLs just when the car
+    // packs' watcher asks every 50 ms (media_overrides.cpp, watch_eo).
+    static std::atomic<StatusFn> found{nullptr};
+    StatusFn status = found.load(std::memory_order_acquire);
+    if (!status) {
+        HMODULE w = static_cast<HMODULE>(extra_options_module());
+        status    = w ? reinterpret_cast<StatusFn>(reinterpret_cast<void*>(GetProcAddress(w, "Fh2TweaksStatus"))) : nullptr;
+        if (status) found.store(status, std::memory_order_release);
+    }
     const char* text = status ? status() : nullptr;
     if (!text) return {};
     // Its buffer (512 characters in its data), which it may be writing just now: a copy, cut at its end.

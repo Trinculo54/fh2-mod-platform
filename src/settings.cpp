@@ -2950,8 +2950,8 @@ std::vector<PageItem> about_items() {
     items.push_back(open);
     urls.push_back(folder);
 
-    // fh2-cars, where car packs are read (Azimuth 1.0 or later without Extra Options) and it's there
-    if (std::error_code ec; instance_layer() && std::filesystem::is_directory(azimuth_dir() / L"fh2-cars", ec)) {
+    // fh2-cars, where car packs are read (this folder's own layer, or with Extra Options) and it's there
+    if (std::error_code ec; car_packs_mountable() && std::filesystem::is_directory(azimuth_dir() / L"fh2-cars", ec)) {
         const std::string cars = narrow((azimuth_dir() / L"fh2-cars").wstring());
         PageItem packs = info(tr("Open car packs folder"), tr("Opens fh2-cars in File Explorer, to add or remove car packs. Packs you add "
                                                               "there are read the next time you start the game."));

@@ -1306,10 +1306,25 @@ static void build_and_write(const std::vector<FH2Mod*>& mods) {
     const Files f = files();
     note_fh2mp_copy(f);
 
-    // Car packs first, so mods' changes reach their cars too.
+    // Car packs first, so mods' changes reach their cars too. With Extra Options (eo_packs) their SQL isn't run in this
+    // build: the database the game reads is mediaoverride's, which every Azimuth folder on this game folder reads, so it
+    // gets the mods' changes only, and the packs' cars aren't in the game.
     std::vector<Sql> sources;
-    for (const auto& p : car_packs())
-        if (!p.sql.empty()) sources.push_back({"car pack " + p.name, &p.sql, &p});
+    std::size_t not_run = 0;
+    for (const auto& p : car_packs()) {
+        if (p.sql.empty()) continue;
+        if (eo_packs()) {
+            const std::string why = later("Its cars aren't in the game database this time.");
+            note_car_pack_problem(p.name, why);
+            g_pack_out[p.name] = why;
+            ++not_run;
+            continue;
+        }
+        sources.push_back({"car pack " + p.name, &p.sql, &p});
+    }
+    if (not_run)
+        plog("database: with Extra Options, this build doesn't run car packs' SQL, so the cars of the " + std::to_string(not_run) +
+             " pack(s) with SQL aren't in the game database this session (mediaoverride's gets the mods' changes only)");
     for (auto* m : mods)
         if (!m->sql.empty()) sources.push_back({m->name, &m->sql});
 

@@ -230,6 +230,14 @@ int set_file(FH2Mod* mod, const char* media_path, const void* data, std::size_t 
                                 "own can be added the same way, as a car pack");
         return 0;
     }
+    // With Extra Options the merged one is in eo-media, which the game reads ahead of mediaoverride: a mod's there would
+    // never be read, and would be taken as the game's list the next time the merged one is built.
+    if (key == L"zipmanifest.xml" && eo_packs() && car_packs_manifest()) {
+        log_line(mod->name, "set_file: " + shown(rel) + " isn't replaced: this session the platform reads the car packs in "
+                                "fh2-cars with Extra Options, and its own zipmanifest.xml, with their zips added to the game's, "
+                                "is read ahead of mediaoverride's. A zip of a mod's own can be added the same way, as a car pack");
+        return 0;
+    }
     std::scoped_lock lk{g_files_mu};
     if (stopped_online(mod)) {   // checked under the lock: go_online sets it before it clears the mod's files
         log_line(mod->name, "set_file: " + shown(rel) + " isn't replaced: this mod was stopped for online play (FH2MP went "

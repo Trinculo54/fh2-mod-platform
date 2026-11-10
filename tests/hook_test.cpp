@@ -30,10 +30,23 @@
 // game's file-lookup pointer (game+0x2E6EF28) for its own function; with
 // it, or with the game's code changed, the pointer stays the game's.
 // Mounting the folders runs game code, so only the live game shows that.
+//
+// Car packs with Extra Options (2.9.0): with a pack in fh2-cars the platform chains behind the stand-in's lookups
+// instead. "eo-packs": the stand-in takes the game's two lookups 300 ms after the game is mapped, as Extra Options
+// does; the platform's must end up in both slots, mount the pack's folder and eo-media ahead of the stand-in's own
+// folder on the first lookup (a sound bank's path), and have the zip list answered by eo-media. "eo-packs-refused":
+// the stand-in says REFUSED and takes nothing, so the slots stay the game's and the packs are lost.
+// "eo-packs-late": the stand-in has set up its folder before the platform's first lookup, so the platform mounts
+// nothing and the packs are lost. "eo-packs-changed": as "eo-packs" with the changed byte of "changed-code", so the
+// platform leaves the slots to the stand-in and the packs are lost. These four run without HookMod (see
+// check_eo_packs below).
 #include <windows.h>
 
+#include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cwchar>
 #include <filesystem>
@@ -85,9 +98,12 @@ static void check_fh2game(const wchar_t* exe) {
     CHECK(bad == 0 && sizeof named / sizeof *named >= 40);
 }
 
+static void stub(char* game, uint32_t rva, const void* to);
+static void stub_file_system(char* game);
+
 // Maps the exe the way Azimuth does, enough for its bytes and protections:
 // sections at their addresses, code read/execute, read-only data read-only.
-static char* map_game(const wchar_t* path, bool change_volume_code, bool other_game = false) {
+static char* map_game(const wchar_t* path, bool change_volume_code, bool other_game = false, bool packs = false) {
     std::ifstream in{path, std::ios::binary};
     std::vector<char> file((std::istreambuf_iterator<char>(in)), {});
     if (file.size() < 4096) return nullptr;
@@ -122,6 +138,7 @@ static char* map_game(const wchar_t* path, bool change_volume_code, bool other_g
         base[0x11E05A0] = static_cast<char>(0xCC);
         VirtualProtect(base + 0x11E05A0, 1, old, &old);
     }
+    if (packs) stub_file_system(base);   // before the headers: there from the moment the game is found
     std::memcpy(base, file.data(), nt->OptionalHeader.SizeOfHeaders);
     VirtualProtect(base, nt->OptionalHeader.SizeOfHeaders, PAGE_READONLY, &old);
     return base;
@@ -325,6 +342,280 @@ static void check_db_guards(char* game, bool guarded) {
     CHECK(ok && g_drive_calls == 2 && g_last_drive == 1 && out->refs == 1 && prefs == 1);
 }
 
+// ---- car packs with Extra Options (src/media_overrides.cpp, watch_eo): the "eo-packs" phases -------------------
+//
+// The game isn't running, so the test plays it. Its file system is an object with the game's own vtable
+// (game+0x2E6ED18, whose +0x210 and +0x1B0 slots are the ones Extra Options and the platform take), a list of volumes
+// laid out as the game's (56-byte entries from +0x30 to +0x38) and a root volume at +0x68. The game functions the
+// platform and the stand-in Extra Options call are stand-ins: the mount (game+0x11F82B0) and the sort
+// (game+0x12039D0) from the start; and, once the platform has checked the game's code against the exe, the resolver
+// (game+0x11F49B0), a file's path on disk (game+0x11F1460), operator new (game+0x3229C0), the folder volume's
+// constructor (game+0x11E05A0) and its "does a file exist" (game+0x11F9C70). A folder volume's reference counting is
+// the game's own code. T:\ is data\titles\1A96545B\tmp here, and game:\ is FH2\Mount.
+
+struct PString {   // an MSVC std::string
+    union {
+        const char* data;
+        char in_place[16];
+    };
+    std::size_t length, capacity;
+};
+static PString pstring(const char* s) {
+    PString p{};
+    p.data     = s;
+    p.length   = std::strlen(s);
+    p.capacity = 31;
+    return p;
+}
+static std::string ptext(const PString* s) { return std::string(s->capacity < 16 ? s->in_place : s->data, s->length); }
+
+struct PVolume {   // the game's folder volume: references at +0x20, its folder at +0x28
+    void** vtable;
+    char pad[0x18];
+    volatile LONG refs;
+    LONG pad2;
+    PString folder;
+    char flag;
+    char pad3[7];
+};
+struct PEntry {   // one of the file system's volumes
+    uint32_t priority, pad;
+    void* volume;
+    PString path;
+    uint32_t hash, pad2;
+};
+struct PFileSystem {
+    void** vtable;
+    char pad[0x28];
+    PEntry *begin, *end;
+    char pad2[0x28];
+    void* root;
+};
+static_assert(sizeof(PEntry) == 56 && offsetof(PFileSystem, begin) == 0x30 && offsetof(PFileSystem, root) == 0x68 &&
+              offsetof(PVolume, refs) == 0x20 && offsetof(PVolume, folder) == 0x28 && sizeof(PVolume) == 0x50, "the game's layout");
+
+using ResolveFn  = unsigned char (*)(PFileSystem*, void**, void*, const PString*, unsigned char, unsigned char, unsigned char, void**, unsigned char);
+using DiskPathFn = void* (*)(PFileSystem*, const PString*, PString*);
+
+static PEntry g_entries[64];
+static PFileSystem g_fs;
+static void* g_own_vtable[1 + 0x1F0 / sizeof(void*)];   // the game's own volumes here: in this exe's image
+static PVolume g_own[3];
+
+static unsigned char own_exists(PVolume*, const PString*) { return 1; }   // the game's media has whatever is asked for
+
+static unsigned char gs_mount(PFileSystem* fs, const PString* target, void** volume, unsigned priority, unsigned char, unsigned char,
+                              const void*) {
+    if (fs->end - fs->begin >= 64) return 0;
+    auto* v = static_cast<PVolume*>(*volume);
+    reinterpret_cast<LONG (*)(PVolume*)>(v->vtable[0x10 / 8])(v);
+    *fs->end++ = PEntry{priority, 0, v, *target, 0, 0};
+    return 1;
+}
+static void gs_sort(PFileSystem* fs) {   // highest priority first, as unsigned numbers
+    std::stable_sort(fs->begin, fs->end, [](const PEntry& a, const PEntry& b) { return a.priority > b.priority; });
+}
+// The first volume in the list's order that has the file.
+static unsigned char gs_resolve(PFileSystem* fs, void** volume, void*, const PString* path, unsigned char, unsigned char, unsigned char,
+                                void**, unsigned char) {
+    const std::string full = ptext(path), under = full.rfind("game:\\media\\", 0) == 0 ? full.substr(12) : full;
+    const PString relative = pstring(under.c_str());
+    for (PEntry* e = fs->begin; e != fs->end; ++e) {
+        auto* v = static_cast<PVolume*>(e->volume);
+        if (reinterpret_cast<unsigned char (*)(PVolume*, const PString*)>(v->vtable[0xE8 / 8])(v, &relative)) {
+            if (volume) *volume = v;
+            return 1;
+        }
+    }
+    return 0;
+}
+// It asks the resolver through the file system's own slot, as the game's does.
+static void* gs_disk_path(PFileSystem* fs, const PString* path, PString* output) {
+    void* volume = nullptr;
+    PString relative{};
+    relative.capacity = 15;
+    reinterpret_cast<ResolveFn>(fs->vtable[0x210 / 8])(fs, &volume, &relative, path, 0, 0, 0, nullptr, 0);
+    return output;
+}
+static void* gs_new(std::size_t n) { return std::calloc(1, n); }
+static PVolume* gs_construct(PVolume* v, const PString* folder, unsigned char flag) {
+    static std::string kept[16];
+    static int made = 0;
+    std::memset(static_cast<void*>(v), 0, sizeof *v);
+    kept[made & 15] = ptext(folder);
+    v->folder       = pstring(kept[made++ & 15].c_str());
+    v->flag         = static_cast<char>(flag);
+    return v;
+}
+static unsigned char gs_exists(PVolume* v, const PString* path) {
+    std::string folder = ptext(&v->folder);
+    if (folder.rfind("T:\\", 0) == 0) folder = "data\\titles\\1A96545B\\tmp\\" + folder.substr(3);
+    else if (folder.rfind("game:\\", 0) == 0) folder = "FH2\\Mount\\" + folder.substr(6);
+    const DWORD a = GetFileAttributesA((folder + ptext(path)).c_str());
+    return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+static void stub_file_system(char* game) {
+    stub(game, 0x11F82B0, reinterpret_cast<const void*>(&gs_mount));
+    stub(game, 0x12039D0, reinterpret_cast<const void*>(&gs_sort));
+}
+
+// The game's file system before anything is mounted over it: three volumes of the game's own.
+static void make_file_system() {
+    g_own_vtable[1 + 0xE8 / 8] = reinterpret_cast<void*>(&own_exists);
+    const unsigned priorities[3] = {0x96, 0x64, 5};
+    for (int i = 0; i < 3; ++i) {
+        g_own[i].vtable = g_own_vtable + 1;
+        g_entries[i]    = PEntry{priorities[i], 0, &g_own[i], pstring("game:\\media\\"), 0, 0};
+    }
+    g_fs.vtable = reinterpret_cast<void**>(0x142E6ED18ull);   // the game's, once it's mapped
+    g_fs.begin  = g_entries;
+    g_fs.end    = g_entries + 3;
+    g_fs.root   = &g_own[2];
+}
+
+// The game looking a file up, and asking for a file's path on disk.
+static bool look_up(const char* path, PVolume** answered) {
+    const PString p = pstring(path);
+    void* volume    = nullptr;
+    PString relative{};
+    relative.capacity = 15;
+    const bool found  = reinterpret_cast<ResolveFn>(g_fs.vtable[0x210 / 8])(&g_fs, &volume, &relative, &p, 0, 0, 0, nullptr, 0) != 0;
+    *answered         = static_cast<PVolume*>(volume);
+    return found;
+}
+static void path_on_disk(const char* path) {
+    const PString p = pstring(path);
+    PString out{};
+    reinterpret_cast<DiskPathFn>(g_fs.vtable[0x1B0 / 8])(&g_fs, &p, &out);
+}
+
+static bool wait_for_log(const char* what, int tenths) {
+    for (int i = 0; i < tenths; ++i) {
+        if (has(slurp(L"fh2-mods\\platform.log"), what)) return true;
+        Sleep(100);
+    }
+    return false;
+}
+
+static void check_eo_packs(const std::wstring& phase, char* game) {
+    void** slot      = reinterpret_cast<void**>(game + 0x2E6EF28);
+    void** path_slot = reinterpret_cast<void**>(game + 0x2E6EEC8);
+    const auto platforms = [](void* p) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        return p && VirtualQuery(p, &mbi, sizeof mbi) == sizeof mbi && mbi.AllocationBase == GetModuleHandleW(L"d3dcompiler_47.dll");
+    };
+    const auto outcome = [] { return slurp(L"fh2-mods\\platform-eo-packs.txt"); };
+    const auto game_functions = [&] {   // from here on the platform has checked them against the exe
+        stub(game, 0x11F49B0, reinterpret_cast<const void*>(&gs_resolve));
+        stub(game, 0x11F1460, reinterpret_cast<const void*>(&gs_disk_path));
+        stub(game, 0x3229C0, reinterpret_cast<const void*>(&gs_new));
+        stub(game, 0x11E05A0, reinterpret_cast<const void*>(&gs_construct));
+        stub(game, 0x11F9C70, reinterpret_cast<const void*>(&gs_exists));
+    };
+    const std::string eo_media = "T:\\fh2-platform\\eo-media\\";
+    PVolume* v = nullptr;
+    std::string log;
+    if (phase == L"eo-packs-refused") {
+        CHECK(wait_for_log("car packs with Extra Options: the packs are NOT in the game this session", 150));
+        log = slurp(L"fh2-mods\\platform.log");
+        CHECK(has(log, "car packs with Extra Options: Extra Options didn't take over the game's file lookup this time (its status: "
+                       "\"REFUSED: hook test stand-in. No patches applied.\"); game+0x2E6EF28 is left as the game's"));
+        CHECK(has(log, "the packs are NOT in the game this session: Extra Options didn't take over the game's file lookup: REFUSED: hook "
+                       "test stand-in. No patches applied."));
+        CHECK(*slot == game + 0x11F49B0 && *path_slot == game + 0x11F1460);
+        Sleep(200);
+        CHECK(outcome().rfind("lost\t", 0) == 0);
+        CHECK(!has(log, "chain:"));
+    } else if (phase == L"eo-packs-changed") {
+        CHECK(wait_for_log("car packs with Extra Options: the packs are NOT in the game this session", 150));
+        log = slurp(L"fh2-mods\\platform.log");
+        CHECK(has(log, "car packs with Extra Options: the game's code isn't what this build expects: game+0x11E05A0 (the folder volume "
+                       "constructor) isn't the same as in the exe on disk; the game's file lookup is left alone"));
+        CHECK(has(log, "the packs are NOT in the game this session: The game's code isn't what this build expects."));
+        Sleep(800);   // the stand-in takes the slots 300 ms after the game is mapped: they stay its own
+        CHECK(*slot != game + 0x11F49B0 && !platforms(*slot) && !platforms(*path_slot));
+        CHECK(!has(slurp(L"fh2-mods\\platform.log"), "chain:"));
+        CHECK(outcome().rfind("lost\t", 0) == 0);
+    } else if (phase == L"eo-packs-late") {
+        CHECK(wait_for_log("car packs with Extra Options: chain: Extra Options finished", 150));
+        CHECK(platforms(*slot) && platforms(*path_slot));
+        game_functions();
+        // The stand-in's own folder is in the list already: the platform must mount nothing, and pass the lookup on.
+        CHECK(g_fs.end - g_fs.begin == 4);
+        CHECK(look_up("game:\\media\\zipmanifest.xml", &v) && v == &g_own[0]);
+        CHECK(g_fs.end - g_fs.begin == 4);
+        CHECK(wait_for_log("car packs with Extra Options: the packs are NOT in the game this session", 30));
+        log = slurp(L"fh2-mods\\platform.log");
+        CHECK(has(log, "first lookup: #1, a file, ") && has(log, "the game had 4 volume(s) then, 1 of them Extra Options'"));
+        CHECK(has(log, "car packs with Extra Options: LATE: Extra Options had already set up its folders before the platform's first lookup"));
+        CHECK(has(log, "0x7FFFFFFE Extra Options' game:\\mediaoverride\\; and 3 of the game's own below them"));
+        CHECK(has(log, "the packs are NOT in the game this session: Extra Options had set up its folders before the car packs' were added."));
+        CHECK(!has(log, " mounted at 0x") && !has(log, "precedence:"));
+        Sleep(200);
+        CHECK(outcome().rfind("lost\t", 0) == 0);
+    } else {
+        CHECK(wait_for_log("car packs with Extra Options: chain: Extra Options finished", 150));
+        log = slurp(L"fh2-mods\\platform.log");
+        CHECK(has(log, "car packs: 1 pack(s) in fh2-cars are read with Extra Options loaded (version 0.6.0)"));
+        CHECK(has(log, "car packs with Extra Options: chain: Extra Options took the game's file lookup (game+0x2E6EF28), seen "));
+        CHECK(has(log, " ms after the game was mapped; the platform chained behind it "));
+        CHECK(has(log, "chain: Extra Options took the lookup of a file's path on disk too (game+0x2E6EEC8, for sound banks); the platform "
+                       "chained behind it "));
+        CHECK(has(log, "(\"OK: hook test stand-in, lookups taken.\"); the game's file lookup is still the platform's, with Extra Options' "
+                       "behind it"));
+        CHECK(platforms(*slot) && platforms(*path_slot));
+        CHECK(outcome().rfind("on\t", 0) == 0);
+        game_functions();
+        // The game's first lookup is a sound bank's path on disk, which Extra Options answers without going through
+        // the file lookup: the platform has to be in front of that one too.
+        path_on_disk("game:\\media\\audio\\fmodanthem\\durango\\PG_Test.bank");
+        CHECK(g_fs.end - g_fs.begin == 6);
+        CHECK(g_fs.begin[0].priority == 0x7FFFFFFF && ptext(&static_cast<PVolume*>(g_fs.begin[0].volume)->folder) == eo_media);
+        CHECK(g_fs.begin[1].priority == 0x7FFFFFFE && g_fs.begin[2].priority == 0x7FFFFFF0 &&
+              ptext(&static_cast<PVolume*>(g_fs.begin[2].volume)->folder) == "T:\\fh2-platform\\packs\\TestPack\\");
+        CHECK(look_up("game:\\media\\zipmanifest.xml", &v) && v == g_fs.begin[0].volume);
+        CHECK(look_up("game:\\media\\Stripped\\gamedbRC.slt", &v) && v == &g_own[0]);
+        CHECK(has(slurp(L"data\\titles\\1A96545B\\tmp\\fh2-platform\\eo-media\\zipmanifest.xml"), "path=\"game:\\media\\cars\\test_car.zip\""));
+        CHECK(wait_for_log("car packs with Extra Options: gamedbRC.slt (lookup #", 30));
+        Sleep(300);   // the outcome is written by the platform's own thread
+        log = slurp(L"fh2-mods\\platform.log");
+        CHECK(has(log, "car packs with Extra Options: lookup #1 (a sound bank's path on disk) on thread "));
+        CHECK(has(log, ": game:\\media\\audio\\fmodanthem\\durango\\PG_Test.bank"));
+        CHECK(has(log, "car packs with Extra Options: first lookup: #1, a sound bank's path on disk, ") &&
+              has(log, " ms after the platform chained; the game had 3 volume(s) then, 0 of them Extra Options'"));
+        CHECK(has(log, "car packs with Extra Options: car pack TestPack T:\\fh2-platform\\packs\\TestPack\\ mounted at 0x7FFFFFF0"));
+        CHECK(has(log, "car packs with Extra Options: eo-media T:\\fh2-platform\\eo-media\\ mounted at 0x7FFFFFFF, ahead of every other folder"));
+        CHECK(has(log, "car packs with Extra Options: precedence: PASS: eo-media is alone at the top, with 1 folder(s) of Extra Options' "
+                       "below it. The volumes, first read first: 0x7FFFFFFF eo-media (T:\\fh2-platform\\eo-media\\); 0x7FFFFFFE Extra "
+                       "Options' game:\\mediaoverride\\; 0x7FFFFFF0 the platform's T:\\fh2-platform\\packs\\TestPack\\; and 3 of the "
+                       "game's own below them"));
+        CHECK(has(log, "car packs with Extra Options: zipmanifest.xml (lookup #3, game:\\media\\zipmanifest.xml) was answered by eo-media"));
+        CHECK(has(log, "car packs with Extra Options: gamedbRC.slt (lookup #4, game:\\media\\Stripped\\gamedbRC.slt) was answered by a zip "
+                       "or other volume of the game's kind, NOT eo-media; this build keeps none in eo-media"));
+        CHECK(!has(log, "NOT in the game this session") && !has(log, "LATE") && !has(log, "FAIL"));
+        CHECK(outcome().rfind("in\t", 0) == 0);
+        // The game mapped again, or Extra Options undoing its changes: the slot is the game's own again. The packs
+        // are lost, and eo-media stops answering.
+        *slot = game + 0x11F49B0;
+        CHECK(wait_for_log("car packs with Extra Options: the packs are NOT in the game this session", 30));
+        log = slurp(L"fh2-mods\\platform.log");
+        CHECK(has(log, "car packs with Extra Options: the game's file lookup was changed back "));
+        CHECK(has(log, "the packs are NOT in the game this session: The game's file lookup was changed again after the platform had chained "
+                       "behind Extra Options."));
+        CHECK(look_up("game:\\media\\zipmanifest.xml", &v) && v == &g_own[0]);
+        Sleep(200);
+        CHECK(outcome().rfind("lost\t", 0) == 0);
+    }
+    log = slurp(L"fh2-mods\\platform.log");
+    std::printf("---- platform.log\n%s----\n", log.c_str());
+    CHECK(has(log, "FH2 Mod Platform 2.9.0 (API 10)"));
+    CHECK(has(log, "media overrides: Extra Options is here, so mediaoverride is left to it"));
+    std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
+    std::fflush(stdout);
+    TerminateProcess(GetCurrentProcess(), fails);
+}
+
 static LONG WINAPI after_crash(EXCEPTION_POINTERS*) {
     std::string report;
     for (const auto& e : fs::directory_iterator("fh2-mods\\crashes"))
@@ -344,7 +635,8 @@ static LONG WINAPI after_crash(EXCEPTION_POINTERS*) {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc < 3) {
-        std::printf("usage: azimuth.exe plain|eo|eo-hidden|wine-builtin|changed-code|crash|other-game|skip-launcher "
+        std::printf("usage: azimuth.exe plain|eo|eo-hidden|eo-packs|eo-packs-refused|eo-packs-late|eo-packs-changed|wine-builtin|changed-code|crash|other-game|"
+                    "skip-launcher "
                     "<forza_durango_release_final.exe> [--skip-launcher]\n");
         return 2;
     }
@@ -355,7 +647,8 @@ int wmain(int argc, wchar_t** argv) {
     }
     const bool other_game = phase == L"other-game" || phase == L"skip-launcher";
     if (other_game) std::ofstream{"other_game.txt"} << "1"; // for HookMod
-    const bool eo = phase == L"eo" || phase == L"eo-hidden";
+    const bool eo    = phase == L"eo" || phase == L"eo-hidden";
+    const bool packs = phase.rfind(L"eo-packs", 0) == 0;
     if (phase == L"eo-hidden") {
         // The system's winmm.dll first: then GetModuleHandleW(L"winmm.dll") answers with it, not the stand-in.
         wchar_t sys[MAX_PATH];
@@ -363,6 +656,14 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(n && n < MAX_PATH && LoadLibraryW((std::wstring(sys) + L"\\winmm.dll").c_str()) != nullptr);
     }
     if (eo) CHECK(GetProcAddress(LoadLibraryW(L".\\winmm.dll"), "Fh2TweaksStatus")); // Extra Options' proxy
+    if (packs) {
+        HMODULE stand_in = LoadLibraryW(L".\\winmm.dll");
+        CHECK(GetProcAddress(stand_in, "Fh2TweaksStatus"));
+        const auto file_system = reinterpret_cast<void (*)(void*)>(reinterpret_cast<void*>(GetProcAddress(stand_in, "FakeEoFilesystem")));
+        CHECK(file_system != nullptr);
+        make_file_system();
+        if (file_system) file_system(&g_fs);
+    }
     if (phase == L"eo-hidden") {
         // Under Wine which of the two the name finds isn't fixed, so only Windows checks it's the system's.
         HMODULE n = GetModuleHandleW(L"ntdll.dll");
@@ -375,8 +676,9 @@ int wmain(int argc, wchar_t** argv) {
     }
     CHECK(LoadLibraryW(L"d3dcompiler_47.dll") != nullptr);
     Sleep(500);
-    char* game = map_game(argv[2], phase == L"changed-code", other_game);
+    char* game = map_game(argv[2], phase == L"changed-code" || phase == L"eo-packs-changed", other_game, packs);
     CHECK(game != nullptr); // "press Play"
+    if (packs && game) check_eo_packs(phase, game);
     if (phase == L"plain") check_fh2game(argv[2]);
     if (eo) {
         Sleep(3000);
