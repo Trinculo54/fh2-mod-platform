@@ -890,34 +890,47 @@ void watch_eo() {
         Sleep(0);
     }
 
-    // The game's code as it is in memory, against what was read from the exe, while Extra Options is still at work.
-    const char* differs = nullptr;
-    for (const Site& s : sites) {
-        unsigned char mem[sizeof s.disk];
-        if (!safe_copy(mem, base + s.rva, s.n) || std::memcmp(mem, s.disk, s.n) != 0 || (s.must && std::memcmp(s.disk, s.must, s.n) != 0)) {
-            differs = s.shown;
-            break;
+    // The game's code as it is in memory, against what was read from the exe. It's looked at once Extra Options'
+    // pointer is in the slot, and not before: Extra Options writes it after Azimuth has finished mapping the game,
+    // and until then a section may not be copied in yet. (The slot holding the game's resolver only says its own
+    // section is. The first run in game compared the folder volume's vtable, 0x3C9E8 further on, the moment the slot
+    // did, and found it different; without Extra Options the exe is read between the two, which takes long enough.)
+    // Nothing here waits or reads a file, so the swap is a few microseconds later for it.
+    const auto code_ok = [&]() -> bool {
+        std::string differs;
+        for (const Site& s : sites) {
+            unsigned char mem[sizeof s.disk];
+            if (!safe_copy(mem, base + s.rva, s.n) || std::memcmp(mem, s.disk, s.n) != 0 || (s.must && std::memcmp(s.disk, s.must, s.n) != 0)) {
+                differs = s.shown;
+                break;
+            }
         }
-    }
-    // (Absolute pointers: where the image isn't at its preferred base, each differs from the file's by how far it moved.)
-    uint64_t vtable_mem[2] = {};
-    if (!differs && (!safe_copy(vtable_mem, base + RVA_FOLDER_VT + 8, sizeof vtable_mem) ||
-                     !same_pointer(vtable_disk[0], vtable_mem[0], kPreferredBase, reinterpret_cast<uint64_t>(base), kGameSizeOfImage) ||
-                     !same_pointer(vtable_disk[1], vtable_mem[1], kPreferredBase, reinterpret_cast<uint64_t>(base), kGameSizeOfImage)))
-        differs = "game+0x2EAB918 (the folder volume's vtable)";
-    if (differs)
-        return lost(std::string("the game's code isn't what this build expects: ") + differs + " isn't the same as in the exe on disk; the game's "
-                        "file lookup is left alone",
-                    later("The game's code isn't what this build expects."));
-
-    // The folder volume's methods, copied before the swap: the mount can run on a game thread right after it.
-    if (!safe_copy(g_folder_vtable, base + RVA_FOLDER_VT, sizeof g_folder_vtable))
-        return lost("the folder volume's vtable (game+0x2EAB910) couldn't be read; the game's file lookup is left alone",
-                    later("The game's code isn't what this build expects."));
-    g_exists                      = reinterpret_cast<Exists>(g_folder_vtable[1 + 0xE8 / 8]);
-    g_folder_vtable[1 + 0xE8 / 8] = reinterpret_cast<void*>(&folder_exists);
-    std::memcpy(g_overlay_vtable, g_folder_vtable, sizeof g_overlay_vtable);
-    g_overlay_vtable[1 + 0xE8 / 8] = reinterpret_cast<void*>(&overlay_exists);
+        // (Absolute pointers: where the image isn't at its preferred base, each differs from the file's by how far it moved.)
+        uint64_t vtable_mem[2] = {};
+        if (differs.empty() && (!safe_copy(vtable_mem, base + RVA_FOLDER_VT + 8, sizeof vtable_mem) ||
+                                !same_pointer(vtable_disk[0], vtable_mem[0], kPreferredBase, reinterpret_cast<uint64_t>(base), kGameSizeOfImage) ||
+                                !same_pointer(vtable_disk[1], vtable_mem[1], kPreferredBase, reinterpret_cast<uint64_t>(base), kGameSizeOfImage)))
+            differs = "game+0x2EAB918 (the folder volume's vtable: " + hex(vtable_mem[0]) + " and " + hex(vtable_mem[1]) + " in memory, " +
+                      hex(vtable_disk[0]) + " and " + hex(vtable_disk[1]) + " in the exe)";
+        if (!differs.empty()) {
+            lost("the game's code isn't what this build expects: " + differs + " isn't the same as in the exe on disk, " + since() +
+                     " ms after the game was mapped; the game's file lookup stays Extra Options'",
+                 later("The game's code isn't what this build expects."));
+            return false;
+        }
+        // The folder volume's methods, copied before the swap: the mount can run on a game thread right after it.
+        if (!safe_copy(g_folder_vtable, base + RVA_FOLDER_VT, sizeof g_folder_vtable)) {
+            lost("the folder volume's vtable (game+0x2EAB910) couldn't be read; the game's file lookup stays Extra Options'",
+                 later("The game's code isn't what this build expects."));
+            return false;
+        }
+        g_exists                      = reinterpret_cast<Exists>(g_folder_vtable[1 + 0xE8 / 8]);
+        g_folder_vtable[1 + 0xE8 / 8] = reinterpret_cast<void*>(&folder_exists);
+        std::memcpy(g_overlay_vtable, g_folder_vtable, sizeof g_overlay_vtable);
+        g_overlay_vtable[1 + 0xE8 / 8] = reinterpret_cast<void*>(&overlay_exists);
+        return true;
+    };
+    bool code_checked = false;
 
     // Extra Options writes its lookup into the slot while Azimuth maps the game, before any game code runs. Until
     // then: its status every 50 ms.
@@ -926,6 +939,10 @@ void watch_eo() {
         now = read_slot(slot);
         if (in_eo(now) && settled(slot) == now) {
             if (!eo_took) eo_took = GetTickCount64() - mapped;
+            if (!code_checked) {
+                if (!code_ok()) return;
+                code_checked = true;
+            }
             if (!writable(slot))
                 return lost("game+0x2E6EF28 can't be written as it is, and its protection is left alone; the game's file lookup stays Extra Options'",
                             later("The game's file lookup couldn't be changed."));

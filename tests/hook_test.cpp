@@ -539,7 +539,8 @@ static void check_eo_packs(const std::wstring& phase, char* game) {
         CHECK(wait_for_log("car packs with Extra Options: the packs are NOT in the game this session", 150));
         log = slurp(L"fh2-mods\\platform.log");
         CHECK(has(log, "car packs with Extra Options: the game's code isn't what this build expects: game+0x11E05A0 (the folder volume "
-                       "constructor) isn't the same as in the exe on disk; the game's file lookup is left alone"));
+                       "constructor) isn't the same as in the exe on disk, "));
+        CHECK(has(log, " ms after the game was mapped; the game's file lookup stays Extra Options'"));
         CHECK(has(log, "the packs are NOT in the game this session: The game's code isn't what this build expects."));
         Sleep(800);   // the stand-in takes the slots 300 ms after the game is mapped: they stay its own
         CHECK(*slot != game + 0x11F49B0 && !platforms(*slot) && !platforms(*path_slot));
