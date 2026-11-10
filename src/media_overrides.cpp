@@ -701,9 +701,18 @@ void after_eo_lookup(void* filesystem, const void* path, int n, bool found, void
     }
 }
 
+// A lookup the game makes from inside the platform's own mount, on the thread that is mounting. It goes to the game's
+// own function, not on to Extra Options: Extra Options sets up its folders on the first lookup it sees, and that
+// mustn't happen in the middle of the platform's mount, before eo-media is in. (Extra Options keeps its own nested
+// lookups to itself the same way.) Both functions are among the ones compared with the exe before the chain is made.
+bool mounting_here() {
+    return g_state.load(std::memory_order_acquire) == 1 && g_mount_thread.load(std::memory_order_acquire) == GetCurrentThreadId();
+}
+
 // The platform's file lookup with Extra Options: Extra Options' own, with the platform's folders mounted first.
 uint8_t resolve_eo(void* filesystem, void** volume, void* relative, const void* path, uint8_t a, uint8_t b, uint8_t c,
                    void** mount, uint8_t d) {
+    if (mounting_here()) return reinterpret_cast<Resolve>(g_base + RVA_RESOLVE)(filesystem, volume, relative, path, a, b, c, mount, d);
     const int n         = before_eo_lookup(filesystem, path, false);
     const uint8_t found = g_eo_resolve.load(std::memory_order_acquire)(filesystem, volume, relative, path, a, b, c, mount, d);
     after_eo_lookup(filesystem, path, n, found != 0, volume);
@@ -715,6 +724,7 @@ uint8_t resolve_eo(void* filesystem, void** volume, void* relative, const void* 
 // one the game's first sound bank would have it mount before the platform. Any other path goes on to the game's own
 // (game+0x11F1460), which asks through the slot, and so comes through resolve_eo too.
 void* disk_path_eo(void* filesystem, const GameString* path, GameString* output) {
+    if (mounting_here()) return reinterpret_cast<DiskPath>(g_base + RVA_DISK_PATH)(filesystem, path, output);
     const int n  = before_eo_lookup(filesystem, path, true);
     void* result = g_eo_disk_path.load(std::memory_order_acquire)(filesystem, path, output);
     after_eo_lookup(filesystem, nullptr, n, false, nullptr);
