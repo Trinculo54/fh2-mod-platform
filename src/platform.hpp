@@ -154,7 +154,8 @@ bool car_packs_mountable();
 std::filesystem::path eo_media();
 // With Extra Options, once the packs were read: they aren't in the game this session after all (`why`: a message from
 // later()). Each pack's row says so in red, over any other problem it had, and the log and fh2-mods\platform-eo-packs.txt
-// say why. The first reason given is kept. Any thread.
+// say why. The first reason given is kept. Any thread of the platform's own: it writes a file, which can take a
+// moment, so never from a game thread (media_overrides.cpp hands its reasons to its watcher).
 void car_packs_lost(const std::string& why);
 // fh2-mods\platform-eo-packs.txt, this session's outcome with Extra Options: "on" (read; the game hasn't looked
 // anything up yet), "in" (their folders are ahead of Extra Options') or "lost", a tab, and why or how in English.

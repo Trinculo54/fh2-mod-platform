@@ -505,7 +505,15 @@ static void check_eo_packs(const std::wstring& phase, char* game) {
         MEMORY_BASIC_INFORMATION mbi{};
         return p && VirtualQuery(p, &mbi, sizeof mbi) == sizeof mbi && mbi.AllocationBase == GetModuleHandleW(L"d3dcompiler_47.dll");
     };
-    const auto outcome = [] { return slurp(L"fh2-mods\\platform-eo-packs.txt"); };
+    // fh2-mods\platform-eo-packs.txt, which the platform's own thread writes a moment after the log line (and tries
+    // again when the file is still open somewhere): `is` within three seconds.
+    const auto outcome = [](const char* is) {
+        for (int i = 0; i < 30; ++i) {
+            if (slurp(L"fh2-mods\\platform-eo-packs.txt").rfind(is, 0) == 0) return true;
+            Sleep(100);
+        }
+        return false;
+    };
     const auto game_functions = [&] {   // from here on the platform has checked them against the exe
         stub(game, 0x11F49B0, reinterpret_cast<const void*>(&gs_resolve));
         stub(game, 0x11F1460, reinterpret_cast<const void*>(&gs_disk_path));
@@ -525,7 +533,7 @@ static void check_eo_packs(const std::wstring& phase, char* game) {
                        "test stand-in. No patches applied."));
         CHECK(*slot == game + 0x11F49B0 && *path_slot == game + 0x11F1460);
         Sleep(200);
-        CHECK(outcome().rfind("lost\t", 0) == 0);
+        CHECK(outcome("lost\t"));
         CHECK(!has(log, "chain:"));
     } else if (phase == L"eo-packs-changed") {
         CHECK(wait_for_log("car packs with Extra Options: the packs are NOT in the game this session", 150));
@@ -536,7 +544,7 @@ static void check_eo_packs(const std::wstring& phase, char* game) {
         Sleep(800);   // the stand-in takes the slots 300 ms after the game is mapped: they stay its own
         CHECK(*slot != game + 0x11F49B0 && !platforms(*slot) && !platforms(*path_slot));
         CHECK(!has(slurp(L"fh2-mods\\platform.log"), "chain:"));
-        CHECK(outcome().rfind("lost\t", 0) == 0);
+        CHECK(outcome("lost\t"));
     } else if (phase == L"eo-packs-late") {
         CHECK(wait_for_log("car packs with Extra Options: chain: Extra Options finished", 150));
         CHECK(platforms(*slot) && platforms(*path_slot));
@@ -553,7 +561,7 @@ static void check_eo_packs(const std::wstring& phase, char* game) {
         CHECK(has(log, "the packs are NOT in the game this session: Extra Options had set up its folders before the car packs' were added."));
         CHECK(!has(log, " mounted at 0x") && !has(log, "precedence:"));
         Sleep(200);
-        CHECK(outcome().rfind("lost\t", 0) == 0);
+        CHECK(outcome("lost\t"));
     } else {
         CHECK(wait_for_log("car packs with Extra Options: chain: Extra Options finished", 150));
         log = slurp(L"fh2-mods\\platform.log");
@@ -565,7 +573,7 @@ static void check_eo_packs(const std::wstring& phase, char* game) {
         CHECK(has(log, "(\"OK: hook test stand-in, lookups taken.\"); the game's file lookup is still the platform's, with Extra Options' "
                        "behind it"));
         CHECK(platforms(*slot) && platforms(*path_slot));
-        CHECK(outcome().rfind("on\t", 0) == 0);
+        CHECK(outcome("on\t"));
         game_functions();
         // The game's first lookup is a sound bank's path on disk, which Extra Options answers without going through
         // the file lookup: the platform has to be in front of that one too.
@@ -594,7 +602,7 @@ static void check_eo_packs(const std::wstring& phase, char* game) {
         CHECK(has(log, "car packs with Extra Options: gamedbRC.slt (lookup #4, game:\\media\\Stripped\\gamedbRC.slt) was answered by a zip "
                        "or other volume of the game's kind, NOT eo-media; this build keeps none in eo-media"));
         CHECK(!has(log, "NOT in the game this session") && !has(log, "LATE") && !has(log, "FAIL"));
-        CHECK(outcome().rfind("in\t", 0) == 0);
+        CHECK(outcome("in\t"));
         // The game mapped again, or Extra Options undoing its changes: the slot is the game's own again. The packs
         // are lost, and eo-media stops answering.
         *slot = game + 0x11F49B0;
@@ -605,7 +613,7 @@ static void check_eo_packs(const std::wstring& phase, char* game) {
                        "behind Extra Options."));
         CHECK(look_up("game:\\media\\zipmanifest.xml", &v) && v == &g_own[0]);
         Sleep(200);
-        CHECK(outcome().rfind("lost\t", 0) == 0);
+        CHECK(outcome("lost\t"));
     }
     log = slurp(L"fh2-mods\\platform.log");
     std::printf("---- platform.log\n%s----\n", log.c_str());

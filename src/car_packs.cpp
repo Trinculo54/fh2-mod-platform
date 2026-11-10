@@ -702,7 +702,11 @@ void note_eo_packs_outcome(const std::string& outcome, const std::string& why) {
         return;
     }
     if (g_lost.load() && outcome != "lost") return;   // the session's outcome stays lost
-    if (!write_all(f, outcome + "\t" + why + "\r\n"))
+    // Written two or three times a session, sometimes a second apart: a virus scanner can still have the last one open,
+    // and then the new one can't be moved over it (error 5) until it lets go. Never on a game thread.
+    bool written = false;
+    for (int tries = 0; tries < 20 && !(written = write_all(f, outcome + "\t" + why + "\r\n")); ++tries) Sleep(100);
+    if (!written)
         plog("car packs: couldn't write fh2-mods\\platform-eo-packs.txt (error " + std::to_string(GetLastError()) + ")");
 }
 
