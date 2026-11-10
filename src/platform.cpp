@@ -1117,6 +1117,7 @@ void finish_online(const std::string& why, const GoingOnline& g) {
         plog(narrow(f) + " shouldn't run online, but it's a mod from before the platform, so it can't be stopped; start the "
              "game from the FH2MP launcher to leave it out");
     if (g.stop.empty() && g.others.empty()) plog("no mod that shouldn't run online had started");
+    eo_packs_went_online();   // FH2MP found online as it started: the packs' folder stops hiding mediaoverride's database
     if (g.rewrite && (g.strings || g.sql)) {
         // Only when a DLL registers as FH2MP after the loader's first write (FH2MP registers in its fh2mod_init):
         // going_online stops only mods with nothing written for the game. On a thread of its own, as the caller may
@@ -1182,6 +1183,13 @@ int online_going(char* names, size_t size) {
                     for (const auto& f : g.others) {
                         ran.push_back(narrow(f));
                         what += (what.empty() ? "" : "; ") + narrow(f) + " (a mod from before the platform, already loaded)";
+                    }
+                    // With Extra Options the game read the packs' own database, ahead of mediaoverride's, where
+                    // FH2MP's copy of the server's is: FH2MP would check one and the game play with the other.
+                    if (eo_packs()) {
+                        ran.push_back("Car packs");
+                        what += std::string(what.empty() ? "" : "; ") + "the car packs in fh2-cars (with Extra Options, the game read their "
+                                "database instead of mediaoverride's)";
                     }
                     if (ran.empty()) went = begin_online(g);
                     return went;
@@ -1692,6 +1700,7 @@ std::set<std::wstring> remembered_fh2mp() {
 } // namespace
 
 bool playing_online() { return g_online; }
+bool fh2mp_has_session(std::string* why) { return fh2mp_session(why); }
 
 bool first_write_begun() { return g_first_write; }
 

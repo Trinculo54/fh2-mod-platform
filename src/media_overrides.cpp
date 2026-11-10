@@ -1072,6 +1072,11 @@ void watch_eo() {
 
 } // namespace
 
+void eo_packs_went_online() {
+    if (eo_packs() && !g_eo_lost.load())
+        lose_later(later("FH2MP went online after the game had started. With Extra Options, car packs are only read when you play offline."));
+}
+
 void eo_overlay_ready() {
     if (!eo_packs()) return;
     std::error_code ec;

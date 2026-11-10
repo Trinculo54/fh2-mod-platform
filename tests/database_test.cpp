@@ -1143,11 +1143,17 @@ static void eo_decision() {
     CHECK(!has(c.log, "car packs: The "));
     fs::remove_all(c.dir / "mods");
 
-    // FH2MP in this Azimuth folder: as rc1, with the reason.
+    // FH2MP in this Azimuth folder, offline: the packs are read. With a session from its launcher (online play): not.
     std::ofstream{ini} << "[Global]\r\nEnabled=1\r\n[Files]\r\nEnableMediaOverrides=1\r\n";
     fs::create_directories(c.dir / "fh2mp");
     c.launch(L"eo");
-    CHECK(unread("FH2MP is in this Azimuth folder; with Extra Options, car packs aren't read here yet."));
+    CHECK(has(c.log, "car packs: FH2MP is in this Azimuth folder but has no session to play online with"));
+    CHECK(has(c.log, "car packs: 1 pack(s) in fh2-cars are read with Extra Options loaded (version 0.6.0)"));
+    const fs::path session = (fs::exists(c.dir / "data" / "bin") ? c.dir / "data" / "bin" : c.dir) / "fh2mp-session.txt";
+    std::ofstream{session} << "xuid=1\ntoken=test\n";
+    c.launch(L"eo");
+    CHECK(unread("This game was started for online play with FH2MP. With Extra Options, car packs are only read when you play offline."));
+    fs::remove(session);
     fs::remove_all(c.dir / "fh2mp");
 
     // No T:\ yet.

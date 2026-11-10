@@ -562,10 +562,15 @@ EoDecision decide_eo_packs() {
     if (status.rfind("REFUSED", 0) == 0 || status.rfind("DISABLED", 0) == 0 || status.rfind("INACTIVE", 0) == 0)
         return off(later("Extra Options made no changes to the game: {0}", {status}), "Extra Options has already given up: " + status);
     if (game_mount().empty()) return off({}, "the game's Mount folder wasn't found");
+    // Online, the game has to read FH2MP's copy of the server's database in mediaoverride, which the packs' folder
+    // would hide. Offline in the same folder (no session from FH2MP's launcher), the packs are read as anywhere else.
+    if (std::string why; fh2mp_has_session(&why))
+        return off(later("This game was started for online play with FH2MP. With Extra Options, car packs are only read when you play offline."),
+                   "FH2MP has a session to play online with (" + why + "), and online the game has to read FH2MP's copy of the "
+                   "server's database in mediaoverride, which the packs' folder would hide");
     if (fs::is_directory(azimuth_dir() / L"fh2mp", ec))
-        return off(later("FH2MP is in this Azimuth folder; with Extra Options, car packs aren't read here yet."),
-                   "this Azimuth folder has an fh2mp folder (FH2MP copies its server's database over mediaoverride's, which "
-                   "the packs' folder would hide)");
+        plog("car packs: FH2MP is in this Azimuth folder but has no session to play online with, so this game is offline and the "
+             "packs can be read; started from the FH2MP launcher, they aren't");
     const bool media = flag(L"Files", L"EnableMediaOverrides", 0) != 0;
     const std::vector<EoMod> mods = eo_mods();
     plog("car packs: Extra Options' media overrides are " + std::string(media ? "on" : "off") +

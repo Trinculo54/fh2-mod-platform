@@ -142,7 +142,7 @@ NoLayer instance_layer_missing();
 // Options found by its export (not only expected, under Wine), its FH2_ExtraOptions.ini there and not saying [Global]
 // Enabled=0, its media overrides on or a mod of its own there (without either it mounts nothing), its status not
 // already final ("REFUSED" or "DISABLED"), the game's Mount folder known, T:\ there (instance_layer's checks), no
-// fh2mp folder, and a pack in fh2-cars.
+// session of FH2MP's to play online with, and a pack in fh2-cars.
 bool eo_packs();
 // Why not, while Extra Options is loaded and eo_packs() is false: a message from later(), or "" when there's nothing
 // to tell the player (no pack in fh2-cars, no game folder).
@@ -347,7 +347,12 @@ void set_mod_enabled(const std::wstring& dll, bool on);
 // the mods load; from 2.9.0 it can also turn true later (FH2MP's session found once it has started,
 // or FH2MP saying it's going online), never back.
 bool playing_online();
-bool fh2mp_installed();               // FH2MP is in fh2-mods (turned on or not), as FH2MP.dll or under another name
+// FH2MP's launcher left a session to play online with (its file, or FH2MP_TOKEN): `why` for the log. Whether or not
+// FH2MP is in fh2-mods; usable before the mods load.
+bool fh2mp_has_session(std::string* why);
+// (media_overrides.cpp) The game went online after the platform had started: with Extra Options, the packs are lost.
+void eo_packs_went_online();
+bool fh2mp_installed();              // FH2MP is in fh2-mods (turned on or not), as FH2MP.dll or under another name
 // That entry is FH2MP itself (it always loads online): FH2MP.dll, or the DLL FH2MP registered from. A
 // mod that only registers under the name FH2MP isn't.
 bool is_fh2mp(const ModEntry& e);
