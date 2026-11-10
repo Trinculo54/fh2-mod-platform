@@ -426,6 +426,8 @@ std::vector<Outside> g_eo_packs;                  // the packs' folders and prio
 std::string g_eo_overlay;                         // eo-media as the game spells it; the same
 std::atomic<void*> g_overlay{nullptr};            // eo-media's volume, once it's mounted
 std::atomic<bool> g_overlay_hidden{false};        // its files aren't there for the game any more this session
+std::atomic<bool> g_overlay_ready{false};         // the platform's first write is done: its database and names are this session's
+std::atomic<bool> g_overlay_has_db{false};        // and it has a database
 std::atomic<bool> g_eo_lost{false};               // the packs aren't in the game this session after all
 std::atomic<std::string*> g_lost_why{nullptr};    // why, from a game thread, for watch_eo to pass on (car_packs_lost)
 std::atomic<bool> g_in_front{false};              // the precedence check passed
@@ -461,10 +463,22 @@ void lose_now(const std::string& why) {
     car_packs_lost(why);
 }
 
+bool ends_with(const char* text, std::size_t n, const char* end);
+
 // eo-media's own "does a file exist": no for everything once the packs are lost, so the game reads what it would
-// without them. Answering is all it does; nothing here waits.
+// without them. Answering is all it does; nothing here waits. Its database and its cars' names are last session's
+// (or not there yet) until the platform's first write is done, which is normally seconds before the game is mapped.
+// If the game asks for either before that, it isn't told to wait: the packs are lost for the session, and it reads the
+// database and names it would without them, which go together.
 uint8_t overlay_exists(void* volume, const GameString* path) {
     if (g_overlay_hidden.load(std::memory_order_acquire)) return 0;
+    if (!g_overlay_ready.load(std::memory_order_acquire)) {
+        const char* text = path->capacity < 16 ? reinterpret_cast<const char*>(path) : path->data;
+        if (ends_with(text, path->length, "gamedbrc.slt") || ends_with(text, path->length, "data_car.str")) {
+            lose_later(later("The game asked for its database before the car packs' was ready."));
+            return 0;
+        }
+    }
     return folder_exists(volume, path);
 }
 
@@ -692,9 +706,14 @@ void after_eo_lookup(void* filesystem, const void* path, int n, bool found, void
     if (found && volume) safe_copy(&answered, volume, sizeof answered);
     const bool ours = answered && answered == g_overlay.load(std::memory_order_acquire);
     static const char* const kShown[3] = {"zipmanifest.xml", "gamedbRC.slt", "Data_Car.str"};
+    const bool has_db = g_overlay_ready.load(std::memory_order_acquire) && g_overlay_has_db.load(std::memory_order_acquire);
     plog(std::string("car packs with Extra Options: ") + kShown[which] + " (lookup #" + std::to_string(n) + ", " + text + ") was " +
          (!found ? "not found" : ours ? "answered by eo-media" : "answered by " + describe_volume(answered) + ", NOT eo-media") +
-         (which == 0 ? "" : "; this build keeps none in eo-media"));
+         (which == 1 && !ours && !has_db ? "; eo-media has no database this session" : ""));
+    if (which == 1 && !ours && has_db && ends_with(text, len, "media\\stripped\\gamedbrc.slt") && !g_eo_lost.load()) {
+        plog("car packs with Extra Options: the game read its database without the packs' cars, so they aren't in the game this session");
+        lose_later(later("The game read its database from another folder than the car packs'."));
+    }
     if (which == 0 && !ours && car_packs_manifest() && ends_with(text, len, "media\\zipmanifest.xml") && !g_eo_lost.load()) {
         plog("car packs with Extra Options: the game read its zip list without the packs' zips, so they aren't in the game this session");
         lose_later(later("The game read its list of zips before the car packs' folder was added."));
@@ -1051,6 +1070,21 @@ void watch_eo() {
     }
 }
 
+} // namespace
+
+void eo_overlay_ready() {
+    if (!eo_packs()) return;
+    std::error_code ec;
+    const bool db = fs::is_regular_file(eo_media() / L"Stripped" / L"gamedbRC.slt", ec);
+    g_overlay_has_db.store(db, std::memory_order_release);
+    g_overlay_ready.store(true, std::memory_order_release);
+    plog(std::string("car packs with Extra Options: the platform's first write is done; eo-media has ") +
+         (db ? "this session's database, with the packs' cars" : "no database (no pack or mod changes it, or it couldn't be built)") +
+         (g_eo_lost.load() ? "; the packs were already lost this session" : ""));
+}
+
+namespace {
+
 // When whether Extra Options is loaded couldn't be told (extra_options_expected): says whether it ran,
 // once it's found or writes its log this launch. It patches the game right after it's mapped, so
 // kExtraOptionsTimeoutMs after that it hasn't.
@@ -1105,9 +1139,9 @@ void start_media_overrides() {
         // (This line's wording is matched by other tools: keep it as it is.)
         plog("car packs: " + std::to_string(read) + " pack(s) in fh2-cars are read with Extra Options loaded (version " +
              (version.empty() ? std::string("unknown") : version) + ")");
-        plog("car packs with Extra Options: their folders and " + temp_drive_spelling(eo_media()) + " (their zipmanifest.xml) are added to the "
-             "game's folders, ahead of Extra Options', when the game first looks a file up; their cars aren't in the game database in "
-             "this build");
+        plog("car packs with Extra Options: their folders and " + temp_drive_spelling(eo_media()) + " (their zipmanifest.xml, and the "
+             "database and car names with their cars) are added to the game's folders, ahead of Extra Options', when the game first "
+             "looks a file up");
         note_eo_packs_outcome("on", "read; the game hasn't looked a file up yet");
         std::thread(watch_eo).detach();
         return;

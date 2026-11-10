@@ -157,6 +157,12 @@ std::filesystem::path eo_media();
 // say why. The first reason given is kept. Any thread of the platform's own: it writes a file, which can take a
 // moment, so never from a game thread (media_overrides.cpp hands its reasons to its watcher).
 void car_packs_lost(const std::string& why);
+bool eo_packs_lost();
+// (database.cpp) After that: the recorded cars are looked for again, in the database the game reads without the packs.
+void recheck_recorded_cars();
+// (media_overrides.cpp) The platform's first write is done: eo-media's database and car names are this session's.
+// Until then the game is told eo-media has neither; if it asks for one before, the packs are lost for the session.
+void eo_overlay_ready();
 // fh2-mods\platform-eo-packs.txt, this session's outcome with Extra Options: "on" (read; the game hasn't looked
 // anything up yet), "in" (their folders are ahead of Extra Options') or "lost", a tab, and why or how in English.
 // Written as it's known; "" removes it (a session where the packs aren't read with Extra Options). Once lost, it
@@ -208,6 +214,8 @@ void apply_database(const std::vector<FH2Mod*>& mods);
 // Data_Car.str keys the database's car names have that a pack or mod gave as text, with their text
 // (the string tables are written with them).
 std::map<uint16_t, std::wstring> database_strings();
+// The same for eo-media's database (with Extra Options and car packs): its Data_Car.str is written beside it.
+std::map<uint16_t, std::wstring> eo_database_strings();
 // What in a car pack's (by folder name) or a mod's (by name) SQL could clash with car packs' cars, from
 // the last build, or "": rows by an Id car packs' cars are given (3000 to 8999), a pack's car its
 // SQL never gives as {car:...}, or one that can't have the Id its pack.ini asks for (so saves from

@@ -610,19 +610,27 @@ fs::path eo_media() { return temp_drive() / L"fh2-platform" / L"eo-media"; }
 namespace {
 
 // eo-media is the platform's alone, and is read ahead of every other folder: anything in it but what this build writes
-// there (its zipmanifest.xml) is removed, so the game never reads a file there that another build or tool left.
+// there is removed, so the game never reads a file there that another build or tool left. Its own: zipmanifest.xml, and
+// in Stripped the database (kept from one start to the next, so it's only built again when something changed), the
+// copy of the car Ids' record. The cars' names (Stripped\StringTables) go at every start and are written again.
 void clean_eo_media() {
+    const auto sweep = [](const fs::path& dir, std::initializer_list<const char*> files, const char* folder) {
+        std::error_code ec;
+        for (const auto& e : fs::directory_iterator(dir, ec)) {
+            const std::string name = lower(narrow(e.path().filename().wstring()));
+            std::error_code ec2;
+            if (e.is_directory(ec2) ? name == folder : std::find_if(files.begin(), files.end(), [&](const char* f) { return name == f; }) != files.end())
+                continue;
+            fs::remove_all(e.path(), ec2);
+            plog("car packs: " + std::string(ec2 ? "couldn't remove " : "removed ") + narrow(e.path().filename().wstring()) + " from " +
+                 temp_drive_spelling(dir) + (ec2 ? " (" + ec2.message() + ")" : std::string{}) + ": only the platform's own files go there");
+        }
+    };
     const fs::path dir = eo_media();
     std::error_code ec;
     fs::create_directories(dir, ec);
-    for (const auto& e : fs::directory_iterator(dir, ec)) {
-        const std::string name = narrow(e.path().filename().wstring());
-        std::error_code ec2;
-        if (lower(name) == "zipmanifest.xml" && e.is_regular_file(ec2)) continue;
-        fs::remove_all(e.path(), ec2);
-        plog("car packs: " + std::string(ec2 ? "couldn't remove " : "removed ") + name + " from " + temp_drive_spelling(dir) +
-             (ec2 ? " (" + ec2.message() + ")" : std::string{}) + ": only the platform's own files go there");
-    }
+    sweep(dir, {"zipmanifest.xml"}, "stripped");
+    sweep(dir / L"Stripped", {"gamedbrc.slt", "platform-car-ids.txt"}, "");
 }
 
 // With Extra Options, its mediaoverride, mediapc and carbin cache are mounted ahead of the pack folders, and its mods'
@@ -721,7 +729,10 @@ void car_packs_lost(const std::string& why) {
             if (!p.left_out) g_problems[p.name] = row;
     }
     note_eo_packs_outcome("lost", english(why));
+    recheck_recorded_cars();   // against the database the game reads without them; the saves are copied if a car is gone
 }
+
+bool eo_packs_lost() { return g_lost.load(); }
 
 fs::path override_root() {
     return instance_layer() ? instance_media() : game_mount() / "mediaoverride";
@@ -932,12 +943,9 @@ void prepare_car_packs() {
 // start; gone when no pack has one.
 void write_engine_synths() {
     std::string text;
-    // With Extra Options this build doesn't run the packs' SQL, so their cars aren't in the game: none is listed, or an
-    // engine sound mod would load sounds for them.
-    const bool cars_in_game = !eo_packs();
     for (const auto& pack : g_packs)
         for (const auto& es : pack.engine_sounds) {
-            if (es.synth.empty() || pack.left_out || !cars_in_game) continue;
+            if (es.synth.empty() || pack.left_out) continue;
             std::error_code ec;
             const fs::path synth = pack.root / fs::path{es.synth};
             if (!fs::is_regular_file(synth, ec)) {
@@ -952,9 +960,7 @@ void write_engine_synths() {
     std::error_code ec;
     if (text.empty()) {
         if (fs::remove(out, ec))
-            plog(g_packs.empty()   ? "car packs: no pack is read this session; removed platform-engine-synths.txt"
-                 : !cars_in_game ? "car packs: with Extra Options the packs' cars aren't in the game database in this build; removed "
-                                   "platform-engine-synths.txt"
+            plog(g_packs.empty() ? "car packs: no pack is read this session; removed platform-engine-synths.txt"
                                  : "car packs: no pack has an engine sound of its own; removed platform-engine-synths.txt");
         return;
     }

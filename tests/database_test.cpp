@@ -988,6 +988,7 @@ static void eo_packs() {
     // Left in eo-media by another build or a tool, and the engine sound list from a session that had the packs' cars.
     fs::create_directories(eo_media / "Stripped");
     std::ofstream{eo_media / "Stripped" / "gamedbRC.slt"} << "stale";
+    std::ofstream{eo_media / "Stripped" / "stray.bin"} << "stray";
     std::ofstream{eo_media / "stray.txt"} << "stray";
     std::ofstream{synths} << "PG_X\tPG_Y\tC:\\x\tx\ta-pack\tX\r\n";
     const auto listed_zip = [&](const char* name) {
@@ -998,16 +999,23 @@ static void eo_packs() {
     CHECK(has(c.log, "car packs: 2 pack(s) in fh2-cars are read with Extra Options loaded (version 0.6.0)"));
     CHECK(listed_zip("a_car.zip") && listed_zip("b_car.zip"));
     CHECK(has(c.log, "car packs: wrote zipmanifest.xml in T:\\fh2-platform\\eo-media\\ from "));
-    CHECK(!present(eo_media / "Stripped") && !present(eo_media / "stray.txt"));
-    CHECK(has(c.log, "car packs: removed Stripped from T:\\fh2-platform\\eo-media\\: only the platform's own files go there"));
+    CHECK(!present(eo_media / "Stripped" / "stray.bin") && !present(eo_media / "stray.txt"));
+    CHECK(has(c.log, "car packs: removed stray.txt from T:\\fh2-platform\\eo-media\\: only the platform's own files go there"));
     CHECK(!present(mount / "mediaoverride" / "zipmanifest.xml") && !present(tmp / "fh2-platform" / "media"));
     CHECK(present(tmp / "fh2-platform" / "packs" / "a-pack" / "cars" / "A_Car.zip"));
     // mediaoverride's database: the mod's change, and no pack car.
     CHECK(backfire(c.T) && q(c.T, "SELECT count(*) FROM Data_Car WHERE MediaName = 'A_Pack01'") == "0");
-    CHECK(has(c.log, "database: with Extra Options, this build doesn't run car packs' SQL, so the cars of the 1 pack(s) with SQL "
-                     "aren't in the game database this session"));
-    CHECK(!present(synths) && has(c.log, "car packs: with Extra Options the packs' cars aren't in the game database in this build; "
-                                         "removed platform-engine-synths.txt"));
+    // eo-media's own, built over the stale file left there: the pack's car, then the mod's change; its car's name in a
+    // Data_Car.str beside it; and the car isn't reported missing.
+    const fs::path eo_db = eo_media / "Stripped" / "gamedbRC.slt";
+    CHECK(backfire(eo_db) && q(eo_db, "SELECT count(*) FROM Data_Car WHERE MediaName = 'A_Pack01'") == "1");
+    CHECK(has(c.log, "database: wrote this folder's database on the temp drive with changes from "));
+    CHECK(has(c.log, "wrote Data_Car.str in T:\\fh2-platform\\eo-media\\ for "));
+    CHECK(present(c.dir / "fh2-mods" / "platform-db-eo.txt") && !present(c.dir / "fh2-mods" / "platform-db-layer.txt"));
+    CHECK(present(eo_media / "Stripped" / "platform-car-ids.txt"));
+    CHECK(!has(c.log, "A_Pack01 (car ") && !has(c.log, "isn't in the game database this session"));
+    CHECK(has(c.log, "car packs with Extra Options: the platform's first write is done; eo-media has this session's database"));
+    CHECK(!present(synths));
     CHECK(has(c.log, "[ZipTest] set_file: media\\zipmanifest.xml isn't replaced: this session the platform reads the car packs in "
                      "fh2-cars with Extra Options"));
     CHECK(has(c.log, "[ZipTest] zipmanifest.xml refused"));
@@ -1018,6 +1026,8 @@ static void eo_packs() {
     const Stamp written = stamp(manifest);
     c.launch(L"eo");
     CHECK(stamp(manifest) == written && has(c.log, "car packs: zipmanifest.xml in T:\\fh2-platform\\eo-media\\ unchanged (2 pack zip(s))"));
+    CHECK(has(c.log, "database: same changes as last launch, reusing this folder's database on the temp drive"));
+    CHECK(q(eo_db, "SELECT count(*) FROM Data_Car WHERE MediaName = 'A_Pack01'") == "1" && q(c.T, "SELECT count(*) FROM Data_Car WHERE MediaName = 'A_Pack01'") == "0");
 
     // A copy of a pack's zip in mediaoverride, which Extra Options has the game read ahead of the pack's folder: that
     // pack is left out whole, and the other is still read.
@@ -1046,7 +1056,8 @@ static void eo_packs() {
     CHECK(has(c.log, "car packs: a-pack: its cars\\A_Car.zip is also in Extra Options' mod Forza Horizon 2\\CarMod, which can be read "
                      "instead of it with Extra Options, so this pack is left out this session"));
     CHECK(!listed_zip("a_car.zip") && listed_zip("b_car.zip"));
-    CHECK(!has(c.log, "this build doesn't run car packs' SQL"));   // its SQL isn't even read
+    CHECK(q(eo_db, "SELECT count(*) FROM Data_Car WHERE MediaName = 'A_Pack01'") == "0");   // its SQL isn't run: its car is gone
+    CHECK(has(c.log, "A_Pack01 (car ") && has(c.log, "isn't in the game database this session"));
     std::ofstream{eo_mods / "loadorder.txt"} << "#CarMod\r\n";
     c.launch(L"eo");
     CHECK(!has(c.log, "is also in") && listed_zip("a_car.zip") && listed_zip("b_car.zip"));

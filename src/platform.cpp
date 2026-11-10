@@ -382,34 +382,39 @@ void apply_all() {
             for (const unsigned r : {kRootOverride, kRootLayer})
                 if ((was & r) && r != current_root())
                     removed_elsewhere += override_string_table(g_game, name, {}, true, root_folder(r));
-        const int n       = removed_elsewhere + override_string_table(
-            g_game, name,
-            [&](std::string_view lang, uint16_t key, const std::wstring& t) {
-                std::wstring s = t;
-                if (auto k = keys.find(key); k != keys.end()) s = k->second;
-                if (auto k = tr_keys.find(key); k != tr_keys.end())
-                    s = l10n_table_text(k->second.mod, k->second.key, k->second.english, lang);
-                if (auto x = texts.find(s); x != texts.end()) s = x->second;
-                if (is_main && key == kToStartKey) {
-                    std::vector<std::string> own;   // the platform's own lines, in this table's language
-                    for (const std::string& l : platform_lines()) own.push_back(shown_in(l, lang));   // later() messages too
-                    // a notice a mod got from tr() (API 10) in this table's language, then the platform's own lines
-                    s = title_with_notices(
-                        g_azimuth, s,
-                        [&](const std::wstring& who, const std::vector<std::string>& lines) {
-                            for (const auto& m : g_mods) {
-                                std::string text;
-                                if (_wcsicmp(m->wname.c_str(), who.c_str()) || !l10n_text_in(m.get(), "notice", lang, text)) continue;
-                                // as refresh_notice writes the file: the notice, the update line, then the status lines
-                                return mod_title_lines(split_lines(text.c_str()), m->update_notice, m->status);
-                            }
-                            return lines;
-                        },
-                        own);
-                }
-                return s;
-            },
-            remove, override_root(), add);
+        const auto edit = [&](std::string_view lang, uint16_t key, const std::wstring& t) {
+            std::wstring s = t;
+            if (auto k = keys.find(key); k != keys.end()) s = k->second;
+            if (auto k = tr_keys.find(key); k != tr_keys.end())
+                s = l10n_table_text(k->second.mod, k->second.key, k->second.english, lang);
+            if (auto x = texts.find(s); x != texts.end()) s = x->second;
+            if (is_main && key == kToStartKey) {
+                std::vector<std::string> own;   // the platform's own lines, in this table's language
+                for (const std::string& l : platform_lines()) own.push_back(shown_in(l, lang));   // later() messages too
+                // a notice a mod got from tr() (API 10) in this table's language, then the platform's own lines
+                s = title_with_notices(
+                    g_azimuth, s,
+                    [&](const std::wstring& who, const std::vector<std::string>& lines) {
+                        for (const auto& m : g_mods) {
+                            std::string text;
+                            if (_wcsicmp(m->wname.c_str(), who.c_str()) || !l10n_text_in(m.get(), "notice", lang, text)) continue;
+                            // as refresh_notice writes the file: the notice, the update line, then the status lines
+                            return mod_title_lines(split_lines(text.c_str()), m->update_notice, m->status);
+                        }
+                        return lines;
+                    },
+                    own);
+            }
+            return s;
+        };
+        const int n = removed_elsewhere + override_string_table(g_game, name, edit, remove, override_root(), add);
+        // With Extra Options and car packs, eo-media has a database of its own, read ahead of mediaoverride's: its car
+        // names go in a Data_Car.str beside it, with the same edits. (eo-media's tables are removed at every start.)
+        if (table == "data_car.str" && eo_packs())
+            if (const auto eo_add = eo_database_strings(); !eo_add.empty())
+                plog("wrote " + name + " in " + temp_drive_spelling(eo_media()) + " for " +
+                     std::to_string(override_string_table(g_game, name, edit, false, eo_media(), eo_add)) + " languages (" +
+                     std::to_string(eo_add.size()) + " car names added, for the database there)");
         if (mu) {
             ReleaseMutex(mu);
             CloseHandle(mu);
@@ -810,7 +815,7 @@ void build_database() {
     // Its car names given as text go into Data_Car.str (and come out again once there are none).
     {
         std::scoped_lock lk{g_mu};
-        if (database_strings().empty() && !read_manifest().count("data_car.str")) return;
+        if (database_strings().empty() && eo_database_strings().empty() && !read_manifest().count("data_car.str")) return;
         g_dirty.insert("data_car.str");
         g_table_names.emplace("data_car.str", "Data_Car.str");
     }
@@ -1566,6 +1571,7 @@ DWORD WINAPI load_mods(LPVOID) {
     }
     apply_all();
     build_database();
+    eo_overlay_ready();   // with Extra Options: eo-media's database and names are this session's from here on
     db_guards_start(&g_api);   // the guards for a database missing a car's rows, once the game's code is ready
     settings_start(&g_api);
     pad_layer_start(&g_api);

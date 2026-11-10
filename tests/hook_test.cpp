@@ -601,7 +601,7 @@ static void check_eo_packs(const std::wstring& phase, char* game) {
                        "game's own below them"));
         CHECK(has(log, "car packs with Extra Options: zipmanifest.xml (lookup #3, game:\\media\\zipmanifest.xml) was answered by eo-media"));
         CHECK(has(log, "car packs with Extra Options: gamedbRC.slt (lookup #4, game:\\media\\Stripped\\gamedbRC.slt) was answered by a zip "
-                       "or other volume of the game's kind, NOT eo-media; this build keeps none in eo-media"));
+                       "or other volume of the game's kind, NOT eo-media; eo-media has no database this session"));
         CHECK(!has(log, "NOT in the game this session") && !has(log, "LATE") && !has(log, "FAIL"));
         CHECK(outcome("in\t"));
         // The game mapped again, or Extra Options undoing its changes: the slot is the game's own again. The packs
