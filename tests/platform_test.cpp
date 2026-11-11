@@ -450,11 +450,14 @@ int wmain(int argc, wchar_t** argv) {
     const bool hud_phase = phase == L"hud";
     // the cues about where mod settings are (platform 2.9.0): run after "removed", with platform-seen.txt edited
     const bool cue_phase = phase == L"upgrade" || phase == L"newmod" || phase == L"home";
+    // a DLL that loads other mods (platform 2.9.0): run after the cues, with HostMod.dll added (tests/host_mod.cpp)
+    const bool hosts_phase = phase.rfind(L"hosts", 0) == 0;
     std::string log;
     for (int i = 0; i < 250; ++i) {
         Sleep(100);
         log = slurp(L"fh2-mods\\platform.log");
-        if (cue_phase ? has(log, "mod(s) loaded")
+        if (hosts_phase ? has(log, "mod(s) loaded") && (phase == L"hosts-off" || has(log, "[MemberLate] running"))
+            : cue_phase ? has(log, "mod(s) loaded")
             : hud_phase ? has(log, "mod(s) loaded") && has(log, "[HudTestMod] after init:") && has(log, "[HUD layer] page:") &&
                             (argc <= 2 || !menus || hud_started(log))
             : online_phase ? has(log, "mod(s) loaded") &&
@@ -1112,6 +1115,16 @@ int wmain(int argc, wchar_t** argv) {
             // the player's choices (platform-online.txt) win over the author's
             CHECK(has(log, "[OfflineMod] running online"));
             CHECK(has(log, "HelloMod.dll is set to stay off when playing online; not loaded"));
+        } else if (phase == L"online-hosts") {
+            // A DLL that loads other mods (tests/host_mod.cpp). The player's switch has HostMod load online, and that
+            // speaks for HostMod only: MemberB, made for offline play, is held on its own, and nothing marks the DLL off.
+            CHECK(has(log, "[HostMod] running") && has(log, "[MemberA] running") && !has(log, "[MemberB] running"));
+            CHECK(has(log, "[MemberB] 1.0.0 doesn't run in online play (its author says so), so it isn't started") &&
+                  !has(log, "[MemberB] 1.0.0 doesn't run in online play (its author says so), so it isn't started;"));
+            CHECK(!has(log, "HostMod.dll: fh2mod_init returned") && !has(log, "HostMod.dll is set to stay off"));
+            CHECK(has(known, "HostMod.dll\tHostMod\t1.0.0\tLoads other mods.\t\t0") &&
+                  has(known, "HostMod.dll|MemberB\tMemberB\t1.0.0\tThe second mod HostMod loads, made for offline play.\t\t1"));
+            if (pages) CHECK(has(installed, "run in online play (its author says so).") && has(installed, "Loaded by HostMod"));
         } else if (phase == L"online-root") {
             // issue #22: in an Azimuth folder without data\bin, FH2MP's session is next to azimuth.exe
             CHECK(has(log, "FH2MP.dll (FH2MP) is turned on and FH2MP's session file is there (fh2mp-session.txt next to "
@@ -1218,6 +1231,53 @@ int wmain(int argc, wchar_t** argv) {
             // fh2mp-off: FH2MP turned off on the MODS tab, so a session file doesn't make it online
             CHECK(!has(log, "started from the FH2MP launcher") && has(log, "FH2MP.dll is turned off on the MODS tab"));
             CHECK(has(log, "[OfflineMod] running offline") && has(log, "loaded HelloMod.dll"));
+        }
+    } else if (hosts_phase) {
+        // A DLL that loads other mods (tests/host_mod.cpp, platform 2.9.0): YOUR MODS has an entry for each mod it
+        // registered in its fh2mod_init, the DLL's own first, and platform-mods.txt remembers each.
+        const std::string seen      = slurp("fh2-mods\\platform-seen.txt");
+        const std::string known     = slurp("fh2-mods\\platform-mods.txt");
+        const std::string session   = slurp("fh2-mods\\platform-session.json");
+        const bool pages            = fs::exists(L"FH2\\Mount\\media\\UI.zip") && argc <= 2;
+        const std::string installed = pages ? slurp(layer() / L"UI\\Scenes\\Anthem\\A_ModPage_01.xaml") : std::string();
+        CHECK(has(known, "|members\t"));
+        CHECK(has(known, "HostMod.dll\tHostMod\t1.0.0\tLoads other mods.\t\t0") &&
+              has(known, "HostMod.dll|MemberA\tMemberA\t1.0.0\tThe first mod HostMod loads.\t\t0") &&
+              has(known, "HostMod.dll|MemberB\tMemberB\t1.0.0\tThe second mod HostMod loads, made for offline play.\t\t1"));
+        CHECK(!has(known, "MemberLate"));
+        if (phase != L"hosts-off") {
+            CHECK(has(log, "[HostMod] running") && has(log, "[MemberA] running") && has(log, "[MemberB] running"));
+            // registered once fh2mod_init had returned: it works, and the list can't place it
+            CHECK(has(log, "[MemberLate] registered after its DLL's fh2mod_init had returned") && has(log, "[MemberLate] running"));
+            CHECK(has(session, "\"HostMod\": \"1.0.0\"") && has(session, "\"MemberA\": \"1.0.0\"") &&
+                  has(session, "\"MemberB\": \"1.0.0\""));
+        }
+        if (phase == L"hosts") {
+            // HostMod.dll is new in fh2-mods, and so is each mod it loads
+            CHECK(has(seen, "HostMod.dll\tmod.new\t") && has(seen, "HostMod.dll|MemberA\tmod.new\t") &&
+                  has(seen, "HostMod.dll|MemberB\tmod.new\t"));
+            if (pages) {
+                // each has its own rows on its own page; a member has "Loaded by" where the Load switch would be
+                CHECK(has(installed, "MemberA first") && has(installed, "MemberA second") && has(installed, "MemberA site") &&
+                      has(installed, "MemberB only"));
+                CHECK(has(installed, "Loaded by HostMod") && has(installed, "Loads 2 other mods: MemberA, MemberB.") &&
+                      has(installed, "Off also turns off the mods it loads."));
+                CHECK(has(installed, "HostMod loads this mod. To stop loading it, turn HostMod off on its page"));
+            }
+        } else if (phase == L"hosts-more") {
+            // only the one it didn't load last time is new
+            CHECK(has(seen, "HostMod.dll|MemberC\tmod.new\t") && !has(seen, "|MemberA\tmod.new") && !has(seen, "|MemberB\tmod.new"));
+            CHECK(has(known, "HostMod.dll|MemberC\tMemberC\t1.0.0\t"));
+            if (pages) CHECK(has(installed, "Loads 3 other mods: MemberA, MemberB, MemberC."));
+        } else if (phase == L"hosts-old") {
+            // the list was written by a platform that didn't list members: none of them is new, and they're listed now
+            CHECK(!has(seen, "|Member"));
+            CHECK(has(known, "HostMod.dll|MemberC\tMemberC\t1.0.0\t"));
+        } else {
+            // hosts-off: HostMod.dll is turned off, so nothing of it registers; what it loaded last time stays listed
+            CHECK(!has(log, "[HostMod]") && !has(log, "[MemberA]"));
+            CHECK(has(known, "HostMod.dll|MemberC\tMemberC\t1.0.0\t"));
+            if (pages) CHECK(has(installed, "Off with HostMod.") && has(installed, "Loaded by HostMod"));
         }
     } else if (cue_phase) {
         // The cues about where mod settings are, kept in platform-seen.txt (platform 2.9.0), so a second start of the

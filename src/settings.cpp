@@ -2019,7 +2019,7 @@ void hub_online_changed(void* user, const char*, int v) {
 
 void hub_popups_changed(void* user, const char*, int v) {
     const auto i = reinterpret_cast<std::uintptr_t>(user);
-    if (i < g_entries.size() && g_entries[i].mod) mod_popups_changed(g_entries[i].mod, g_entries[i].dll, v);
+    if (i < g_entries.size() && g_entries[i].mod) mod_popups_changed(g_entries[i].mod, widen(g_entries[i].key), v);
 }
 
 void platform_row_changed(void* user, const char*, int v) {
@@ -2072,7 +2072,7 @@ void add_player_rows() {
         r.label       = t.label;
         r.description = t.description;
         r.prop        = "FH2Mod_" + std::to_string(g_rows.size() - 1);
-        r.value       = mod_popups_start(e.mod, e.dll);
+        r.value       = mod_popups_start(e.mod, widen(e.key));
         r.boot        = r.value;
         r.on_change   = &hub_popups_changed;
         r.user        = reinterpret_cast<void*>(static_cast<std::uintptr_t>(i));
@@ -2142,9 +2142,17 @@ void add_hub_rows() {
     ui_player_pages();   // the platform's own pages (Recent pop-ups, UI templates), before the views are made
     // "Load when playing online" (platform 2.8.0), only where FH2MP is installed, and not for FH2MP
     const bool fh2mp = fh2mp_installed();
+    if (g_entries.size() > static_cast<std::size_t>(kMaxModViews))
+        slog("YOUR MODS lists " + std::to_string(g_entries.size()) + " mods, and only the first " + std::to_string(kMaxModViews) +
+             " have a page of their own");
     std::scoped_lock lk{g_mu};
     for (std::size_t i = 0; i < g_entries.size(); ++i) {
         const ModEntry& e = g_entries[i];
+        if (!e.host.empty()) {   // a mod another mod's DLL loads: the Load switches are the DLL's
+            g_entry_row.push_back(-1);
+            g_entry_online_row.push_back(-1);
+            continue;
+        }
         Row& r     = g_rows.emplace_back();
         r.mod      = &g_hub_owner;
         r.key      = "Mod_" + std::to_string(i);
@@ -2400,10 +2408,32 @@ std::vector<RowAct> row_acts(const std::vector<PageItem>& items, const std::stri
 
 // what a mod is, for its description: what it does, and whether it's loaded
 std::string about_mod(const ModEntry& e) {
-    return e.description.empty() ? tr("No description.") : shown(e.description);   // the platform's own for fh2wheel
+    const std::string what = e.description.empty() ? tr("No description.") : shown(e.description);   // the platform's own for fh2wheel
+    return e.host.empty() ? what : join_sentences(what, trf("Loaded by {0}.", {e.host}));
+}
+
+std::string mod_problem(const ModEntry& e);   // below
+
+// A mod another mod's DLL loads (ModEntry::host) that is off because that mod is: turned off, off for online play, or
+// not working. Its entry is then what's remembered from the last time its loader ran.
+bool off_with_host(const ModEntry& e) {
+    if (e.host.empty() || e.mod) return false;
+    for (const ModEntry& h : g_entries)
+        if (h.host.empty() && _wcsicmp(h.dll.c_str(), e.dll.c_str()) == 0) return !h.mod;
+    return false;
 }
 
 std::string mod_note(const ModEntry& e) {
+    if (!e.host.empty()) {
+        if (off_with_host(e)) {
+            for (const ModEntry& h : g_entries)
+                if (h.host.empty() && _wcsicmp(h.dll.c_str(), e.dll.c_str()) == 0 && !mod_problem(h).empty())
+                    return trf("{0} isn't working.", {e.host});
+            return trf("Off with {0}.", {e.host});
+        }
+        if (e.online_off) return tr("Doesn't run in online play (its author says so).");
+        if (!stopped_online(e.mod)) return "";
+    }
     if (!e.enabled) return tr("Turned off: the game doesn't load it.");
     if (e.online_off)
         return tr("Off for online play: you started the game from the FH2MP launcher, and it's set not to load then "
@@ -2436,7 +2466,7 @@ void add_mod_lines(PageItem& it, const ModEntry& e) {
     } else if (e.version.empty()) {
         it.version = tr("Version unknown");   // the note and the row's value say whether it's on
     } else {
-        const char* line = !e.enabled                                               ? "Version {0} (turned off)"
+        const char* line = !e.enabled || (off_with_host(e) && !e.online_off)        ? "Version {0} (turned off)"
                            : e.online_off || stopped_online(e.mod)                  ? "Version {0} (off for online play)"
                            : !e.problem.empty()                                     ? "Version {0} (didn't load)"
                            : !e.mod || e.mod->repo.empty() || !e.mod->check_updates ? "Version {0} (doesn't check for updates)"
@@ -2534,7 +2564,7 @@ std::string mods_folder();             // with About, below
 //                     until it's new again.
 // Deleting the file brings every hint back, which is also how to test them.
 bool home_seen() { return seen_has(kSeenPlatform, "home"); }
-std::string seen_who(const ModEntry& e) { return narrow(e.dll); }
+std::string seen_who(const ModEntry& e) { return e.key; }
 
 // A mod that's new since the player last looked: added to fh2-mods since the launch before, and its page not
 // opened since.
@@ -2612,6 +2642,7 @@ void first_run_cues(bool tab, bool settings_door) {
 // can say them without plural forms ("Ustawienia: 13").
 std::string row_hint(const ModEntry& e) {
     if (!mod_problem(e).empty()) return tr("Press A to see what's wrong.");
+    if (!e.host.empty() && !e.mod) return tr("Press A for its page.");   // it has no switch of its own to turn back on
     if (!e.enabled) return tr("Press A to turn it back on.");
     std::size_t rows = 0, more = 0;
     if (e.mod) {
@@ -2620,7 +2651,8 @@ std::string row_hint(const ModEntry& e) {
         for (const LinkRow& l : g_links) more += l.mod == e.mod;
         for (const ModPage& pg : g_pages) more += pg.mod == e.mod;
     }
-    if (!rows) return more ? tr("Press A for its links and pages.") : tr("Press A for its page, where you can turn it off.");
+    if (!rows) return more ? tr("Press A for its links and pages.") : !e.host.empty() ? tr("Press A for its page.")
+                                                                                     : tr("Press A for its page, where you can turn it off.");
     if (rows == 1) return more ? tr("Press A for its setting and more.") : tr("Press A for its setting.");
     const std::string n = std::to_string(rows);
     return more ? trf("Press A for its {0} settings and more.", {n}) : trf("Press A for its {0} settings.", {n});
@@ -2633,7 +2665,7 @@ std::vector<PageItem> installed_items() {
     for (std::size_t i = 0; i < g_entries.size(); ++i) {
         const ModEntry& e = g_entries[i];
         PageItem it = info(e.name, about_mod(e));
-        const std::string state = !e.enabled ? tr("Off") : e.online_off || stopped_online(e.mod) ? tr("Off online") : mod_is_new(e) ? tr("New") : "";
+        const std::string state = !e.enabled ? tr("Off") : e.online_off || stopped_online(e.mod) ? tr("Off online") : off_with_host(e) ? tr("Off") : mod_is_new(e) ? tr("New") : "";
         std::string value = state;
         if (!e.version.empty()) value += (value.empty() ? "" : "  ") + e.version;
         it.value  = value.empty() ? ">" : value + "  >";
@@ -2728,6 +2760,36 @@ std::vector<PageItem> platform_page_items(int& focus) {
     }
     if (focus < 0) focus = 0;
     return items;
+}
+
+// The other mods an entry's DLL loads (its members), as a sentence for its page: up to three names, then how many
+// more. "" when it loads none.
+std::string loads_line(const ModEntry& e) {
+    if (!e.host.empty()) return "";
+    std::vector<std::string> names;
+    for (const ModEntry& m : g_entries)
+        if (!m.host.empty() && _wcsicmp(m.dll.c_str(), e.dll.c_str()) == 0) names.push_back(m.name);
+    if (names.empty()) return "";
+    if (names.size() == 1) return trf("Loads 1 other mod: {0}.", {names[0]});
+    std::string list;
+    for (std::size_t n = 0; n < names.size() && n < 3; ++n) list += (n ? ", " : "") + names[n];
+    if (names.size() > 3) list = trf("{0} and {1} more", {list, std::to_string(names.size() - 3)});
+    return trf("Loads {0} other mods: {1}.", {std::to_string(names.size()), list});
+}
+
+// The last row of a mod's own: its Load switch. A mod another mod's DLL loads has none (the switch is the DLL's), so
+// a dim row says who loads it and how to stop that.
+PageItem load_item(std::size_t i) {
+    const ModEntry& e = g_entries[i];
+    if (i < g_entry_row.size() && g_entry_row[i] >= 0) {
+        const std::string off = tr("Off leaves it in fh2-mods, but the game doesn't load it.");
+        return {g_entry_row[i], tr("Load this mod"), loads_line(e).empty() ? off : join_sentences(off, tr("Off also turns off the mods it loads."))};
+    }
+    PageItem by = info(trf("Loaded by {0}", {e.host}),
+                       trf("{0} loads this mod. To stop loading it, turn {0} off on its page (that turns off every mod it loads), or "
+                           "see {0}'s own page.", {e.host}));
+    by.style    = FH2_ROW_DIM;
+    return by;
 }
 
 // A mod's page, "MODS / <MOD>", in a fixed order: what's wrong with it (red, and it takes the focus)
@@ -2831,8 +2893,13 @@ std::vector<PageItem> mod_page_items(std::size_t i, int& focus) {
     }
     if (focus < 0) focus = static_cast<int>(items.size());
     items.push_back(what);
+    if (const std::string loads = loads_line(e); !loads.empty()) {   // the mods its DLL loads besides
+        PageItem l = info(tr("Other mods it loads"), loads);
+        l.style    = FH2_ROW_DIM;
+        items.push_back(l);
+    }
     if (i < g_entry_popups_row.size() && g_entry_popups_row[i] >= 0) items.push_back({g_entry_popups_row[i], "", ""});   // UI templates
-    items.push_back({g_entry_row[i], tr("Load this mod"), tr("Off leaves it in fh2-mods, but the game doesn't load it.")});
+    items.push_back(load_item(i));
     if (i < g_entry_online_row.size() && g_entry_online_row[i] >= 0) items.push_back({g_entry_online_row[i], "", ""});
     return items;
 }
@@ -2861,7 +2928,7 @@ bool write_mods_page() {
                 if (g_rows[r].mod == e.mod) items.push_back({static_cast<int>(r), "", ""});
         }
         if (i < g_entry_popups_row.size() && g_entry_popups_row[i] >= 0) items.push_back({g_entry_popups_row[i], "", ""});   // UI templates
-        items.push_back({g_entry_row[i], tr("Load this mod"), tr("Off leaves it in fh2-mods, but the game doesn't load it.")});
+        items.push_back(load_item(i));
     }
     if (!g_entries.empty() && g_platform_rows[0] >= 0) {   // the platform's own rows (ui_player.cpp)
         const PlayerText pt = platform_line();

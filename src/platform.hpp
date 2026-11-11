@@ -19,6 +19,9 @@ struct FH2Mod {
     std::wstring wname, dll;
     bool check_updates = true;
     bool offline_only  = false;      // FH2ModInfo.offline_only (API 9)
+    // Not the first mod its DLL registered (platform 2.9.0): a DLL that loads other mods registers each one, and the
+    // first stands for the DLL itself. YOUR MODS lists each; the DLL's Load switches belong to the first.
+    bool member = false;
     // Stopped for online play (platform 2.9.0): it had started offline, then FH2MP went online. Until
     // the game restarts its hooks are off, its text, SQL and files are out and new ones refused, and
     // its hotkeys, commands, pad layers, HUD layer calls and title-screen entries do nothing.
@@ -334,8 +337,14 @@ struct ModEntry {
     bool online_off = false;          // not running this time because the game is online (FH2MP)
     bool fresh = false;               // new in fh2-mods since the last launch (platform-mods.txt didn't list it);
                                       // the seen store's mod.new keeps it (a second start in one launch sees false)
+    // A DLL that registers more than one mod (a loader of other mods, platform 2.9.0) has an entry for each: its own
+    // first, then its members in the order they registered. A member has its loader's name here; `enabled` and `dll`
+    // are the DLL's, and it has no Load switch of its own.
+    std::string host;
+    std::string key;                  // what the seen store, platform-popups.ini and platform-mods.txt know it by: the
+                                      // DLL's file name, or "<DLL>|<Name>" for a member
 };
-// In load order, turned-off ones included. The first call also puts what's new in the seen store (first, mod.new).
+// In load order, turned-off ones included, each DLL's members straight after it. The first call also puts what's new in the seen store (first, mod.new).
 std::vector<ModEntry> mod_entries();
 // Whether fh2-mods\platform-mods.txt was there when this launch started: false on a first launch.
 bool mods_list_existed();

@@ -124,8 +124,9 @@ void write_session_status() {
         if (const std::string hud = hud_layer_session_text(); !hud.empty()) head += ",\r\n  \"hud_layer\": " + json(hud);
         head += ",\r\n  \"azimuth\": " + json(narrow(azimuth_dir().wstring())) + ",\r\n  \"mods\": {";
         bool first = true;
+        std::set<std::string> written;   // a name is a key here, so the second mod of one name is left out
         for (const ModEntry& m : mod_entries()) {
-            if (!m.mod) continue;
+            if (!m.mod || !written.insert(m.name).second) continue;
             head += std::string(first ? "" : ",") + "\r\n    " + json(m.name) + ": " + json(m.version);
             first = false;
         }

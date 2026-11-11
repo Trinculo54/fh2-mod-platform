@@ -601,6 +601,17 @@ bool remembered_offline_only(const std::wstring& dll);
 bool fh2mp_session(std::string* why);
 void go_online(const std::string& why);
 bool is_the_fh2mp(const std::wstring& dll);
+std::map<std::wstring, bool> online_choices();
+
+// Under g_mu: whether this DLL stays off in online play: the player's "Load when playing online" choice for it, else
+// its own mod's offline_only (the first mod it registered; the mods it loads besides don't speak for it).
+bool dll_off_online(const std::wstring& dll, const std::map<std::wstring, bool>& choices) {
+    if (const auto c = choices.find(lower_w(dll)); c != choices.end()) return !c->second;
+    for (const auto* list : {&g_mods, &g_held})
+        for (const auto& o : *list)
+            if (!o->member && lower_w(o->dll) == lower_w(dll)) return o->offline_only;
+    return false;
+}
 
 FH2Mod* api_register(const FH2ModInfo* info) {
     if (!info || info->size < offsetof(FH2ModInfo, check_updates) + sizeof(int) || !info->name) return nullptr;
@@ -635,23 +646,32 @@ FH2Mod* api_register(const FH2ModInfo* info) {
         // One hold of the lock from the online check to the list: go_online (FH2MP going online
         // from its own thread) then either sees this mod in g_mods or has set g_online before it.
         std::scoped_lock lk{g_mu};
+        // A DLL that loads other mods registers each one: the first stands for the DLL, the rest are its members.
+        if (!g_current_dll.empty())
+            for (const auto* list : {&g_mods, &g_held})
+                for (const auto& o : *list) m->member = m->member || lower_w(o->dll) == lower_w(g_current_dll);
         if (g_online && !is_the_fh2mp(g_current_dll)) {
             // The same rule as at load (loads_online): the player's "Load when playing online" switch,
             // else its author's offline_only. That matters here when FH2MP went online after this DLL
             // was loaded, or for a mod that registers outside its fh2mod_init.
-            const auto choices = online_choices();
-            const auto chosen  = choices.find(lower_w(g_current_dll));
-            const bool player  = chosen != choices.end();
-            if (player ? !chosen->second : m->offline_only) {
+            // The switch is the DLL's, so it speaks for the DLL's own mod. A member stays off with its DLL, and its
+            // author's offline_only counts whatever the DLL's switch says.
+            const auto choices  = online_choices();
+            const auto chosen   = choices.find(lower_w(g_current_dll));
+            const bool player   = !m->member && chosen != choices.end();
+            const bool with_dll = m->member && dll_off_online(g_current_dll, choices);
+            if (player ? !chosen->second : with_dll || m->offline_only) {
                 // It isn't registered, so its fh2mod_init returns; an offline-only one is remembered
                 // (platform-mods.txt), so the next online launch doesn't load it at all.
                 m->dll = g_current_dll;
-                for (auto& f : g_found)
-                    if (lower_w(f.file) == lower_w(g_current_dll)) f.online_off = true;
+                if (!m->member)
+                    for (auto& f : g_found)
+                        if (lower_w(f.file) == lower_w(g_current_dll)) f.online_off = true;
                 log_line(m->name, m->version +
-                                      (player ? " is set to stay off when playing online, so it isn't started"
-                                              : " doesn't run in online play (its author says so), so it isn't started") +
-                                      "; MODS > Installed mods has its \"Load when playing online\" switch");
+                                      (player     ? " is set to stay off when playing online, so it isn't started"
+                                       : with_dll ? " isn't started: " + narrow(g_current_dll) + ", which loads it, stays off when playing online"
+                                                  : " doesn't run in online play (its author says so), so it isn't started") +
+                                      (m->member ? "" : "; MODS > Installed mods has its \"Load when playing online\" switch"));
                 g_held.push_back(std::move(m));
                 return nullptr;
             }
@@ -666,6 +686,9 @@ FH2Mod* api_register(const FH2ModInfo* info) {
         refresh_notice(raw); // also clears a stale notice from last launch
     }
     log_line(raw->name, raw->version + " registered");
+    if (raw->dll.empty())
+        log_line(raw->name, "registered after its DLL's fh2mod_init had returned, so the MODS tab can't tell which DLL it's from: "
+                            "it works, but YOUR MODS doesn't list it this time (register in fh2mod_init to be listed)");
     if (!raw->repo.empty() && raw->check_updates) std::thread([raw] { check_updates(raw); }).detach();
     return raw;
 }
@@ -1058,8 +1081,9 @@ void online_off(std::vector<FH2Mod*>& mods, std::vector<std::wstring>& others) {
     const auto choices = online_choices();
     for (const auto& m : g_mods) {
         if (is_the_fh2mp(m->dll)) continue;
-        const auto c = choices.find(lower_w(m->dll));
-        if (c != choices.end() ? c->second : !m->offline_only) continue;
+        // a mod its DLL loads besides its own goes off with the DLL, or when its own author says so
+        const bool off = m->dll.empty() ? m->offline_only : dll_off_online(m->dll, choices) || (m->member && m->offline_only);
+        if (!off) continue;
         mods.push_back(m.get());
     }
     for (const auto& f : g_found) {
@@ -1762,15 +1786,21 @@ std::string mod_description(FH2Mod* m) {
 // (a first launch has none) and the DLLs it listed (lower case). What's new since the last launch is told by it.
 struct KnownBefore {
     bool existed = false;
-    std::set<std::wstring> dlls;
+    bool members = false;   // written by a platform that lists a DLL's members (2.9.0): its kMembersLine is there
+    std::set<std::wstring> dlls;   // and members' keys, "<dll>|<name>"
 };
+// The line that says the file lists members. A platform before 2.9.0 reads lines by the DLLs it found and wants three
+// columns, so it passes over this one and the members' lines.
+constexpr const wchar_t* kMembersLine = L"|members\tA line that starts DLL|Name is a mod that DLL loads.";
 const KnownBefore& known_before() {
     static const KnownBefore k = [] {
         KnownBefore b;
         std::error_code ec;
         b.existed = fs::is_regular_file(known_path(), ec);
-        for (const auto& l : read_lines(known_path()))
+        for (const auto& l : read_lines(known_path())) {
             if (const auto f = split_tabs(l); !f.empty() && !f[0].empty()) b.dlls.insert(lower_w(f[0]));
+            b.members = b.members || l == kMembersLine;
+        }
         return b;
     }();
     return k;
@@ -1798,9 +1828,15 @@ bool note_first_start(const std::vector<ModEntry>& entries, bool list_existed) {
     }
     for (const ModEntry& e : entries)
         if (e.fresh && e.enabled) {
-            changed = seen_set(narrow(e.dll), "mod.new") || changed;
-            seen_clear(narrow(e.dll), "mod.announced");
+            changed = seen_set(e.key, "mod.new") || changed;
+            seen_clear(e.key, "mod.announced");
         }
+    // the same name twice (a mod installed both as its own DLL and through a loader): both stay listed
+    for (std::size_t i = 0; i < entries.size(); ++i)
+        for (std::size_t j = 0; j < i; ++j)
+            if (entries[i].platform_mod && entries[j].platform_mod && lower(entries[i].name) == lower(entries[j].name))
+                plog("two mods are called " + entries[i].name + " (" + entries[j].key + " and " + entries[i].key +
+                     "): YOUR MODS lists both");
     if (!changed) return true;
     // Waited for, unless the store already knows the file can't be written now (it's locked, or a write failed this
     // session): start-up isn't held up for nothing then, and mod_entries copes with it not being written yet.
@@ -1814,9 +1850,12 @@ std::vector<ModEntry> mod_entries() {
     const KnownBefore& before = known_before();
     // remembered: dll -> name, version, description
     std::map<std::wstring, std::vector<std::wstring>> known;
+    std::vector<std::vector<std::wstring>> known_members;   // "<dll>|<name>" lines, in the file's order
     for (const auto& l : read_lines(known_path())) {
         auto f = split_tabs(l);
-        if (f.size() >= 3) known[lower_w(f[0])] = f;
+        if (f.size() < 3) continue;
+        if (f[0].find(L'|') != std::wstring::npos) known_members.push_back(f);
+        else known[lower_w(f[0])] = f;
     }
     std::vector<ModEntry> out;
     std::vector<std::wstring> remember;
@@ -1829,10 +1868,11 @@ std::vector<ModEntry> mod_entries() {
         e.problem      = f.problem;
         e.platform_mod = f.has_init;
         e.online_off   = f.online_off;
+        e.key          = narrow(f.file);
         bool told      = false;   // registered this launch, so its offline_only is known
         for (const auto* list : {&g_mods, &g_held})
             for (const auto& m : *list)
-                if (!told && lower_w(m->dll) == lower_w(f.file)) {
+                if (!told && !m->member && lower_w(m->dll) == lower_w(f.file)) {
                     e.mod          = list == &g_mods ? m.get() : nullptr;   // a held mod isn't running
                     e.name         = m->name;
                     e.version      = m->version;
@@ -1878,6 +1918,59 @@ std::vector<ModEntry> mod_entries() {
             remember.push_back(f.file + L"\t" + widen(e.name) + L"\t" + widen(e.version) + L"\t" + widen(e.description) + L"\t" +
                                widen(e.repo) + L"\t" + (e.offline_only ? L"1" : L"0"));
         out.push_back(e);
+        // The other mods this DLL registered (it loads them): an entry each, straight after its own. When its own
+        // mod isn't running this time (turned off, off for online play, or a problem), the ones remembered from the
+        // last time it ran, so they don't vanish from the list with it.
+        const std::string host = e.name;
+        std::set<std::string> names;   // one entry for a name registered twice by one DLL
+        if (e.mod) {
+            for (const auto* list : {&g_mods, &g_held})
+                for (const auto& m : *list) {
+                    if (!m->member || lower_w(m->dll) != lower_w(f.file) || !names.insert(lower(m->name)).second) continue;
+                    ModEntry me;
+                    me.dll          = f.file;
+                    me.enabled      = !f.disabled;
+                    me.platform_mod = true;
+                    me.host         = host;
+                    me.key          = narrow(f.file) + "|" + m->name;
+                    me.mod          = list == &g_mods ? m.get() : nullptr;   // a held mod isn't running
+                    me.online_off   = list == &g_held;
+                    me.name         = m->name;
+                    me.version      = m->version;
+                    me.description  = m->description;
+                    l10n_follow(m.get(), "mod.description", me.description);
+                    me.repo         = m->repo;
+                    me.offline_only = m->offline_only;
+                    me.loads_online = !me.offline_only;
+                    // new since the last launch: the list had members' lines then, and not this one
+                    me.fresh = before.members && !before.dlls.count(lower_w(widen(me.key)));
+                    remember.push_back(widen(me.key) + L"\t" + widen(me.name) + L"\t" + widen(me.version) + L"\t" +
+                                       widen(me.description) + L"\t" + widen(me.repo) + L"\t" + (me.offline_only ? L"1" : L"0"));
+                    out.push_back(me);
+                }
+        } else if (e.platform_mod) {
+            const std::wstring prefix = lower_w(f.file) + L"|";
+            for (const auto& k : known_members) {
+                if (lower_w(k[0]).rfind(prefix, 0) != 0 || !names.insert(lower(narrow(k[1]))).second) continue;
+                ModEntry me;
+                me.dll          = f.file;
+                me.enabled      = !f.disabled;
+                me.platform_mod = true;
+                me.host         = host;
+                me.key          = narrow(f.file) + "|" + narrow(k[1]);
+                me.online_off   = f.online_off;
+                me.name         = narrow(k[1]);
+                me.version      = narrow(k[2]);
+                if (k.size() > 3) me.description = narrow(k[3]);
+                if (k.size() > 4) me.repo = narrow(k[4]);
+                if (k.size() > 5) me.offline_only = k[5] == L"1";
+                me.loads_online = !me.offline_only;
+                std::wstring line = k[0];
+                for (std::size_t c = 1; c < k.size(); ++c) line += L"\t" + k[c];
+                remember.push_back(line);
+                out.push_back(me);
+            }
+        }
     }
     lk.unlock();
     static std::mutex write_mu;   // the seen entries, then the file, one caller at a time
@@ -1892,6 +1985,7 @@ std::vector<ModEntry> mod_entries() {
         held = !seen_flush(0);
     }
     if (held) return out;
+    remember.insert(remember.begin(), kMembersLine);
     write_lines(known_path(),
                 L"# What the MODS tab remembers about each mod (DLL, name, version, description, GitHub repo, offline only).\n",
                 remember);

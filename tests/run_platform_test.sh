@@ -77,6 +77,20 @@ run_layout() {   # run_layout mediaoverride|own
     printf '*\thome\tseen\t2026-11-08\n' >> fh2-mods/platform-seen.txt
     wine azimuth.exe home
     rm fh2-mods/OfflineMod.dll
+    # A mod that loads other mods (platform 2.9.0): HostMod.dll registers HostMod, then MemberA and MemberB, and YOUR
+    # MODS lists each. On the first start all three are new. On the second it also loads MemberC, and only that is
+    # new. Then with a platform-mods.txt from before members were listed (no members line): no member is new. Then
+    # with HostMod turned off: the mods it loads stay listed, off, from what's remembered.
+    cp "$b/HostMod.dll" fh2-mods/
+    wine azimuth.exe hosts
+    sed -i '/|Member/d' fh2-mods/platform-seen.txt
+    FH2_TEST_MEMBER_C=1 wine azimuth.exe hosts-more
+    sed -i '/|/d' fh2-mods/platform-mods.txt
+    sed -i '/|Member/d' fh2-mods/platform-seen.txt
+    FH2_TEST_MEMBER_C=1 wine azimuth.exe hosts-old
+    printf 'hostmod.dll\n' > fh2-mods/platform-disabled.txt
+    wine azimuth.exe hosts-off
+    rm fh2-mods/HostMod.dll fh2-mods/platform-disabled.txt
     mv seen.keep fh2-mods/platform-seen.txt
     mv mods.keep fh2-mods/platform-mods.txt
     # The database test makes its own Azimuth folders (without data\titles): once is enough.
@@ -96,6 +110,17 @@ run_layout() {   # run_layout mediaoverride|own
     wine azimuth.exe online
     printf 'OfflineMod.dll\t1\nHelloMod.dll\t0\n' > fh2-mods/platform-online.txt
     wine azimuth.exe online-chosen
+    # A mod that loads other mods, online: HostMod is set to load online (the player's switch), and MemberB was made
+    # for offline play. MemberB alone is held; HostMod and MemberA run. The files are put back after.
+    cp fh2-mods/platform-seen.txt seen.keep
+    cp fh2-mods/platform-mods.txt mods.keep
+    cp "$b/HostMod.dll" fh2-mods/
+    printf 'OfflineMod.dll\t1\nHelloMod.dll\t0\nHostMod.dll\t1\n' > fh2-mods/platform-online.txt
+    wine azimuth.exe online-hosts
+    rm fh2-mods/HostMod.dll
+    printf 'OfflineMod.dll\t1\nHelloMod.dll\t0\n' > fh2-mods/platform-online.txt
+    mv seen.keep fh2-mods/platform-seen.txt
+    mv mods.keep fh2-mods/platform-mods.txt
     printf 'fh2mp.dll\n' > fh2-mods/platform-disabled.txt
     wine azimuth.exe fh2mp-off
     # FH2MP's own rules for its session (platform 2.9.0): only where FH2MP looks (data\bin when there is one), and
