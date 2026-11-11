@@ -1069,7 +1069,7 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
 
 // ---- the pages ----------------------------------------------------------------------------
 
-// xml_escape (mods' text in the pages, non-ASCII as &#NNN;) is in xml_text.cpp.
+// xml_escape (mods' text in the pages, non-ASCII as &#x..;) is in xml_text.cpp.
 
 std::string read_ui(const char* name) {
     const auto zip = game_mount() / L"media" / L"UI.zip";
@@ -1265,8 +1265,8 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
             // value are on the button (BindingProxy.A, .C) for FH2Mod_InfoRow.
             // A note goes after the description, except an error on a line of information: that
             // shows in red at the top of the footer (from the data item's Icon, which a line of
-            // information doesn't otherwise use; FZTextBlock doesn't break lines, not even at
-            // &#10;, so it can't sit a line below in the same text).
+            // information doesn't otherwise use; FZTextBlock doesn't break lines, so it
+            // can't sit a line below in the same text).
             const bool info_row  = it.row < 0 || static_cast<std::size_t>(it.row) >= g_rows.size();
             const bool red_note  = info_row && it.note_alert;
             auto data_item = [&](const std::string& label, const std::string& desc) {
@@ -5806,6 +5806,17 @@ int pages_set_xaml(FH2Mod* m, const char* key, const char* resources, const char
         }
         return 0;
     }
+    // A mod's own XAML is written as it is. The game reads a page one byte a character and decodes only hex
+    // references with a lowercase x, so UTF-8 letters show as two wrong ones and &#243; as a space. Changing them
+    // here isn't safe (&#123; made a real brace would be markup the game doesn't know), so the log says it, once a page.
+    static std::set<std::string> told;
+    for (const char* text : {resources, content, help})
+        for (const char* c = text; c && *c; ++c)
+            if ((static_cast<unsigned char>(*c) >= 0x80 || (c[0] == '&' && c[1] == '#' && c[2] != 'x')) && told.insert(m->name + "\n" + key).second) {
+                log_line(m->name, std::string("set_page_xaml: ") + key + " has a letter beyond ASCII written as it is, or a character reference that "
+                                      "isn't hex with a lowercase x. The game shows those as wrong letters or spaces: write \xC3\xB3 as &#xf3;, not &#243;");
+                break;
+            }
     pg.xaml_refused   = false;
     pg.xaml_resources = resources ? resources : "";
     pg.xaml_content   = content;

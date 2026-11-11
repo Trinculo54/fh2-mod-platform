@@ -1,6 +1,7 @@
 #include "xml_text.hpp"
 
 #include <cstdint>
+#include <cstdio>
 
 namespace fh2platform {
 namespace {
@@ -48,7 +49,7 @@ std::string xml_escape(const std::string& s) {
                 case '<': o += "&lt;"; break;
                 case '>': o += "&gt;"; break;
                 case '"': o += "&quot;"; break;
-                case '\n': o += ' '; break;   // FZTextBlock doesn't break lines (not even at &#10;)
+                case '\n': o += ' '; break;   // FZTextBlock doesn't break lines
                 case '\t': o += ' '; break;
                 case '\r': o += '\r'; break;  // allowed in XML, and written as it is since 2.8.0
                 default:
@@ -62,11 +63,19 @@ std::string xml_escape(const std::string& s) {
         std::uint32_t cp = 0;
         std::size_t n = utf8_at(s, i, cp);
         if (!n) cp = from_cp1252(c), n = 1;
-        // Beyond U+FFFF (emoji) the game's fonts have nothing, and nobody knows whether its XAML reader takes a
-        // reference past 16 bits; U+FFFE and U+FFFF aren't characters at all. A ? shows something was there.
-        if (cp > 0xFFFF || cp == 0xFFFE || cp == 0xFFFF) o += '?';
-        else o += "&#" + std::to_string(cp) + ";";
         i += n;
+        // Beyond U+FFFF (emoji) the game's fonts have nothing; U+FFFE and U+FFFF aren't characters at all, and
+        // Windows-1252 leaves five bytes out (from_cp1252 gives '?'). A ? shows something was there.
+        if (cp > 0xFFFF || cp == 0xFFFE || cp == 0xFFFF || cp == '?') {
+            o += '?';
+            continue;
+        }
+        if (cp < 0xA0) continue;   // U+0080 to U+009F are control characters: left out, as the others are
+        // Hex, with a lowercase x: the only character reference the game's XAML reader decodes (DecodeEntity,
+        // game+0x153BEB0). A decimal one, &#243;, comes out as a space (2.9.0 rc1 wrote those).
+        char ref[16];
+        std::snprintf(ref, sizeof ref, "&#x%x;", static_cast<unsigned>(cp));
+        o += ref;
     }
     // The game's XAML reader takes a value that starts with { and ends with } as a markup extension
     // (the two property setters at game+0x156B1F0 and game+0x156C080 check exactly that, with no trimming, then
@@ -75,7 +84,7 @@ std::string xml_escape(const std::string& s) {
     // loading. It has no "{}" escape (WPF's), so a no-break space goes on the end instead: every font the game
     // picks has one, and it can't be seen. What's written is what counts: a control character left out at
     // either end mustn't hide the braces.
-    if (o.size() >= 2 && o.front() == '{' && o.back() == '}') o += "&#160;";
+    if (o.size() >= 2 && o.front() == '{' && o.back() == '}') o += "&#xa0;";
     return o;
 }
 
