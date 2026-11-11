@@ -1978,12 +1978,24 @@ std::vector<ModEntry> mod_entries() {
     // The first time, the seen store gets what this list tells, and the file is only written once that's in
     // platform-seen.txt: a second start of the game in the same launch then reads it there.
     static bool noted = false, held = false;
-    if (!noted) {
+    static std::set<std::string> marked;   // the new entries that have had their mod.new this session
+    const bool first = !noted;
+    if (first) {
         noted = true;
         held  = !note_first_start(out, before.existed);
     } else if (held) {
         held = !seen_flush(0);
     }
+    // A mod its loader registered after the list was first made is new too. The list is first made when the session
+    // file is written, which a loader's own first command brings on before it has started its runtime and registered
+    // the mods it loads. Once each, so opening its page takes the mark off for the rest of the session.
+    bool late = false;
+    for (const ModEntry& e : out)
+        if (e.fresh && e.enabled && marked.insert(e.key).second && !first) {
+            late = seen_set(e.key, "mod.new") || late;
+            seen_clear(e.key, "mod.announced");
+        }
+    if (late && !held) held = seen_unwritable() || !seen_flush(2000);   // as note_first_start: the mark, then the file
     if (held) return out;
     remember.insert(remember.begin(), kMembersLine);
     write_lines(known_path(),

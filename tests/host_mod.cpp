@@ -31,6 +31,12 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     FH2Mod* host = reg("HostMod", "Loads other mods.", 0);
     if (!host) return 0;   // the platform turned it away: the game is online and it's set to stay off
     api->log(host, "running");
+    // A command of the loader's own, before the mods it loads: the first command of a session makes the platform
+    // write its session file, and with it the mod list, so MemberA and MemberB register after the list was first made
+    // (as a loader that starts a runtime in between does). They are still marked new.
+    api->add_command(host, "hosted", "lists the mods HostMod loads",
+                     [](void*, const char*, const char*, char* reply, size_t n) { lstrcpynA(reply, "MemberA, MemberB", static_cast<int>(n)); },
+                     nullptr);
     if (FH2Mod* a = reg("MemberA", "The first mod HostMod loads.", 0)) {
         api->log(a, "running");
         row(a, "Alpha", "MemberA first", "A setting of MemberA's.", nullptr);
