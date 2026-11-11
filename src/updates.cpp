@@ -241,8 +241,9 @@ std::wstring title_with_notices(
     //
     // The box doesn't wrap, and a long line ran off the right of the screen (2.9.0 rc1: 59 Latin letters just fit,
     // 63 were cut). So a line is cut at a space once it's past kBudget; Japanese, Korean and Chinese characters
-    // count double, and a line can be cut before any of them.
-    constexpr int kBudget = 50;
+    // count double, and a line can be cut before any of them. The budget is the 59 that fit: the platform's own
+    // lines are up to 59 letters in some languages (Spanish, French), and they stay whole.
+    constexpr int kBudget = 59;
     const auto wide       = [](wchar_t c) { return c >= 0x1100; };
     std::wstring above, below;
     std::vector<std::string> lines = notice_lines(azimuth, lines_for);
