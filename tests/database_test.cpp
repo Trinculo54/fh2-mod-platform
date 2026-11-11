@@ -767,7 +767,8 @@ static void car_ids() {
     // One whose pack.ini asks for an Id: its car gets it.
     const fs::path wish = c.dir / "fh2-cars" / "wish-pack";
     fs::create_directories(wish / "media");
-    std::ofstream{wish / "pack.ini"} << "[pack]\nname = Wish pack\n\n[car WISH_Pack01]\nname = Wish car\nid = 3500\n";
+    // (its name has a letter beyond ASCII: pack.ini is UTF-8)
+    std::ofstream{wish / "pack.ini"} << "[pack]\nname = Wish p\xC3\xA1" "ck\n\n[car WISH_Pack01]\nname = Wish car\nid = 3500\n";
     std::ofstream{wish / "WISH_Pack01.sql"} << "CREATE TEMP TABLE wc AS SELECT * FROM Data_Car WHERE Id = 441;\n"
                                                "UPDATE wc SET Id = {car:WISH_Pack01}, MediaName = 'WISH_Pack01';\n"
                                                "INSERT INTO Data_Car SELECT * FROM wc; DROP TABLE wc;\n";
@@ -788,6 +789,7 @@ static void car_ids() {
     CHECK(listed(record) == ids);
     CHECK(car(3000) == "HAND_Test01" && car(3001) == "LIT_Pack01" && car(3003) == "TEST_Pack01" && car(3500) == "WISH_Pack01");
     CHECK(has(c.log, "[car pack wish-pack] database: WISH_Pack01 is car 3500 from now on"));
+    CHECK(has(c.log, "car packs: wish-pack: Wish p\xC3\xA1" "ck, adds WISH_Pack01"));   // not "Wish pÃ¡ck"
     CHECK(q(layer, "SELECT count(*) FROM Data_Engine WHERE EngineID = 3003") == "1");
     CHECK(has(c.log, "[car pack test-pack] database: TEST_Pack01 is car 3003 from now on"));
     CHECK(has(c.log, "[CarIdTest] database: warning: Its SQL adds rows by Ids that car packs' cars are given (Data_Car 3000); "

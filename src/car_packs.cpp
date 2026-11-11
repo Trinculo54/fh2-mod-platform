@@ -218,6 +218,19 @@ void write_manifest(const fs::path& root) {
              " entries " + std::to_string(d.entries));
 }
 
+// A name GetPrivateProfileStringW read from pack.ini, which is UTF-8. Windows takes the file for text in the ANSI
+// code page, so "Huracán" came out as "HuracÃ¡n": the letters are turned back into the file's bytes, which are the
+// name when they're valid UTF-8. A file that really is in the ANSI code page reads as before.
+// shortcut: a pack.ini with a byte order mark loses its first line ([pack]) in Windows' reader; a reader of the
+// platform's own is the upgrade if packs turn up saved that way.
+std::string ini_text(const wchar_t* w) {
+    char bytes[3072];
+    BOOL lost   = FALSE;
+    const int n = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, w, -1, bytes, sizeof bytes, nullptr, &lost);
+    if (n > 0 && !lost && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, bytes, -1, nullptr, 0) > 0) return bytes;
+    return narrow(w);
+}
+
 // pack.ini, next to the media folder: [pack] name= and version=, and a [car <media name>] section
 // for each car the pack adds, whose name= the MODS tab shows and whose id= is the Id it asks for
 // (car_ids.cpp); the rest is for the tool that builds the pack. Without it a pack adds no car, and
@@ -228,9 +241,9 @@ void read_pack_ini(CarPack& pack) {
     if (!fs::is_regular_file(ini, ec)) return;
     wchar_t buf[1024];
     GetPrivateProfileStringW(L"pack", L"name", L"", buf, 1024, ini.c_str());
-    pack.title = narrow(buf);
+    pack.title = ini_text(buf);
     GetPrivateProfileStringW(L"pack", L"version", L"", buf, 1024, ini.c_str());
-    pack.version = narrow(buf);
+    pack.version = ini_text(buf);
     std::vector<wchar_t> names(32768);
     const DWORD n = GetPrivateProfileSectionNamesW(names.data(), static_cast<DWORD>(names.size()), ini.c_str());
     for (const wchar_t* s = names.data(); s < names.data() + n && *s; s += wcslen(s) + 1) {
@@ -244,7 +257,7 @@ void read_pack_ini(CarPack& pack) {
         if (ok) {
             pack.cars.push_back(car);
             GetPrivateProfileStringW(s, L"name", L"", buf, 1024, ini.c_str());
-            pack.car_names.push_back(narrow(buf));
+            pack.car_names.push_back(ini_text(buf));
             GetPrivateProfileStringW(s, L"id", L"", buf, 1024, ini.c_str());
             pack.wanted_ids.push_back(narrow(buf));
             CarPack::EngineSound es;

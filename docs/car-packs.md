@@ -68,7 +68,7 @@ name = Mustang GT Clone
 id = 3000
 ```
 
-The platform reads `[pack]`'s `name` and `version`, the `[car ...]` section names, and each car's `name` (the MODS tab lists it) and `id`, the Id the car asks for ([Database rows](#database-rows)). Anything else in a car's section is for the tool that made the pack. A pack without `pack.ini` adds no car, but its SQL and files are still used, so it can change stock cars too.
+The platform reads `[pack]`'s `name` and `version`, the `[car ...]` section names, and each car's `name` (the MODS tab lists it) and `id`, the Id the car asks for ([Database rows](#database-rows)). Anything else in a car's section is for the tool that made the pack. Save `pack.ini` as UTF-8 without a byte order mark, so names with letters beyond ASCII ("Huracán EVO") show as written; with a byte order mark Windows doesn't read the file's first line. A pack without `pack.ini` adds no car, but its SQL and files are still used, so it can change stock cars too.
 
 ### Database rows
 
