@@ -4,7 +4,7 @@ From 2.9.0 the platform loads car packs: new cars for the Autoshow, each pack in
 
 ## What they need
 
-Azimuth 1.0 or later, without Extra Options. The platform then mounts its own folders ahead of the game's ([game-notes.md](game-notes.md#azimuths-drives-and-this-folders-layer)), which is what packs are read from. With Extra Options loaded, or on an older Azimuth, packs aren't read, and `fh2-mods\platform.log` says so ("car packs: the 1 pack(s) in fh2-cars aren't read: Extra Options is loaded"). Mods work there as before. What the platform looks for, as it starts, is the `data\titles\1A96545B` folder Azimuth keeps the game's temporary drive in (Azimuth 0.9.10 has it too), with the `tmp\Turn10Temp.scratch` folder in it that the game makes on that drive, which shows the drive really is there. A fresh Azimuth folder only has them once the game has been started, so packs are read from the second start. The log says which one was missing ("media overrides: this Azimuth folder has no data\titles\1A96545B yet ...", or "... has data\titles\1A96545B, but no tmp\Turn10Temp.scratch in it ...").
+Azimuth 1.0 or later. The platform then mounts its own folders ahead of the game's ([game-notes.md](game-notes.md#azimuths-drives-and-this-folders-layer)), which is what packs are read from. Packs are read with Extra Options loaded too ([With Extra Options](#with-extra-options) below). On an older Azimuth packs aren't read, and `fh2-mods\platform.log` says so. Mods work there as before. What the platform looks for, as it starts, is the `data\titles\1A96545B` folder Azimuth keeps the game's temporary drive in (Azimuth 0.9.10 has it too), with the `tmp\Turn10Temp.scratch` folder in it that the game makes on that drive, which shows the drive really is there. A fresh Azimuth folder only has them once the game has been started, so packs are read from the second start. The log says which one was missing ("media overrides: this Azimuth folder has no data\titles\1A96545B yet ...", or "... has data\titles\1A96545B, but no tmp\Turn10Temp.scratch in it ...").
 
 ## Installing and removing a pack
 
@@ -14,13 +14,28 @@ To remove a pack, delete its folder. Its cars and files are gone from the next s
 
 ### When a pack's cars are missing
 
-A pack's cars can also be missing from the game's database without you removing anything: the pack is left out because a mod's SQL now takes one of its car's Ids, its own SQL fails after an update, the packs aren't read at all (Extra Options installed), or the platform has gone back to an older version. The platform checks at every start, before the game reads your save, that every car it has given an Id to (`fh2-mods\platform-car-ids.txt`) is in the database the game reads. When one isn't:
+A pack's cars can also be missing from the game's database without you removing anything: the pack is left out because a mod's SQL now takes one of its car's Ids, its own SQL fails after an update, the packs aren't read at all (with Extra Options, when one of the checks below fails), or the platform has gone back to an older version. The platform checks at every start, before the game reads your save, that every car it has given an Id to (`fh2-mods\platform-car-ids.txt`) is in the database the game reads. When one isn't:
 
 - the first start it's missing, your saves are copied to `fh2-mods\save-snapshots\car-packs-<session>` (the newest 5 such copies are kept, apart from those mods ask for), and `fh2-mods\platform-cars-missing.txt` lists the cars;
 - every start it's missing, the title screen says which pack's cars aren't in the game ("Car pack Mustang clone's cars aren't in the game this time."), with why on the line below, and the pack's row on the MODS tab says so in red. For a pack whose folder is gone only `platform.log` says so;
 - when the database the platform built on can't be read, which passes on its own, the database from the last start is kept as it is, with the packs' cars, rather than one without them.
 
 **Extracting an older mod zip takes car packs out.** Every mod zip ships the platform it was built with, and many (WreckingBall 1.3.3, Achievements 1.0.2 and others) still ship 2.8.0, which doesn't know car packs. Extract one of those and the next start has none of your packs' cars, with no warning, since 2.8.0 can't give one. Reinstall a mod that ships 2.9.0 (or the platform's own zip) before playing, and keep a copy of your saves if you own a pack's car.
+
+## With Extra Options
+
+Extra Options (`winmm.dll` next to `azimuth.exe`) takes over how the game finds its files, and reads `mediaoverride`, `mediapc` and its own mods' folders. The platform takes its turn after it: it adds the packs' folders, and one folder of its own, ahead of the ones Extra Options adds. You install packs the same way, in `fh2-cars`, and they get the same Ids as without Extra Options, so a save works either way.
+
+What's different:
+
+- **Where the files are.** The packs' database, their cars' names and the merged `zipmanifest.xml` are in `data\titles\1A96545B\tmp\fh2-platform\eo-media`, which only the platform writes to. Everything else the platform writes (mods' text and files, the MODS tab) goes to `mediaoverride`, as it always has with Extra Options. `mediaoverride`'s database gets mods' changes only, so other Azimuth folders on the same game folder don't see this folder's packs.
+- **It needs Extra Options to be working.** Extra Options 0.6.0 is the version tested. Its `FH2_ExtraOptions.ini` has to be there with `[Global] Enabled` not 0, and either `EnableMediaOverrides=1` or a mod of its own turned on, since otherwise it adds no folders at all.
+- **Everything is checked, every start.** That Extra Options took the file lookup, that the packs' folders went in before it set up its own, that they are ahead of its folders, and that the game read its list of zips and its database from the platform's folder. `platform.log` has a line for each, all starting "car packs with Extra Options:". If any check fails, the packs are switched off for that session and the game reads what it would without them, so it never plays with half of a pack. The title screen and the packs' rows on the MODS tab say why, and `fh2-mods\platform-eo-packs.txt` has the outcome ("in" or "lost").
+- **A file in two places leaves the pack out.** If one of a pack's files (a car's zip, say) is also in `mediaoverride`, `mediapc` or one of Extra Options' own mods, that pack is left out for the session, with the file named in the log and on its row. Install a car as a pack or as an Extra Options mod, not both. An Extra Options mod with a `zipmanifest.xml` of its own leaves every pack out.
+- **Extra Options' own car mods keep their Ids.** A new pack car is never given an Id that a turned-on Extra Options mod's `database.json` inserts into `Data_Car`. If such a mod arrives later with the Id a pack car already has, the pack car keeps it and Extra Options moves or refuses its own (its log says which); only a mod that shares rows by Id (`id_conflicts: last_wins`) leaves the pack out, as the car's row would become the mod's.
+- **FH2MP.** Started from the FH2MP launcher (online play), the packs are off for that session: online, the game has to read the server's database, which FH2MP puts in `mediaoverride`. Started normally, they're read. If FH2MP asks to go online while a game with the packs is running, it's told to have you start from its launcher instead.
+
+Moving `winmm.dll` away (or back) changes nothing for the packs or your save: the cars and their Ids are the same, only the folder the database is read from differs.
 
 ## This Azimuth folder's own files
 
