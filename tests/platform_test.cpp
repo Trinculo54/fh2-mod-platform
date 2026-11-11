@@ -498,6 +498,18 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(ai_has(L"Buddy1") && ai_has(L"Buddy2") && !ai_has(L"Nocomply76") && ai_has(L"Womgoose"));
         const auto title = str("Main.str", 0x18F0);
         std::printf("title: [%ls]\n", title.c_str());
+        // a line too long for the screen is cut at a space, with a blank line above for each line it takes; a
+        // Japanese one can be cut anywhere, its characters counting double; a line that fits is left as it is
+        CHECK(title_with_notices(L"no-such-folder", L"TO START", {}, {"A copy of your saves from before is in fh2-mods\\save-snapshots."}) ==
+              L"\n\n\nTO START\nA copy of your saves from before is in\nfh2-mods\\save-snapshots.");
+        CHECK(title_with_notices(L"no-such-folder", L"TO START", {}, {std::string(50, 'x') + " y", std::string(60, 'z')}) ==
+              L"\n\n\n\nTO START\n" + std::wstring(50, L'x') + L"\ny\n" + std::wstring(60, L'z'));
+        {
+            std::string jp;
+            for (int i = 0; i < 30; ++i) jp += "\xE3\x81\x82";   // 30 of U+3042
+            CHECK(title_with_notices(L"no-such-folder", L"TO START", {}, {jp}) ==
+                  L"\n\n\nTO START\n" + std::wstring(25, L'あ') + L"\n" + std::wstring(5, L'あ'));
+        }
         // the platform's own line about where mod settings are comes last (fh2-mods\platform-title.txt), until
         // YOUR MODS has been opened (platform 2.9.0); with no MODS menus to point at (no UI.zip here), there's none
         if (menus) {
