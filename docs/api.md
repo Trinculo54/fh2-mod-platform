@@ -52,6 +52,8 @@ FH2Mod* register_mod(const FH2ModInfo* info);
 
 Call once, from `fh2mod_init`. It returns your handle, or null if `info` is missing or too small. Fill in every member of `FH2ModInfo`:
 
+A DLL that loads other mods (scripts, .NET mods) calls it once for itself, first, and then once for each mod it loads, all inside its `fh2mod_init`. From platform 2.9.0, **YOUR MODS** lists each of them, with its own page for its rows, links and pages, its own update check and its own Pop-ups row. The **Load this mod** and **Load when playing online** switches belong to the DLL, so they're on the first mod's page, and the others' pages say who loads them. Online, each mod's own `offline_only` decides for it, whatever the DLL's switch says, and a DLL that stays off takes the mods it loads with it. A mod registered after `fh2mod_init` has returned works, but isn't listed in that session.
+
 | Member | Meaning |
 |---|---|
 | `size` | `sizeof(FH2ModInfo)` |

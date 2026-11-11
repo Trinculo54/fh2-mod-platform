@@ -105,6 +105,8 @@ If your mod has something other mods could use, publish it. Write a small header
 
 Once an interface is published, keep it working: add members at the end and bump the version, never change existing ones. WheresMyBuddy and FH2 Universal Radio both publish one: `WheresMyBuddy.Friends` and `FH2UniversalRadio.NowPlaying`.
 
+**Loaders.** If your DLL loads other mods (scripts, or mods written in another language), call `register_mod` for your own mod first, then once for each mod you load, all before `fh2mod_init` returns. From platform 2.9.0 the player then sees each of them on YOUR MODS, under its own name, with the rows, links and pages it added on its own page. Your mod's page has the Load switches for the whole DLL and names the mods it loads; theirs say "Loaded by" yours. The list remembers them, so they stay listed (as Off) while your DLL is turned off. Give each mod its own `offline_only`: the platform holds such a mod back online by itself. A mod you register later, once `fh2mod_init` has returned, works but isn't listed until a launch where you register it in time.
+
 ## When it crashes
 
 If the game crashes, look in `fh2-mods\crashes`. Each crash gets a text report, with the call stack and the mod it came from, plus a minidump to open in a debugger. When players report a crash, ask them for the text file.
