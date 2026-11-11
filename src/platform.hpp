@@ -98,7 +98,8 @@ void clean_leftover_files(const std::vector<FH2Mod*>& mods);
 // Removes one override from an earlier launch now, if no mod replaces it this time.
 void remove_leftover_file(const char* media_path);
 
-// media_overrides.cpp: mounts mediaoverride and mediapc itself when Extra Options isn't loaded.
+// media_overrides.cpp: mounts mediaoverride and mediapc itself when Extra Options isn't loaded, and with Extra
+// Options, the car packs behind its file lookup (eo_packs).
 void start_media_overrides();
 
 // car_packs.cpp: this Azimuth folder's own media layer, and car packs.
@@ -118,6 +119,9 @@ struct CarPack {
         std::string car, sound, base, synth; // media name; PG_ bank names without "PG_"; .synth file under the pack
     };
     std::vector<EngineSound> engine_sounds;
+    // Left out whole this session (with Extra Options: a file of it is also somewhere Extra Options has the game read
+    // ahead of the packs): not mounted, no zip lines, no SQL. Its row says why (car_pack_problem).
+    bool left_out = false;
 };
 // <Azimuth>\data\titles\1A96545B\tmp, the folder Azimuth gives the game as its T:\ drive.
 std::filesystem::path temp_drive();
@@ -133,6 +137,40 @@ bool instance_layer();
 // Why instance_layer() is false, decided with it: the first of those it didn't find (none when it's true).
 enum class NoLayer { none, no_game, extra_options, no_titles, no_scratch };
 NoLayer instance_layer_missing();
+// Car packs with Extra Options loaded (platform 2.9.0): the platform reads fh2-cars itself and chains its file lookup
+// behind Extra Options' (media_overrides.cpp). Decided once, as the platform starts, and logged with its reason: Extra
+// Options found by its export (not only expected, under Wine), its FH2_ExtraOptions.ini there and not saying [Global]
+// Enabled=0, its media overrides on or a mod of its own there (without either it mounts nothing), its status not
+// already final ("REFUSED" or "DISABLED"), the game's Mount folder known, T:\ there (instance_layer's checks), no
+// session of FH2MP's to play online with, and a pack in fh2-cars.
+bool eo_packs();
+// The car Ids in the packs' range that Extra Options' own turned-on mods insert (their database.json), for car_ids::plan.
+namespace car_ids { struct Reserved; }
+std::map<int64_t, car_ids::Reserved> eo_mod_car_ids();
+// Why not, while Extra Options is loaded and eo_packs() is false: a message from later(), or "" when there's nothing
+// to tell the player (no pack in fh2-cars, no game folder).
+std::string eo_packs_off_reason();
+// Car packs are read this session: in this folder's own layer, or with Extra Options.
+bool car_packs_mountable();
+// temp_drive()\fh2-platform\eo-media: with Extra Options, the folder mounted ahead of every other, which holds the
+// packs' merged zipmanifest.xml. The platform owns it outright: anything else in it is removed at start.
+std::filesystem::path eo_media();
+// With Extra Options, once the packs were read: they aren't in the game this session after all (`why`: a message from
+// later()). Each pack's row says so in red, over any other problem it had, and the log and fh2-mods\platform-eo-packs.txt
+// say why. The first reason given is kept. Any thread of the platform's own: it writes a file, which can take a
+// moment, so never from a game thread (media_overrides.cpp hands its reasons to its watcher).
+void car_packs_lost(const std::string& why);
+bool eo_packs_lost();
+// (database.cpp) After that: the recorded cars are looked for again, in the database the game reads without the packs.
+void recheck_recorded_cars();
+// (media_overrides.cpp) The platform's first write is done: eo-media's database and car names are this session's.
+// Until then the game is told eo-media has neither; if it asks for one before, the packs are lost for the session.
+void eo_overlay_ready();
+// fh2-mods\platform-eo-packs.txt, this session's outcome with Extra Options: "on" (read; the game hasn't looked
+// anything up yet), "in" (their folders are ahead of Extra Options') or "lost", a tab, and why or how in English.
+// Written as it's known; "" removes it (a session where the packs aren't read with Extra Options). Once lost, it
+// stays so.
+void note_eo_packs_outcome(const std::string& outcome, const std::string& why);
 // Where overrides are written: instance_media(), else the game's mediaoverride.
 std::filesystem::path override_root();
 // The two places the platform writes files for the game (its roots): mediaoverride, and this Azimuth folder's own
@@ -156,14 +194,16 @@ void move_old_tables();
 int move_old_override(unsigned root, const std::filesystem::path& rel, std::string& error);
 const std::vector<CarPack>& car_packs();
 // Finds the packs, puts their files on the temp drive, and writes the merged zipmanifest.xml to
-// instance_media(). Their SQL goes into the database with the mods' (apply_database).
+// instance_media(), or with Extra Options to eo_media(). Their SQL goes into the database with the mods'
+// (apply_database) in the layer; with Extra Options it isn't run yet.
 void prepare_car_packs();
-// That merged zipmanifest.xml is in the layer this session (a pack has zips): set_file refuses a mod's.
+// That merged zipmanifest.xml is the platform's this session (a pack has zips): set_file refuses a mod's.
 bool car_packs_manifest();
 // Once a pack's cars have their Ids (database.cpp): the part Ids of their own that their carbins
 // name (<car>.part-ids.txt), set in their zips on the temp drive.
 void place_car_ids(const CarPack& pack, const std::vector<std::pair<std::string, int64_t>>& cars);
-// Without the layer the packs in fh2-cars aren't read: says so (with `why`) when there are any.
+// When the packs in fh2-cars aren't read (no layer, and not with Extra Options): says so (with `why`) when there are
+// any, and removes fh2-mods\platform-engine-synths.txt.
 void car_packs_unavailable(const std::string& why);   // why: a sentence, as a message from later() (text.hpp)
 // Why the packs in fh2-cars aren't read this session (for the MODS tab), or "".
 std::string car_packs_unread();
@@ -177,6 +217,8 @@ void apply_database(const std::vector<FH2Mod*>& mods);
 // Data_Car.str keys the database's car names have that a pack or mod gave as text, with their text
 // (the string tables are written with them).
 std::map<uint16_t, std::wstring> database_strings();
+// The same for eo-media's database (with Extra Options and car packs): its Data_Car.str is written beside it.
+std::map<uint16_t, std::wstring> eo_database_strings();
 // What in a car pack's (by folder name) or a mod's (by name) SQL could clash with car packs' cars, from
 // the last build, or "": rows by an Id car packs' cars are given (3000 to 8999), a pack's car its
 // SQL never gives as {car:...}, or one that can't have the Id its pack.ini asks for (so saves from
@@ -205,6 +247,23 @@ std::vector<std::string> cars_without_powertrain();
 // of the one beside azimuth.exe unless told otherwise (WINEDLLOVERRIDES="winmm=n,b"), and still
 // report that file's path for it.
 std::filesystem::path extra_options_dir();
+// That DLL itself (its HMODULE), or nullptr.
+void* extra_options_module();
+// What's known about it without importing anything (platform 2.9.0, car packs with Extra Options): its file, where its
+// image is in memory (from its PE header), its version (the "Forza Horizon 2 Extra Options x.y.z" in its image; "" when
+// it has none), its PE TimeDateStamp and its file's size. All empty when it isn't loaded.
+struct ExtraOptionsFacts {
+    std::filesystem::path module;
+    uintptr_t lo = 0, hi = 0;
+    std::string version;
+    uint32_t timestamp = 0;
+    uint64_t file_size = 0;
+};
+ExtraOptionsFacts extra_options_facts();
+// Its status now, as its Fh2TweaksStatus export gives it: "Not initialized" and "Waiting for Azimuth to prepare the
+// loaded game." before the game is mapped, then "OK: ...", "REFUSED: ...", "DISABLED: ..." or "INACTIVE: ...".
+// "" when it isn't loaded.
+std::string extra_options_status();
 // Under Wine or Proton, when the list of loaded DLLs can't be read, so whether Extra Options is
 // loaded can't be told: whether its winmm.dll is next to azimuth.exe and Wine is set to load it
 // rather than its own (WINEDLLOVERRIDES, or winecfg's DLL overrides). It then counts as loaded:
@@ -291,7 +350,12 @@ void set_mod_enabled(const std::wstring& dll, bool on);
 // the mods load; from 2.9.0 it can also turn true later (FH2MP's session found once it has started,
 // or FH2MP saying it's going online), never back.
 bool playing_online();
-bool fh2mp_installed();               // FH2MP is in fh2-mods (turned on or not), as FH2MP.dll or under another name
+// FH2MP's launcher left a session to play online with (its file, or FH2MP_TOKEN): `why` for the log. Whether or not
+// FH2MP is in fh2-mods; usable before the mods load.
+bool fh2mp_has_session(std::string* why);
+// (media_overrides.cpp) The game went online after the platform had started: with Extra Options, the packs are lost.
+void eo_packs_went_online();
+bool fh2mp_installed();              // FH2MP is in fh2-mods (turned on or not), as FH2MP.dll or under another name
 // That entry is FH2MP itself (it always loads online): FH2MP.dll, or the DLL FH2MP registered from. A
 // mod that only registers under the name FH2MP isn't.
 bool is_fh2mp(const ModEntry& e);

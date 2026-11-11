@@ -165,6 +165,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_executable(car_ids_test tests/car_ids_test.cpp src/car_ids.cpp src/text.cpp ${_sqlite_src})
         target_include_directories(car_ids_test PRIVATE src third_party/sqlite)
         target_link_options(car_ids_test PRIVATE -static)
+        # The game's list of mounted volumes as the platform reads it with Extra Options (src/volume_walk.hpp), on
+        # made-up lists: run volume_walk_test.exe.
+        add_executable(volume_walk_test tests/volume_walk_test.cpp)
+        target_include_directories(volume_walk_test PRIVATE src)
+        target_compile_options(volume_walk_test PRIVATE ${_warn})
+        target_link_options(volume_walk_test PRIVATE -static)
         # The HUD layer preview: its template and state on their own (tests/run_hud_layer_test.sh), and the
         # mod the platform test's "hud" phase loads.
         add_executable(hud_layer_test tests/hud_layer_test.cpp src/hud_state.cpp src/hud_template.cpp src/strings.cpp)

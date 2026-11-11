@@ -210,7 +210,7 @@ struct Case {
             std::string line = log.substr(at, end - at);
             if (!line.empty() && line.back() == '\r') line.pop_back();
             if (has(line, "database:") || has(line, "database override") || has(line, "files:") || has(line, "string tables:") ||
-                has(line, "car packs:") || has(line, "save snapshot:"))
+                has(line, "car packs:") || has(line, "car packs with Extra Options:") || has(line, "save snapshot:"))
                 std::printf("    %s\n", line.c_str());
             at = end + 1;
         }
@@ -890,12 +890,13 @@ static void car_ids() {
     c.launch();
     CHECK(listed(record) == recovered + "MORE_Pack01\t3600\n" && listed(copy) == listed(record) && car(3600) == "MORE_Pack01");
 
-    // Extra Options installed: the packs aren't read, so none of their cars is in the database the game reads, and the
-    // title screen says why.
+    // Extra Options installed, without its FH2_ExtraOptions.ini (so it doesn't start): the packs aren't read, so none of
+    // their cars is in the database the game reads, and the title screen says why.
     c.launch(L"eo");
     CHECK(has(c.log, "database: TEST_Pack01 (car 3003), which a save may have, isn't in the game database this session: The 4 car "
-                     "pack(s) in fh2-cars aren't read: Extra Options is loaded. They need Azimuth 1.0 or later, without Extra Options."));
-    CHECK(has(slurp(title), "The car packs in fh2-cars aren't read this time.") && has(slurp(title), "Extra Options is loaded."));
+                     "pack(s) in fh2-cars aren't read: Extra Options can't read its FH2_ExtraOptions.ini, so it doesn't start."));
+    CHECK(has(slurp(title), "The car packs in fh2-cars aren't read this time.") &&
+          has(slurp(title), "Extra Options can't read its FH2_ExtraOptions.ini, so it doesn't start."));
     CHECK(has(listed(missing), "MORE_Pack01\t3600\n"));
 }
 
@@ -956,6 +957,224 @@ static void no_layer() {
     CHECK(has(c.log, "media overrides: this Azimuth folder has data\\titles\\1A96545B (where Azimuth keeps the game's T:\\ drive), so "
                      "for this whole session its own files go to "));
     CHECK(!has(c.log, "car packs: The ") && has(c.log, "car packs: 1 pack(s) in "));
+}
+
+// Car packs read with Extra Options (platform 2.9.0; the chain itself is the hook test's "eo-packs" phases). Their zip
+// list goes to eo-media on the game's temp drive, a folder that is the platform's alone, and is only written when it
+// changes. A pack with a file that's also in mediaoverride, mediapc or a mod of Extra Options' that's turned on is
+// left out whole. Their SQL isn't run in this build, so mediaoverride's database, which every Azimuth folder on the
+// game folder reads, gets the mods' changes and none of the packs' rows; no engine sound is listed for a car that
+// isn't in the game; and a mod can't replace zipmanifest.xml.
+static void eo_packs() {
+    Case c{"eo-packs"};
+    const fs::path ini = "FH2_ExtraOptions.ini";
+    std::ofstream{ini} << "[Global]\r\nEnabled=1\r\n[Files]\r\nEnableMediaOverrides=1\r\n";
+    const fs::path tmp = c.dir / "data" / "titles" / "1A96545B" / "tmp", mount = c.dir / "FH2" / "Mount";
+    const fs::path eo_media = tmp / "fh2-platform" / "eo-media", manifest = eo_media / "zipmanifest.xml";
+    const fs::path synths = c.dir / "fh2-mods" / "platform-engine-synths.txt", outcome = c.dir / "fh2-mods" / "platform-eo-packs.txt";
+    fs::create_directories(tmp / "Turn10Temp.scratch");
+    std::ofstream{mount / "media" / "zipmanifest.xml", std::ios::binary} << "<ZipFiles>\r\n</ZipFiles>\r\n";
+    const std::string zip = std::string("PK\x05\x06", 4) + std::string(18, '\0');   // an empty zip
+    // Two packs with a zip each; the first adds a car with SQL.
+    const fs::path a = c.dir / "fh2-cars" / "a-pack", b = c.dir / "fh2-cars" / "b-pack";
+    fs::create_directories(a / "media" / "cars");
+    fs::create_directories(b / "media" / "cars");
+    std::ofstream{a / "media" / "cars" / "A_Car.zip", std::ios::binary} << zip;
+    std::ofstream{b / "media" / "cars" / "B_Car.zip", std::ios::binary} << zip;
+    std::ofstream{a / "pack.ini"} << "[pack]\nname = A pack\nversion = 1\n\n[car A_Pack01]\nname = A car\n";
+    std::ofstream{a / "A_Pack01.sql"} << "CREATE TEMP TABLE pc AS SELECT * FROM Data_Car WHERE Id = 441;\n"
+                                         "UPDATE pc SET Id = {car:A_Pack01}, MediaName = 'A_Pack01', DisplayName = 'A car';\n"
+                                         "INSERT INTO Data_Car SELECT * FROM pc; DROP TABLE pc;\n";
+    // Left in eo-media by another build or a tool, and the engine sound list from a session that had the packs' cars.
+    fs::create_directories(eo_media / "Stripped");
+    std::ofstream{eo_media / "Stripped" / "gamedbRC.slt"} << "stale";
+    std::ofstream{eo_media / "Stripped" / "stray.bin"} << "stray";
+    std::ofstream{eo_media / "stray.txt"} << "stray";
+    std::ofstream{synths} << "PG_X\tPG_Y\tC:\\x\tx\ta-pack\tX\r\n";
+    const auto listed_zip = [&](const char* name) {
+        return has(slurp(manifest), (std::string("path=\"game:\\media\\cars\\") + name + "\"").c_str());
+    };
+    c.mods({"NitroTest", "ZipTest"});
+    c.launch(L"eo");
+    CHECK(has(c.log, "car packs: 2 pack(s) in fh2-cars are read with Extra Options loaded (version 0.6.0)"));
+    CHECK(listed_zip("a_car.zip") && listed_zip("b_car.zip"));
+    CHECK(has(c.log, "car packs: wrote zipmanifest.xml in T:\\fh2-platform\\eo-media\\ from "));
+    CHECK(!present(eo_media / "Stripped" / "stray.bin") && !present(eo_media / "stray.txt"));
+    CHECK(has(c.log, "car packs: removed stray.txt from T:\\fh2-platform\\eo-media\\: only the platform's own files go there"));
+    CHECK(!present(mount / "mediaoverride" / "zipmanifest.xml") && !present(tmp / "fh2-platform" / "media"));
+    CHECK(present(tmp / "fh2-platform" / "packs" / "a-pack" / "cars" / "A_Car.zip"));
+    // mediaoverride's database: the mod's change, and no pack car.
+    CHECK(backfire(c.T) && q(c.T, "SELECT count(*) FROM Data_Car WHERE MediaName = 'A_Pack01'") == "0");
+    // eo-media's own, built over the stale file left there: the pack's car, then the mod's change; its car's name in a
+    // Data_Car.str beside it; and the car isn't reported missing.
+    const fs::path eo_db = eo_media / "Stripped" / "gamedbRC.slt";
+    CHECK(backfire(eo_db) && q(eo_db, "SELECT count(*) FROM Data_Car WHERE MediaName = 'A_Pack01'") == "1");
+    CHECK(has(c.log, "database: wrote this folder's database on the temp drive with changes from "));
+    CHECK(has(c.log, "wrote Data_Car.str in T:\\fh2-platform\\eo-media\\ for "));
+    CHECK(present(c.dir / "fh2-mods" / "platform-db-eo.txt") && !present(c.dir / "fh2-mods" / "platform-db-layer.txt"));
+    CHECK(present(eo_media / "Stripped" / "platform-car-ids.txt"));
+    CHECK(!has(c.log, "A_Pack01 (car ") && !has(c.log, "isn't in the game database this session"));
+    CHECK(has(c.log, "car packs with Extra Options: the platform's first write is done; eo-media has this session's database"));
+    CHECK(!present(synths));
+    CHECK(has(c.log, "[ZipTest] set_file: media\\zipmanifest.xml isn't replaced: this session the platform reads the car packs in "
+                     "fh2-cars with Extra Options"));
+    CHECK(has(c.log, "[ZipTest] zipmanifest.xml refused"));
+    CHECK(line1(outcome).rfind("on\t", 0) == 0);
+    c.mods({"NitroTest"});
+
+    // The same again: the zip list isn't written a second time.
+    const Stamp written = stamp(manifest);
+    c.launch(L"eo");
+    CHECK(stamp(manifest) == written && has(c.log, "car packs: zipmanifest.xml in T:\\fh2-platform\\eo-media\\ unchanged (2 pack zip(s))"));
+    CHECK(has(c.log, "database: same changes as last launch, reusing this folder's database on the temp drive"));
+    CHECK(q(eo_db, "SELECT count(*) FROM Data_Car WHERE MediaName = 'A_Pack01'") == "1" && q(c.T, "SELECT count(*) FROM Data_Car WHERE MediaName = 'A_Pack01'") == "0");
+
+    // A copy of a pack's zip in mediaoverride, which Extra Options has the game read ahead of the pack's folder: that
+    // pack is left out whole, and the other is still read.
+    fs::create_directories(mount / "mediaoverride" / "cars");
+    std::ofstream{mount / "mediaoverride" / "cars" / "B_Car.zip", std::ios::binary} << zip;
+    c.launch(L"eo");
+    CHECK(has(c.log, "car packs: b-pack: its cars\\B_Car.zip is also in mediaoverride, which can be read instead of it with Extra "
+                     "Options, so this pack is left out this session (its folder, its zips and its SQL)"));
+    CHECK(listed_zip("a_car.zip") && !listed_zip("b_car.zip"));
+    CHECK(has(c.log, "car packs: 1 pack(s) in fh2-cars are read with Extra Options loaded (version 0.6.0)"));
+    fs::remove_all(mount / "mediaoverride" / "cars");
+    // The zip's files loose in mediapc (a folder named as the zip): the same.
+    fs::create_directories(mount / "mediapc" / "cars" / "B_Car");
+    c.launch(L"eo");
+    CHECK(has(c.log, "car packs: b-pack: its cars\\B_Car (a folder, for B_Car.zip) is also in mediapc, which can be read instead"));
+    CHECK(listed_zip("a_car.zip") && !listed_zip("b_car.zip"));
+    fs::remove_all(mount / "mediapc" / "cars");
+
+    // The same car in a mod of Extra Options' own that's turned on: the pack is left out. Turned off in its
+    // loadorder.txt ("#"), it isn't in the way.
+    const fs::path eo_mods = c.dir / "mods" / "Forza Horizon 2";
+    fs::create_directories(eo_mods / "CarMod" / "media" / "cars");
+    std::ofstream{eo_mods / "CarMod" / "media" / "cars" / "a_car.zip", std::ios::binary} << zip;
+    std::ofstream{eo_mods / "loadorder.txt"} << "CarMod\r\n";
+    c.launch(L"eo");
+    CHECK(has(c.log, "car packs: a-pack: its cars\\A_Car.zip is also in Extra Options' mod Forza Horizon 2\\CarMod, which can be read "
+                     "instead of it with Extra Options, so this pack is left out this session"));
+    CHECK(!listed_zip("a_car.zip") && listed_zip("b_car.zip"));
+    CHECK(q(eo_db, "SELECT count(*) FROM Data_Car WHERE MediaName = 'A_Pack01'") == "0");   // its SQL isn't run: its car is gone
+    CHECK(has(c.log, "A_Pack01 (car ") && has(c.log, "isn't in the game database this session"));
+    // With it, a mod that's a database.json alone: the car it inserts in the packs' range is read (not the row it changes).
+    fs::create_directories(eo_mods / "IdMod");
+    std::ofstream{eo_mods / "IdMod" / "database.json"}
+        << R"({"format_version": 2, "policy": {"id_conflicts": "nearest"}, "requires": {"records": {"Data_Car": []}}, "tables": )"
+           R"({"Data_Car": {"key": ["Id"], "insert": [{"Id": 3050, "MediaName": "x"}], "update": [{"where": {"Id": 3051}}]}}})";
+    std::ofstream{eo_mods / "loadorder.txt"} << "#CarMod\r\nIdMod\r\n";
+    c.launch(L"eo");
+    CHECK(!has(c.log, "is also in") && listed_zip("a_car.zip") && listed_zip("b_car.zip"));
+    CHECK(has(c.log, "car packs: Extra Options' mod Forza Horizon 2\\IdMod adds car(s) with Id 3050; no new pack car is given one of those"));
+    // And one as Extra Options 0.4 has them (mods\<mod>\media), which it turns on as it starts.
+    fs::remove_all(c.dir / "mods");
+    fs::create_directories(c.dir / "mods" / "OldCarMod" / "media" / "cars");
+    std::ofstream{c.dir / "mods" / "OldCarMod" / "media" / "cars" / "B_Car.zip", std::ios::binary} << zip;
+    c.launch(L"eo");
+    CHECK(has(c.log, "car packs: b-pack: its cars\\B_Car.zip is also in Extra Options' mod OldCarMod, which can be read instead"));
+    CHECK(listed_zip("a_car.zip") && !listed_zip("b_car.zip"));
+    fs::remove_all(c.dir / "mods");
+    // A mod of Extra Options' with a list of zips of its own, which the packs' merged one would hide: no pack is read.
+    fs::create_directories(c.dir / "mods" / "ListMod" / "media");
+    std::ofstream{c.dir / "mods" / "ListMod" / "media" / "zipmanifest.xml", std::ios::binary} << "<ZipFiles>\r\n</ZipFiles>\r\n";
+    c.launch(L"eo");
+    CHECK(has(c.log, "car packs: a-pack: Extra Options' mod ListMod has a zipmanifest.xml of its own, which the packs' merged one would "
+                     "hide, so no pack is read this session"));
+    CHECK(has(c.log, "car packs: every pack in fh2-cars is left out this session, so nothing is added behind Extra Options' file lookup"));
+    CHECK(!present(manifest) && line1(outcome).rfind("lost\t", 0) == 0);
+    fs::remove_all(c.dir / "mods");
+
+    // Without Extra Options this folder has its own layer: the packs are read there, and the outcome with Extra
+    // Options, which is last session's now, goes.
+    c.launch();
+    CHECK(!present(outcome) && present(tmp / "fh2-platform" / "media" / "zipmanifest.xml"));
+    CHECK(q(tmp / "fh2-platform" / "media" / "Stripped" / "gamedbRC.slt", "SELECT count(*) FROM Data_Car WHERE MediaName = 'A_Pack01'") == "1");
+    DeleteFileW(ini.c_str());
+}
+
+// Car packs with Extra Options loaded (platform 2.9.0): whether they're read is decided once, as the platform starts,
+// and logged with why not (src/car_packs.cpp, eo_packs). The hook test's stand-in plays Extra Options (fake-eo.dll,
+// with its FH2_ExtraOptions.ini beside it, in this test's folder); its own mods are in the Azimuth folder's mods folder.
+static void eo_decision() {
+    Case c{"eo-decision"};
+    const fs::path ini = "FH2_ExtraOptions.ini";
+    const fs::path scratch = c.dir / "data" / "titles" / "1A96545B" / "tmp" / "Turn10Temp.scratch";
+    fs::create_directories(scratch);
+    const fs::path pack = c.dir / "fh2-cars" / "test-pack";
+    fs::create_directories(pack / "media");
+    std::ofstream{pack / "pack.ini"} << "[pack]\nname = Test pack\nversion = 1\n";
+    const fs::path synths = c.dir / "fh2-mods" / "platform-engine-synths.txt";
+    c.mods({});
+    const auto unread = [&](const char* why) {
+        return has(c.log, (std::string("car packs: The 1 car pack(s) in fh2-cars aren't read: ") + why).c_str());
+    };
+
+    // No FH2_ExtraOptions.ini: Extra Options refuses to start. What it is goes in the log first. The engine sound list
+    // from a session that read the packs goes: no pack is read now.
+    DeleteFileW(ini.c_str());
+    std::ofstream{synths} << "PG_X\tPG_Y\tC:\\x\tx\ttest-pack\tX\r\n";
+    c.launch(L"eo");
+    CHECK(has(c.log, "car packs: Extra Options is ") && has(c.log, "fake-eo.dll (version 0.6.0, PE time stamp 0x"));
+    CHECK(has(c.log, "car packs: with Extra Options loaded, the 1 pack(s) in fh2-cars aren't read this session: there's no "
+                     "FH2_ExtraOptions.ini next to Extra Options' winmm.dll, so it refuses to start"));
+    CHECK(unread("Extra Options can't read its FH2_ExtraOptions.ini, so it doesn't start."));
+    CHECK(!has(c.log, "They need Azimuth 1.0 or later"));
+    CHECK(!present(synths) && has(c.log, "car packs: no pack is read this session; removed platform-engine-synths.txt"));
+
+    // Switched off.
+    std::ofstream{ini} << "[Global]\r\nEnabled=0\r\n[Files]\r\nEnableMediaOverrides=1\r\n";
+    c.launch(L"eo");
+    CHECK(unread("Extra Options is switched off in its FH2_ExtraOptions.ini ([Global] Enabled=0)."));
+
+    // Its media overrides off and no mod of its own (one that its loadorder.txt turns off doesn't count): it mounts no
+    // folder, so the packs' couldn't be put in front of its.
+    std::ofstream{ini} << "[Global]\r\nEnabled=1\r\n[Files]\r\nEnableMediaOverrides=0\r\n";
+    const fs::path eo_mods = c.dir / "mods" / "Forza Horizon 2";
+    fs::create_directories(eo_mods / "SomeMod" / "media");
+    std::ofstream{eo_mods / "loadorder.txt"} << "# SomeMod\r\n";
+    c.launch(L"eo");
+    CHECK(has(c.log, "car packs: Extra Options' media overrides are off (EnableMediaOverrides in FH2_ExtraOptions.ini), and it has 0 "
+                     "mod(s) of its own with a media folder, turned on"));
+    CHECK(unread("Extra Options' media overrides are off (EnableMediaOverrides=0 in FH2_ExtraOptions.ini) and it has no mods, so it "
+                 "doesn't let the game read other folders."));
+
+    // The mod turned on (or one Extra Options hasn't listed yet, as 0.4 has them): it mounts its folders, so the packs
+    // can be read with it.
+    std::ofstream{eo_mods / "loadorder.txt"} << "SomeMod\r\n";
+    fs::create_directories(c.dir / "mods" / "OlderMod" / "media");
+    c.launch(L"eo");
+    CHECK(has(c.log, "it has 2 mod(s) of its own with a media folder, turned on"));
+    CHECK(has(c.log, "car packs: 1 pack(s) in fh2-cars are read with Extra Options loaded (version 0.6.0)"));
+    CHECK(!has(c.log, "car packs: The "));
+    fs::remove_all(c.dir / "mods");
+
+    // FH2MP in this Azimuth folder, offline: the packs are read. With a session from its launcher (online play): not.
+    std::ofstream{ini} << "[Global]\r\nEnabled=1\r\n[Files]\r\nEnableMediaOverrides=1\r\n";
+    fs::create_directories(c.dir / "fh2mp");
+    c.launch(L"eo");
+    CHECK(has(c.log, "car packs: FH2MP is in this Azimuth folder but has no session to play online with"));
+    CHECK(has(c.log, "car packs: 1 pack(s) in fh2-cars are read with Extra Options loaded (version 0.6.0)"));
+    const fs::path session = (fs::exists(c.dir / "data" / "bin") ? c.dir / "data" / "bin" : c.dir) / "fh2mp-session.txt";
+    std::ofstream{session} << "xuid=1\ntoken=test\n";
+    c.launch(L"eo");
+    CHECK(unread("This game was started for online play with FH2MP. With Extra Options, car packs are only read when you play offline."));
+    fs::remove(session);
+    fs::remove_all(c.dir / "fh2mp");
+
+    // No T:\ yet.
+    fs::remove(scratch);
+    c.launch(L"eo");
+    CHECK(unread("This Azimuth folder has no data\\titles\\1A96545B\\tmp\\Turn10Temp.scratch folder yet: the game makes it the first "
+                 "time it starts."));
+    fs::create_directories(scratch);
+
+    // No pack: nothing to say to the player.
+    fs::remove_all(c.dir / "fh2-cars");
+    c.launch(L"eo");
+    CHECK(has(c.log, "car packs: Extra Options is loaded and fh2-cars has no pack, so there's nothing to read with it"));
+    CHECK(!has(c.log, "car packs: The "));
+    DeleteFileW(ini.c_str());
 }
 
 // An update from 2.8.0 in an Azimuth folder with its own layer (data\titles\1A96545B, with the game's
@@ -1291,6 +1510,8 @@ int wmain(int argc, wchar_t** argv) {
     run(L"car_ids", car_ids);
     run(L"zip_manifest", zip_manifest);
     run(L"no_layer", no_layer);
+    run(L"eo_decision", eo_decision);
+    run(L"eo_packs", eo_packs);
     run(L"upgrade", upgrade);
     run(L"other_install", other_install);
     run(L"fh2ml", fh2ml);

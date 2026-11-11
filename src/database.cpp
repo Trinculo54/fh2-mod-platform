@@ -96,6 +96,10 @@ struct Files {
 
 Files files() {
     const fs::path m = game_mount(), mods = azimuth_dir() / "fh2-mods", ml = azimuth_dir() / "FH2ML" / "cache";
+    // With Extra Options and car packs to read, this folder's own database is eo-media's (car_packs.cpp), with a record
+    // of its own, so sessions with and without Extra Options don't build each other's again.
+    const bool eo        = eo_packs();
+    const fs::path own = (eo ? eo_media() : instance_media()) / L"Stripped";
     return {m / L"mediaoverride" / L"Stripped" / L"gamedbRC.slt",
             m / L"media" / L"Stripped" / L"gamedbRC.slt",
             m / L"mediapc" / L"Stripped" / L"gamedbRC.slt",
@@ -108,13 +112,17 @@ Files files() {
             azimuth_dir() / "fh2mp" / "gamedbRC.slt",
             ml / "database.txt",
             ml / "database-base.slt",
-            instance_media() / L"Stripped" / L"gamedbRC.slt",
-            mods / "platform-db-layer.txt",
+            own / L"gamedbRC.slt",
+            mods / (eo ? "platform-db-eo.txt" : "platform-db-layer.txt"),
             mods / "platform-db-strings.txt",
-            mods / "platform-db-layer-strings.txt",
+            mods / (eo ? "platform-db-eo-strings.txt" : "platform-db-layer-strings.txt"),
             mods / "platform-car-ids.txt",
-            instance_media() / L"Stripped" / L"platform-car-ids.txt"};
+            own / L"platform-car-ids.txt"};
 }
+
+// This folder's own database is what the game reads this session, when it's there: in the folder's own layer, or in
+// eo-media with Extra Options, unless the packs were lost (then eo-media answers for no file).
+bool own_database_read() { return instance_layer() || (eo_packs() && !eo_packs_lost()); }
 
 struct Stamp {
     uint64_t size = 0, time = 0; // time: last written, in 100 ns ticks
@@ -588,7 +596,8 @@ void clear_sql_warnings() {
 
 void note_sql_warning(const Sql& s, const std::string& why) {
     std::scoped_lock lk{g_warn_mu};
-    (s.pack ? g_pack_warnings[s.pack->name] : g_mod_warnings[s.name]).push_back(why);
+    auto& said = s.pack ? g_pack_warnings[s.pack->name] : g_mod_warnings[s.name];
+    if (std::find(said.begin(), said.end(), why) == said.end()) said.push_back(why);   // once: with Extra Options a mod's SQL runs in two builds
 }
 
 // The cars packs add (pack.ini) get their Ids here: a pack's SQL gives a car's Id as
@@ -720,7 +729,8 @@ std::vector<Sql> with_car_ids(const Files& f, const fs::path& base, const std::s
         sqlite3_close(db);
         db = nullptr;
     }
-    const std::vector<car_ids::Outcome> plan = car_ids::plan(db, shown, sources, record);
+    const std::vector<car_ids::Outcome> plan =
+        car_ids::plan(db, shown, sources, record, eo_packs() ? eo_mod_car_ids() : std::map<int64_t, car_ids::Reserved>{});
     sqlite3_close(db);
     plog("database: car packs' car Ids checked against " + shown + " and the other SQL in " +
          std::to_string(GetTickCount64() - started) + " ms");
@@ -770,7 +780,7 @@ std::vector<Sql> with_car_ids(const Files& f, const fs::path& base, const std::s
         return std::string{std::istreambuf_iterator<char>(in), {}};
     };
     if (now(f.car_ids) != text && !write_whole(f.car_ids, text)) plog("database: couldn't write fh2-mods\\platform-car-ids.txt");
-    if (instance_layer() && now(f.car_ids_copy) != text && !write_whole(f.car_ids_copy, text))
+    if ((instance_layer() || eo_packs()) && now(f.car_ids_copy) != text && !write_whole(f.car_ids_copy, text))
         plog("database: couldn't write the copy of fh2-mods\\platform-car-ids.txt next to this folder's database");
     return out;
 }
@@ -996,9 +1006,13 @@ void drop_layer_copy(const Files& f, const char* why) {
 // use this game folder don't get them. A copy this folder put in mediaoverride before goes, and
 // what another mod had there comes back, as when no mod has SQL. The layer's record is
 // fh2-mods\platform-db-layer.txt, as platform-db.txt is mediaoverride's.
-void apply_layer_database(const Files& f, const std::vector<Sql>& given) {
+//
+// `beside_override` (with Extra Options, where this is eo-media's): mediaoverride's copy has just been built with the
+// mods' changes and stays, for the Azimuth folders that share it and for a session that loses the packs. This one is
+// then built on what that one was built on.
+void apply_layer_database(const Files& f, const std::vector<Sql>& given, bool beside_override = false) {
     reuse_strings(f.layer_strings); // what the copy there has, unless it's built again or goes
-    if (const State st = read_state(f.state); !st.empty() || is_file(f.base)) {
+    if (const State st = read_state(f.state); !beside_override && (!st.empty() || is_file(f.base))) {
         if (const DWORD e = unreadable(f.target)) {
             plog("database: mediaoverride\\Stripped\\gamedbRC.slt is in use (error " + std::to_string(e) +
                  "); no database changes this time");
@@ -1023,6 +1037,8 @@ void apply_layer_database(const Files& f, const std::vector<Sql>& given) {
     std::string kind, shown;
     if (found == Found::foreign || found == Found::game) {
         base = f.target, kind = "mediaoverride", shown = "mediaoverride\\Stripped\\gamedbRC.slt";
+    } else if (beside_override && is_file(f.base)) {   // another mod's, kept while the platform's copy is in its place
+        base = f.base, kind = "mediaoverride", shown = "fh2-mods\\platform-db-base.slt";
     } else if (found == Found::fh2ml && is_file(f.ml_base)) {
         base = f.ml_base, kind = "fh2ml", shown = "FH2ML\\cache\\database-base.slt";
     } else if (is_file(f.mediapc)) {
@@ -1127,7 +1143,7 @@ void check_recorded_cars(const Files& f) {
     if (!recorded.empty()) {
         fs::path read;   // the database the game reads, as cars_without_powertrain finds it
         for (const fs::path* p : {&f.layer, &f.target, &f.mediapc, &f.media})
-            if ((p != &f.layer || instance_layer()) && is_file(*p)) {
+            if ((p != &f.layer || own_database_read()) && is_file(*p)) {
                 read = *p;
                 break;
             }
@@ -1237,7 +1253,7 @@ DbFacts database_facts() {
     DbFacts d;
     if (game_mount().empty()) return d;
     const Files f = files();
-    d.layer = instance_layer() && is_file(f.layer);
+    d.layer = own_database_read() && is_file(f.layer);
     switch (classify(f, read_state(f.state))) {
     case Found::missing: d.override_db = OverrideDb::none; break;
     case Found::ours:
@@ -1261,7 +1277,7 @@ std::vector<std::string> cars_without_powertrain() {
         if (game_mount().empty()) return cars;
         const Files f = files();
         for (const fs::path* p : {&f.layer, &f.target, &f.mediapc, &f.media})
-            if ((p != &f.layer || instance_layer()) && is_file(*p)) {
+            if ((p != &f.layer || own_database_read()) && is_file(*p)) {
                 read = *p;
                 break;
             }
@@ -1298,20 +1314,37 @@ std::vector<std::string> car_pack_title_lines() {
     return g_title_lines;
 }
 
+static std::map<uint16_t, std::wstring> g_eo_strings;   // eo-media's database's car names (eo_database_strings)
+static void build_override(const Files& f, const std::vector<Sql>& sources);
+
 // The build itself (apply_database), under g_db_mu.
 static void build_and_write(const std::vector<FH2Mod*>& mods) {
     g_strings.clear();
+    g_eo_strings.clear();
     clear_sql_warnings();
     if (game_mount().empty()) return;
     const Files f = files();
     note_fh2mp_copy(f);
 
     // Car packs first, so mods' changes reach their cars too.
-    std::vector<Sql> sources;
+    std::vector<Sql> sources, mods_only;
     for (const auto& p : car_packs())
         if (!p.sql.empty()) sources.push_back({"car pack " + p.name, &p.sql, &p});
     for (auto* m : mods)
-        if (!m->sql.empty()) sources.push_back({m->name, &m->sql});
+        if (!m->sql.empty()) sources.push_back({m->name, &m->sql}), mods_only.push_back({m->name, &m->sql});
+
+    // With Extra Options and car packs to read (eo_packs), two are built. mediaoverride's, which every Azimuth folder
+    // on this game folder reads, gets the mods' changes only, as before. This folder's own, in eo-media, which the game
+    // reads ahead of it, gets the packs' cars and then the mods' changes, as the layer's does. Each has the car names
+    // its own rows give as text; the game reads either with the Data_Car.str beside it.
+    if (eo_packs()) {
+        build_override(f, mods_only);
+        std::map<uint16_t, std::wstring> overrides = std::move(g_strings);
+        apply_layer_database(f, sources, true);
+        g_eo_strings = std::move(g_strings);
+        g_strings    = std::move(overrides);
+        return;
+    }
 
     if (instance_layer()) {
         std::error_code ec;
@@ -1325,6 +1358,11 @@ static void build_and_write(const std::vector<FH2Mod*>& mods) {
         drop_layer_copy(f, "FH2MP is in this Azimuth folder, so the database is built in mediaoverride");
         keep_strings(f.layer_strings, {});
     }
+    build_override(f, sources);
+}
+
+// mediaoverride's copy, with `sources`' changes.
+static void build_override(const Files& f, const std::vector<Sql>& sources) {
     reuse_strings(f.strings); // what mediaoverride's copy has, unless it's built again or goes
 
     const State st = read_state(f.state);
@@ -1529,6 +1567,18 @@ void apply_database(const std::vector<FH2Mod*>& mods) {
     std::scoped_lock lk{g_db_mu};
     build_and_write(mods);
     if (!game_mount().empty()) check_recorded_cars(files());   // however the build went, against what the game reads
+}
+
+std::map<uint16_t, std::wstring> eo_database_strings() {
+    std::scoped_lock lk{g_db_mu};
+    return g_eo_strings;
+}
+
+// The packs were lost after the build (car_packs_lost): eo-media answers for no file now, so the game reads the
+// database it would without them. The recorded cars are looked for in that one, and the saves copied if any is gone.
+void recheck_recorded_cars() {
+    std::scoped_lock lk{g_db_mu};
+    if (!game_mount().empty()) check_recorded_cars(files());
 }
 
 } // namespace fh2platform

@@ -382,34 +382,39 @@ void apply_all() {
             for (const unsigned r : {kRootOverride, kRootLayer})
                 if ((was & r) && r != current_root())
                     removed_elsewhere += override_string_table(g_game, name, {}, true, root_folder(r));
-        const int n       = removed_elsewhere + override_string_table(
-            g_game, name,
-            [&](std::string_view lang, uint16_t key, const std::wstring& t) {
-                std::wstring s = t;
-                if (auto k = keys.find(key); k != keys.end()) s = k->second;
-                if (auto k = tr_keys.find(key); k != tr_keys.end())
-                    s = l10n_table_text(k->second.mod, k->second.key, k->second.english, lang);
-                if (auto x = texts.find(s); x != texts.end()) s = x->second;
-                if (is_main && key == kToStartKey) {
-                    std::vector<std::string> own;   // the platform's own lines, in this table's language
-                    for (const std::string& l : platform_lines()) own.push_back(shown_in(l, lang));   // later() messages too
-                    // a notice a mod got from tr() (API 10) in this table's language, then the platform's own lines
-                    s = title_with_notices(
-                        g_azimuth, s,
-                        [&](const std::wstring& who, const std::vector<std::string>& lines) {
-                            for (const auto& m : g_mods) {
-                                std::string text;
-                                if (_wcsicmp(m->wname.c_str(), who.c_str()) || !l10n_text_in(m.get(), "notice", lang, text)) continue;
-                                // as refresh_notice writes the file: the notice, the update line, then the status lines
-                                return mod_title_lines(split_lines(text.c_str()), m->update_notice, m->status);
-                            }
-                            return lines;
-                        },
-                        own);
-                }
-                return s;
-            },
-            remove, override_root(), add);
+        const auto edit = [&](std::string_view lang, uint16_t key, const std::wstring& t) {
+            std::wstring s = t;
+            if (auto k = keys.find(key); k != keys.end()) s = k->second;
+            if (auto k = tr_keys.find(key); k != tr_keys.end())
+                s = l10n_table_text(k->second.mod, k->second.key, k->second.english, lang);
+            if (auto x = texts.find(s); x != texts.end()) s = x->second;
+            if (is_main && key == kToStartKey) {
+                std::vector<std::string> own;   // the platform's own lines, in this table's language
+                for (const std::string& l : platform_lines()) own.push_back(shown_in(l, lang));   // later() messages too
+                // a notice a mod got from tr() (API 10) in this table's language, then the platform's own lines
+                s = title_with_notices(
+                    g_azimuth, s,
+                    [&](const std::wstring& who, const std::vector<std::string>& lines) {
+                        for (const auto& m : g_mods) {
+                            std::string text;
+                            if (_wcsicmp(m->wname.c_str(), who.c_str()) || !l10n_text_in(m.get(), "notice", lang, text)) continue;
+                            // as refresh_notice writes the file: the notice, the update line, then the status lines
+                            return mod_title_lines(split_lines(text.c_str()), m->update_notice, m->status);
+                        }
+                        return lines;
+                    },
+                    own);
+            }
+            return s;
+        };
+        const int n = removed_elsewhere + override_string_table(g_game, name, edit, remove, override_root(), add);
+        // With Extra Options and car packs, eo-media has a database of its own, read ahead of mediaoverride's: its car
+        // names go in a Data_Car.str beside it, with the same edits. (eo-media's tables are removed at every start.)
+        if (table == "data_car.str" && eo_packs())
+            if (const auto eo_add = eo_database_strings(); !eo_add.empty())
+                plog("wrote " + name + " in " + temp_drive_spelling(eo_media()) + " for " +
+                     std::to_string(override_string_table(g_game, name, edit, false, eo_media(), eo_add)) + " languages (" +
+                     std::to_string(eo_add.size()) + " car names added, for the database there)");
         if (mu) {
             ReleaseMutex(mu);
             CloseHandle(mu);
@@ -810,7 +815,7 @@ void build_database() {
     // Its car names given as text go into Data_Car.str (and come out again once there are none).
     {
         std::scoped_lock lk{g_mu};
-        if (database_strings().empty() && !read_manifest().count("data_car.str")) return;
+        if (database_strings().empty() && eo_database_strings().empty() && !read_manifest().count("data_car.str")) return;
         g_dirty.insert("data_car.str");
         g_table_names.emplace("data_car.str", "Data_Car.str");
     }
@@ -1112,6 +1117,7 @@ void finish_online(const std::string& why, const GoingOnline& g) {
         plog(narrow(f) + " shouldn't run online, but it's a mod from before the platform, so it can't be stopped; start the "
              "game from the FH2MP launcher to leave it out");
     if (g.stop.empty() && g.others.empty()) plog("no mod that shouldn't run online had started");
+    eo_packs_went_online();   // FH2MP found online as it started: the packs' folder stops hiding mediaoverride's database
     if (g.rewrite && (g.strings || g.sql)) {
         // Only when a DLL registers as FH2MP after the loader's first write (FH2MP registers in its fh2mod_init):
         // going_online stops only mods with nothing written for the game. On a thread of its own, as the caller may
@@ -1177,6 +1183,13 @@ int online_going(char* names, size_t size) {
                     for (const auto& f : g.others) {
                         ran.push_back(narrow(f));
                         what += (what.empty() ? "" : "; ") + narrow(f) + " (a mod from before the platform, already loaded)";
+                    }
+                    // With Extra Options the game read the packs' own database, ahead of mediaoverride's, where
+                    // FH2MP's copy of the server's is: FH2MP would check one and the game play with the other.
+                    if (eo_packs()) {
+                        ran.push_back("Car packs");
+                        what += std::string(what.empty() ? "" : "; ") + "the car packs in fh2-cars (with Extra Options, the game read their "
+                                "database instead of mediaoverride's)";
                     }
                     if (ran.empty()) went = begin_online(g);
                     return went;
@@ -1566,6 +1579,7 @@ DWORD WINAPI load_mods(LPVOID) {
     }
     apply_all();
     build_database();
+    eo_overlay_ready();   // with Extra Options: eo-media's database and names are this session's from here on
     db_guards_start(&g_api);   // the guards for a database missing a car's rows, once the game's code is ready
     settings_start(&g_api);
     pad_layer_start(&g_api);
@@ -1686,6 +1700,7 @@ std::set<std::wstring> remembered_fh2mp() {
 } // namespace
 
 bool playing_online() { return g_online; }
+bool fh2mp_has_session(std::string* why) { return fh2mp_session(why); }
 
 bool first_write_begun() { return g_first_write; }
 

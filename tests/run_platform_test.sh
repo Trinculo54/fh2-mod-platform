@@ -167,6 +167,7 @@ if command -v python3 > /dev/null; then
     python3 -I "$root/scripts/check_fonts.py" "${fonts[@]}"
 fi
 wine "$b/car_ids_test.exe"
+wine "$b/volume_walk_test.exe"
 wine "$b/l10n_test.exe"
 wine "$b/seen_test.exe"
 wine "$b/ui_queue_test.exe"

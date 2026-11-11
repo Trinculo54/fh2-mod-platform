@@ -32,6 +32,7 @@
 #include "hde/hde64.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdlib>
 #include <atomic>
@@ -556,18 +557,86 @@ bool extra_options_expected() {
 
 bool extra_options_log_is_new() { return read_new_extra_options_log(azimuth_dir(), nullptr); }
 
-fs::path extra_options_dir() {
+void* extra_options_module() {
     // Once found it stays: nothing unloads it.
     static std::atomic<HMODULE> found{nullptr};
     HMODULE w = found.load(std::memory_order_acquire);
     if (!w) {
-        if (!(w = find_extra_options(nullptr))) return {};
+        if (!(w = find_extra_options(nullptr))) return nullptr;
         found.store(w, std::memory_order_release);
     }
+    return w;
+}
+
+fs::path extra_options_dir() {
+    HMODULE w = static_cast<HMODULE>(extra_options_module());
+    if (!w) return {};
     wchar_t path[MAX_PATH];
     const DWORD n = GetModuleFileNameW(w, path, MAX_PATH);
     if (!n || n >= MAX_PATH) return {};
     return fs::path{path}.parent_path();
+}
+
+// Read from its image and its file, nothing imported: its PE header (where its image ends, and when it was built), and
+// the "Forza Horizon 2 Extra Options x.y.z" its every release since 0.2 has in its data.
+ExtraOptionsFacts extra_options_facts() {
+    ExtraOptionsFacts f;
+    HMODULE w = static_cast<HMODULE>(extra_options_module());
+    if (!w) return f;
+    wchar_t path[MAX_PATH];
+    if (const DWORD n = GetModuleFileNameW(w, path, MAX_PATH); n && n < MAX_PATH) f.module = path;
+    WIN32_FILE_ATTRIBUTE_DATA a{};
+    if (!f.module.empty() && GetFileAttributesExW(f.module.c_str(), GetFileExInfoStandard, &a))
+        f.file_size = (static_cast<uint64_t>(a.nFileSizeHigh) << 32) | a.nFileSizeLow;
+    const char* base = reinterpret_cast<const char*>(w);
+    IMAGE_DOS_HEADER dos{};
+    IMAGE_NT_HEADERS64 nt{};
+    if (!safe_copy(&dos, base, sizeof dos) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < 64 || dos.e_lfanew > 0x1000 ||
+        !safe_copy(&nt, base + dos.e_lfanew, sizeof nt) || nt.Signature != IMAGE_NT_SIGNATURE)
+        return f;
+    f.lo        = reinterpret_cast<uintptr_t>(base);
+    f.hi        = f.lo + nt.OptionalHeader.SizeOfImage;
+    f.timestamp = nt.FileHeader.TimeDateStamp;
+    // In pieces that overlap by the text's length, so it's found across a boundary too; a piece that can't be read is
+    // passed over.
+    static const char kName[] = "Forza Horizon 2 Extra Options ";
+    constexpr std::size_t kName_n = sizeof kName - 1, kPiece = 0x10000, kOverlap = 64;
+    std::vector<char> piece(kPiece + kOverlap);
+    for (uintptr_t at = f.lo; at < f.hi && f.version.empty(); at += kPiece) {
+        const std::size_t n = static_cast<std::size_t>(std::min<uintptr_t>(kPiece + kOverlap, f.hi - at));
+        if (!safe_copy(piece.data(), reinterpret_cast<const void*>(at), n)) continue;
+        for (std::size_t i = 0; i + kName_n < n; ++i) {
+            if (std::memcmp(piece.data() + i, kName, kName_n) != 0) continue;
+            std::string v;
+            for (std::size_t j = i + kName_n; j < n && v.size() < 16 && (std::isdigit(static_cast<unsigned char>(piece[j])) || piece[j] == '.'); ++j)
+                v += piece[j];
+            if (!v.empty() && std::isdigit(static_cast<unsigned char>(v[0]))) {
+                f.version = v;
+                break;
+            }
+        }
+    }
+    return f;
+}
+
+std::string extra_options_status() {
+    using StatusFn = const char* (*)();
+    // Looked up once: GetProcAddress waits for the loader, which is busy with the game's own DLLs just when the car
+    // packs' watcher asks every 50 ms (media_overrides.cpp, watch_eo).
+    static std::atomic<StatusFn> found{nullptr};
+    StatusFn status = found.load(std::memory_order_acquire);
+    if (!status) {
+        HMODULE w = static_cast<HMODULE>(extra_options_module());
+        status    = w ? reinterpret_cast<StatusFn>(reinterpret_cast<void*>(GetProcAddress(w, "Fh2TweaksStatus"))) : nullptr;
+        if (status) found.store(status, std::memory_order_release);
+    }
+    const char* text = status ? status() : nullptr;
+    if (!text) return {};
+    // Its buffer (512 characters in its data), which it may be writing just now: a copy, cut at its end.
+    char copy[200] = {};
+    if (!safe_copy(copy, text, sizeof copy - 1)) return {};
+    copy[sizeof copy - 1] = '\0';
+    return copy;
 }
 
 } // namespace fh2platform
