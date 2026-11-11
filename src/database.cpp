@@ -729,7 +729,8 @@ std::vector<Sql> with_car_ids(const Files& f, const fs::path& base, const std::s
         sqlite3_close(db);
         db = nullptr;
     }
-    const std::vector<car_ids::Outcome> plan = car_ids::plan(db, shown, sources, record);
+    const std::vector<car_ids::Outcome> plan =
+        car_ids::plan(db, shown, sources, record, eo_packs() ? eo_mod_car_ids() : std::map<int64_t, car_ids::Reserved>{});
     sqlite3_close(db);
     plog("database: car packs' car Ids checked against " + shown + " and the other SQL in " +
          std::to_string(GetTickCount64() - started) + " ms");

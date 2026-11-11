@@ -1058,9 +1058,15 @@ static void eo_packs() {
     CHECK(!listed_zip("a_car.zip") && listed_zip("b_car.zip"));
     CHECK(q(eo_db, "SELECT count(*) FROM Data_Car WHERE MediaName = 'A_Pack01'") == "0");   // its SQL isn't run: its car is gone
     CHECK(has(c.log, "A_Pack01 (car ") && has(c.log, "isn't in the game database this session"));
-    std::ofstream{eo_mods / "loadorder.txt"} << "#CarMod\r\n";
+    // With it, a mod that's a database.json alone: the car it inserts in the packs' range is read (not the row it changes).
+    fs::create_directories(eo_mods / "IdMod");
+    std::ofstream{eo_mods / "IdMod" / "database.json"}
+        << R"({"format_version": 2, "policy": {"id_conflicts": "nearest"}, "requires": {"records": {"Data_Car": []}}, "tables": )"
+           R"({"Data_Car": {"key": ["Id"], "insert": [{"Id": 3050, "MediaName": "x"}], "update": [{"where": {"Id": 3051}}]}}})";
+    std::ofstream{eo_mods / "loadorder.txt"} << "#CarMod\r\nIdMod\r\n";
     c.launch(L"eo");
     CHECK(!has(c.log, "is also in") && listed_zip("a_car.zip") && listed_zip("b_car.zip"));
+    CHECK(has(c.log, "car packs: Extra Options' mod Forza Horizon 2\\IdMod adds car(s) with Id 3050; no new pack car is given one of those"));
     // And one as Extra Options 0.4 has them (mods\<mod>\media), which it turns on as it starts.
     fs::remove_all(c.dir / "mods");
     fs::create_directories(c.dir / "mods" / "OldCarMod" / "media" / "cars");

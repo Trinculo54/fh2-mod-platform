@@ -37,6 +37,7 @@
 // and carbin cache then, so a pack with a file that's also at the same game path in <Mount>\mediaoverride, \mediapc or
 // a mod of Extra Options' is left out whole: that copy could be read with the pack's zip line. The packs' SQL isn't run
 // yet in this mode, so their cars aren't in the game database.
+#include "car_ids.hpp"
 #include "platform.hpp"
 #include "text.hpp"
 #include "updates.hpp"
@@ -473,9 +474,11 @@ namespace {
 struct EoMod {
     std::string name;   // as the log shows it: "Forza Horizon 2\<mod>" or "<mod>"
     fs::path media;
+    fs::path root;
 };
 
-std::vector<EoMod> eo_mods() {
+// `data_too`: also those without a media folder (a mod can be a database.json alone).
+std::vector<EoMod> eo_mods(bool data_too = false) {
     std::vector<EoMod> out;
     const fs::path mods = azimuth_dir() / L"mods";
     for (const bool newer : {true, false}) {
@@ -494,14 +497,43 @@ std::vector<EoMod> eo_mods() {
         std::error_code ec;
         for (const auto& e : fs::directory_iterator(dir, ec)) {
             const std::string name = narrow(e.path().filename().wstring());
-            if (!e.is_directory(ec) || off.count(lower(name)) || !fs::is_directory(e.path() / L"media", ec)) continue;
+            if (!e.is_directory(ec) || off.count(lower(name)) || (!data_too && !fs::is_directory(e.path() / L"media", ec))) continue;
             if (!newer && (lower(name) == "forza horizon 2" || lower(name) == "forza motorsport 5" ||
                            lower(name) == "forza horizon 3" || lower(name) == "cache"))
                 continue;   // its own folders, not mods
-            out.push_back({(newer ? "Forza Horizon 2\\" : "") + name, e.path() / L"media"});
+            out.push_back({(newer ? "Forza Horizon 2\\" : "") + name, e.path() / L"media", e.path()});
         }
     }
     return out;
+}
+
+// In JSON text `t`, from `from` to below `to`: where the value of the next "key": starts, or npos.
+std::size_t json_value(const std::string& t, const std::string& key, std::size_t from, std::size_t to) {
+    const std::string q = "\"" + key + "\"";
+    const auto spaces  = [&](std::size_t i) {
+        while (i < to && (t[i] == ' ' || t[i] == '\t' || t[i] == '\r' || t[i] == '\n')) ++i;
+        return i;
+    };
+    for (std::size_t at = t.find(q, from); at != std::string::npos && at < to; at = t.find(q, at + 1))
+        if (const std::size_t i = spaces(at + q.size()); i < to && t[i] == ':') return spaces(i + 1);
+    return std::string::npos;
+}
+
+// One past the closing bracket of the JSON object or array that starts at `open` (strings skipped), or the text's end.
+std::size_t json_end(const std::string& t, std::size_t open) {
+    int depth = 0;
+    for (std::size_t i = open; i < t.size(); ++i) {
+        const char c = t[i];
+        if (c == '"') {
+            for (++i; i < t.size() && t[i] != '"'; ++i)
+                if (t[i] == '\\') ++i;
+        } else if (c == '{' || c == '[') {
+            ++depth;
+        } else if ((c == '}' || c == ']') && --depth == 0) {
+            return i + 1;
+        }
+    }
+    return t.size();
 }
 
 int packs_in_fh2_cars() {
@@ -605,6 +637,46 @@ const EoDecision& eo_decision() {
 } // namespace
 
 bool eo_packs() { return eo_decision().on; }
+
+// Extra Options runs its mods' database.json on the database the game has opened, which with the packs is theirs: a
+// row it inserts with a pack car's Id would be refused, moved or shared, as that mod's policy says. So the cars its
+// turned-on mods insert in the packs' range are read from the text here: Data_Car's "insert" rows' "Id".
+// shortcut: reads Extra Options' format 2 (tables by name); a format 1 file reserves nothing, as before this was added.
+std::map<int64_t, car_ids::Reserved> eo_mod_car_ids() {
+    constexpr auto npos = std::string::npos;
+    std::map<int64_t, car_ids::Reserved> out;
+    for (const EoMod& m : eo_mods(true)) {
+        // Its database: the one mod.json names (null for none), else database.json.
+        fs::path file = m.root / L"database.json";
+        if (const std::string manifest = read_all(m.root / L"mod.json"); !manifest.empty())
+            if (const std::size_t v = json_value(manifest, "database", 0, manifest.size()); v != npos) {
+                if (manifest[v] != '"') continue;
+                file = m.root / widen(manifest.substr(v + 1, manifest.find('"', v + 1) - v - 1));
+            }
+        const std::string t     = read_all(file);
+        const std::size_t tables = json_value(t, "tables", 0, t.size());
+        if (tables == npos || t[tables] != '{') continue;
+        const std::size_t table = json_value(t, "Data_Car", tables, json_end(t, tables));
+        if (table == npos || t[table] != '{') continue;
+        const std::size_t rows = json_value(t, "insert", table, json_end(t, table));
+        if (rows == npos || t[rows] != '[') continue;
+        const std::size_t end    = json_end(t, rows);
+        const std::size_t policy = json_value(t, "id_conflicts", 0, t.size());
+        const bool shared        = policy != npos && t.compare(policy, 11, "\"last_wins\"") == 0;
+        std::string list;
+        for (std::size_t v = json_value(t, "Id", rows, end); v != npos; v = json_value(t, "Id", v, end)) {
+            const long long id = std::strtoll(t.c_str() + v, nullptr, 10);
+            if (id < car_ids::kFirstPackCar || id >= car_ids::kFirstHandMade) continue;
+            auto [at, fresh] = out.emplace(id, car_ids::Reserved{"Data_Car " + std::to_string(id) + " in its mod " + m.name, shared});
+            if (!fresh) at->second.shared = at->second.shared || shared;
+            list += (list.empty() ? "" : ", ") + std::to_string(id);
+        }
+        if (!list.empty())
+            plog("car packs: Extra Options' mod " + m.name + " adds car(s) with Id " + list + (shared ? ", sharing rows by Id (id_conflicts last_wins)" : "") +
+                 "; no new pack car is given one of those");
+    }
+    return out;
+}
 
 std::string eo_packs_off_reason() { return eo_decision().why; }
 

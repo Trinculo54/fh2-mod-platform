@@ -480,6 +480,24 @@ void as_before() {
         sqlite3_close(db);
     }
     {
+        // Ids that Extra Options' own mods add later (reserved): no new car gets one; a recorded one stays, unless
+        // that mod shares rows by Id.
+        const std::vector<Src> s = {pack("a", "PACK_A"), asking("b", "PACK_B", "3001")};
+        std::vector<Source> v;
+        for (const auto& x : s) v.push_back({x.name, &x.sql, &x.cars, x.wanted.empty() ? nullptr : &x.wanted});
+        const std::map<int64_t, Reserved> eo = {{3000, {"Data_Car 3000 in its mod M", false}}, {3001, {"Data_Car 3001 in its mod M", true}}};
+        sqlite3* db = game();
+        auto o = plan(db, kShown, v, {}, eo);
+        check(o[0].ids == Ids{{"PACK_A", 3002}} && o[1].ids == Ids{{"PACK_B", 3003}}, "new cars skip Extra Options' mods' Ids");
+        check(has(warnings(o[1]), "PACK_B asks for Id 3001 in pack.ini, but Extra Options has Data_Car 3001 in its mod M, so it's car 3003 here"),
+              "and the one that asked for it is told why: " + warnings(o[1]));
+        o = plan(db, kShown, v, {{"pack_a", 3000}, {"pack_b", 3001}}, eo);
+        check(o[0].ids == Ids{{"PACK_A", 3000}} && o[0].problem.empty() && o[0].notes.size() == 1, "a recorded Id stays when the mod doesn't share rows");
+        check(english(o[1].problem) == "PACK_B's Id, 3001, is taken now: Extra Options has Data_Car 3001 in its mod M.",
+              "and its pack is left out when it does: " + english(o[1].problem));
+        sqlite3_close(db);
+    }
+    {
         const std::vector<Src> s = {pack("a", "PACK_A")};
         std::vector<Source> v = {{s[0].name, &s[0].sql, &s[0].cars}};
         const auto o = plan(nullptr, kShown, v, {});

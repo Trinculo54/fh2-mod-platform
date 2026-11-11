@@ -144,6 +144,9 @@ NoLayer instance_layer_missing();
 // already final ("REFUSED" or "DISABLED"), the game's Mount folder known, T:\ there (instance_layer's checks), no
 // session of FH2MP's to play online with, and a pack in fh2-cars.
 bool eo_packs();
+// The car Ids in the packs' range that Extra Options' own turned-on mods insert (their database.json), for car_ids::plan.
+namespace car_ids { struct Reserved; }
+std::map<int64_t, car_ids::Reserved> eo_mod_car_ids();
 // Why not, while Extra Options is loaded and eo_packs() is false: a message from later(), or "" when there's nothing
 // to tell the player (no pack in fh2-cars, no game folder).
 std::string eo_packs_off_reason();

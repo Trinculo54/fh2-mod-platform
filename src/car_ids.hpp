@@ -50,8 +50,17 @@ struct Outcome {
 // Warnings: a source that adds such rows for a car from kFirstPackCar to below kFirstHandMade, a pack
 // whose SQL never says {car:X} for one of its cars, and a new car that can't have the Id it asks for
 // (or asks for one that can't be given).
+//
+// `reserved`: car Ids that Extra Options' own mods add once the game has opened the database, so they're in
+// neither `base` nor the sources. No new car is given one. A recorded Id stays (Extra Options gives its own car
+// another Id, or leaves its mod out), unless that mod shares rows by Id (`shared`): then the pack is left out,
+// as its car's row would become the mod's.
+struct Reserved {
+    std::string what;      // "Data_Car 3005 in its mod X", after "Extra Options has"
+    bool shared = false;   // its database.json says id_conflicts last_wins
+};
 std::vector<Outcome> plan(sqlite3* base, const std::string& shown, const std::vector<Source>& sources,
-                          const std::map<std::string, int64_t>& record);
+                          const std::map<std::string, int64_t>& record, const std::map<int64_t, Reserved>& reserved = {});
 
 // SQL text split into its statements (sqlite3_complete), each with its ';'. Text after the last
 // complete one comes last, if it has more than spaces.

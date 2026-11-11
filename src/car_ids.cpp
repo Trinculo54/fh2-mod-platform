@@ -95,7 +95,7 @@ std::vector<std::string> split_statements(const std::string& sql) {
 }
 
 std::vector<Outcome> plan(sqlite3* base, const std::string& shown, const std::vector<Source>& sources,
-                          const std::map<std::string, int64_t>& record) {
+                          const std::map<std::string, int64_t>& record, const std::map<int64_t, Reserved>& reserved) {
     std::vector<Outcome> out(sources.size());
     const auto has_cars = [&](std::size_t i) { return sources[i].cars && !sources[i].cars->empty(); };
 
@@ -258,6 +258,9 @@ std::vector<Outcome> plan(sqlite3* base, const std::string& shown, const std::ve
             if (recorded.count(want))
                 return later("{0} asks for Id {1} in pack.ini, but fh2-mods\\platform-car-ids.txt gives it to another car, so it's "
                              "car {2} here: a save from an install where it's {1} doesn't show it here.", {car, w, n});
+            if (const auto r = reserved.find(want); r != reserved.end())
+                return later("{0} asks for Id {1} in pack.ini, but {2} has {3}, so it's car {4} here: a save from an install where "
+                             "it's {1} doesn't show it here.", {car, w, "Extra Options", r->second.what, n});
             const Owner* t = taken(want, owner);
             if (t && t->source < 0)
                 return later("{0} asks for Id {1} in pack.ini, but {2} has {3}, so it's car {4} here: a save from an install where "
@@ -266,7 +269,7 @@ std::vector<Outcome> plan(sqlite3* base, const std::string& shown, const std::ve
                          "where it's {1} doesn't show it here.", {car, w, t ? whose(*t) : std::string("?"), t ? t->what : "?", n});
         };
         const auto free_for = [&](int64_t id, int owner) {
-            return !given.count(id) && !mine.count(id) && !recorded.count(id) && !taken(id, owner);
+            return !given.count(id) && !mine.count(id) && !recorded.count(id) && !reserved.count(id) && !taken(id, owner);
         };
         const auto& cars = *sources[i].cars;
         for (std::size_t c = 0; c < cars.size() && problem.empty(); ++c) {
@@ -287,8 +290,13 @@ std::vector<Outcome> plan(sqlite3* base, const std::string& shown, const std::ve
                     problem = t->source < 0 ? later("{0}'s Id, {1}, is taken now: {2} has {3}.", {car, std::to_string(r->second), whose(*t), t->what})
                                             : later("{0}'s Id, {1}, is taken now: {2}'s SQL adds {3}.",
                                                     {car, std::to_string(r->second), whose(*t), t->what});
+                } else if (const auto x = reserved.find(r->second); x != reserved.end() && x->second.shared) {
+                    problem = later("{0}'s Id, {1}, is taken now: {2} has {3}.", {car, std::to_string(r->second), "Extra Options", x->second.what});
                 } else {
                     ids.emplace_back(car, r->second), mine[r->second] = car;
+                    if (x != reserved.end())
+                        o.notes.push_back(car + " keeps car " + std::to_string(r->second) + ", which it was given before; Extra Options has " +
+                                          x->second.what + " too, and gives that one another Id or leaves its mod out (its log says which)");
                     if (want && want != r->second)
                         o.notes.push_back(car + " keeps car " + std::to_string(r->second) + ", which it was given before, rather than the " +
                                           std::to_string(want) + " its pack.ini asks for (a bought car's Id is in the save), so a "
