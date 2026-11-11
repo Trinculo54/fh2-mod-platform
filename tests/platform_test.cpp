@@ -498,6 +498,18 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(ai_has(L"Buddy1") && ai_has(L"Buddy2") && !ai_has(L"Nocomply76") && ai_has(L"Womgoose"));
         const auto title = str("Main.str", 0x18F0);
         std::printf("title: [%ls]\n", title.c_str());
+        // a line too long for the screen is cut at a space, with a blank line above for each line it takes; a
+        // Japanese one can be cut anywhere, its characters counting double; a line that fits is left as it is
+        CHECK(title_with_notices(L"no-such-folder", L"TO START", {}, {"A copy of your saves from before is in fh2-mods\\save-snapshots."}) ==
+              L"\n\n\nTO START\nA copy of your saves from before is in\nfh2-mods\\save-snapshots.");
+        CHECK(title_with_notices(L"no-such-folder", L"TO START", {}, {std::string(50, 'x') + " y", std::string(60, 'z')}) ==
+              L"\n\n\n\nTO START\n" + std::wstring(50, L'x') + L"\ny\n" + std::wstring(60, L'z'));
+        {
+            std::string jp;
+            for (int i = 0; i < 30; ++i) jp += "\xE3\x81\x82";   // 30 of U+3042
+            CHECK(title_with_notices(L"no-such-folder", L"TO START", {}, {jp}) ==
+                  L"\n\n\nTO START\n" + std::wstring(25, L'あ') + L"\n" + std::wstring(5, L'あ'));
+        }
         // the platform's own line about where mod settings are comes last (fh2-mods\platform-title.txt), until
         // YOUR MODS has been opened (platform 2.9.0); with no MODS menus to point at (no UI.zip here), there's none
         if (menus) {
@@ -843,7 +855,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(installed, "Icon=\"This page from TestMod has a mistake that would crash the game, so it's left out. fh2-mods\\platform.log has more.\""));
             CHECK(has(installed, "Icon=\"The game crashed opening this page last time, so it's left out until TestMod is updated or you choose to try "
                                  "it again. fh2-mods\\platform.log has more.\""));
-            CHECK(has(installed, "Heading=\"Footer &lt;line&gt; &#183; dot\"") && has(installed, "local:BindingProxy.B=\"Alert\""));
+            CHECK(has(installed, "Heading=\"Footer &lt;line&gt; &#xb7; dot\"") && has(installed, "local:BindingProxy.B=\"Alert\""));
             // the tile: the page of TestMod's own design, in the options page's frame
             CHECK(has(tile, "<Grid x:Name=\"TestContent\">") && !has(tile, "BasicOptions") && has(tile, "x:Key=\"FH2Mod_ShowIf\"") &&
                   !has(tile, "Test_NoSuchKey"));
@@ -889,7 +901,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(splash, "{Binding FH2Mod_TitleReady}") && has(splash, "<Setter Property=\"Visibility\" Value=\"Collapsed\" />"));
             CHECK(has(splash, "A_BitmapImage_ControllerButton_Y}") && has(splash, "Text=\"DRIVE THE TEST GARAGE\""));
             CHECK(has(splash, "A_BitmapImage_ControllerButton_LB}") && has(splash, "Text=\"FOURTH &amp; &lt;LAST&gt;\""));
-            CHECK(has(splash, "Text=\"&#379;&#211;&#321;TA TRASA Z BARDZO D&#321;UG&#260; NAZW&#260;\""));   // Polish capitals
+            CHECK(has(splash, "Text=\"&#x17b;&#xd3;&#x141;TA TRASA Z BARDZO D&#x141;UG&#x104; NAZW&#x104;\""));   // Polish capitals
             // the choice row on Settings > Mods: a slider shown like the game's option rows, a name per value
             const auto mods = slurp(scenes / "A_ModOptions.xaml");
             CHECK(has(mods, "Style=\"{StaticResource FH2Mod_Choice_") && has(mods, "<Setter Property=\"Maximum\" Value=\"2\" />"));
@@ -901,7 +913,7 @@ int wmain(int argc, wchar_t** argv) {
             // text given after add_setting and register_mod (API 10)
             CHECK(has(mods, "Test button, renamed") && !has(mods, "\"Test button\"") && has(mods, "Text=\"RB &amp; &lt;renamed&gt;\""));
             // a row from tr() (API 10): in Polish, the language last time
-            CHECK(has(mods, "Testowe powitanie &#8211; cze&#347;&#263;") && has(mods, "Wiersz, kt&#243;rego tekst jest w j&#281;zyku gry."));
+            CHECK(has(mods, "Testowe powitanie &#x2013; cze&#x15b;&#x107;") && has(mods, "Wiersz, kt&#xf3;rego tekst jest w j&#x119;zyku gry."));
             CHECK(has(installed, "set later."));
             // the platform's own lines as whole sentences, one for each state (platform 2.9.0)
             CHECK(has(installed, "Heading=\"Version 0.5.0 (doesn't check for updates)\""));

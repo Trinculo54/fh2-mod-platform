@@ -374,7 +374,11 @@ typedef struct FH2ModApi {
        element to focus first x:Name="FirstItem". `resources` (may be NULL)
        goes into the page's ResourceDictionary. `help` (may be NULL) replaces
        the help bar's DefaultHelpPanel; NULL leaves only Back. All three are
-       UTF-8 XAML fragments, using the page's xmlns (local: is ForzaUI).
+       XAML fragments, using the page's xmlns (local: is ForzaUI). They're
+       written as they are, and the game reads them a byte a character: write
+       a letter beyond ASCII as a hex reference with a lowercase x (&#xf3;
+       for o-acute). A UTF-8 letter shows as two wrong ones, and a decimal
+       reference (&#243;) as a space.
        Like rows, the XAML is copied, and the page is written from the last
        you set each time it opens. A page with XAML shows it on its tile;
        on your mod's page under MODS > YOUR MODS it shows its rows if it has
@@ -496,9 +500,11 @@ typedef struct FH2ModApi {
        counted), and says
        in the log which mods asked and why. The game reads the saves when A is
        pressed on the title screen, long after. The platform only reads the
-       saves, never writes to them; to go back, copy a snapshot's contents
-       over the saves folder with the game closed (all of it: Azimuth checks
-       the saves' hashes). Returns 1 if a copy will be made, 0 if there's no
+       saves, never writes to them; to go back, with the game closed, move
+       the saves folder aside and copy a snapshot's contents into a new,
+       empty one (not over the old: saves are numbered revisions, so newer
+       ones would stay and be loaded, and Azimuth checks the saves' hashes).
+       Returns 1 if a copy will be made, 0 if there's no
        saves folder or the call came after fh2mod_init (the log says why). */
     int (*request_save_snapshot)(FH2Mod* mod, const char* reason, uint32_t keep);
 

@@ -238,12 +238,41 @@ std::wstring title_with_notices(
     // on it. Blank lines above balance the notice lines below so it stays
     // level with the button and the notices stack underneath; one extra
     // blank line evens out the box sitting a little high (checked in game).
+    //
+    // The box doesn't wrap, and a long line ran off the right of the screen (2.9.0 rc1: 59 Latin letters just fit,
+    // 63 were cut). So a line is cut at a space once it's past kBudget; Japanese, Korean and Chinese characters
+    // count double, and a line can be cut before any of them.
+    constexpr int kBudget = 50;
+    const auto wide       = [](wchar_t c) { return c >= 0x1100; };
     std::wstring above, below;
     std::vector<std::string> lines = notice_lines(azimuth, lines_for);
     lines.insert(lines.end(), last.begin(), last.end());
-    for (const auto& l : lines) {
+    const auto add = [&](std::wstring piece) {
+        while (!piece.empty() && piece.back() == L' ') piece.pop_back();
         above += L"\n";
-        below += L"\n" + widen(l);
+        below += L"\n" + piece;
+    };
+    for (const auto& l : lines) {
+        std::wstring cur;
+        std::size_t cut = 0;   // where cur can be cut: after its last space, or before its last wide character
+        int units = 0;
+        for (const wchar_t c : widen(l)) {
+            if (wide(c) && !cur.empty()) cut = cur.size();
+            cur += c;
+            units += wide(c) ? 2 : 1;
+            if (c == L' ') {
+                cut = cur.size();
+                continue;
+            }
+            if (units > kBudget && cut > 0) {
+                add(cur.substr(0, cut));
+                cur.erase(0, cut);
+                cut   = 0;
+                units = 0;
+                for (const wchar_t k : cur) units += wide(k) ? 2 : 1;
+            }
+        }
+        add(cur);
     }
     if (below.empty()) return to_start;
     return above + L"\n" + to_start + below;
