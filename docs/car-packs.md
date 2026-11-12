@@ -10,7 +10,7 @@ Azimuth 1.0 or later. The platform then mounts its own folders ahead of the game
 
 Put the pack's folder in `fh2-cars`, so that its `pack.ini` is at `fh2-cars\<pack>\pack.ini`, and start the game. Its cars are in the Autoshow under their make. `platform.log` lists each pack and the cars it adds, the Id each car got the first time ("FOR_MustangCL_15 is car 3000 from now on"), and why a pack was left out, if it was. The MODS tab's YOUR MODS lists the packs under the mods, with the cars each adds, and says in red when one isn't working; its About page has a row that opens `fh2-cars`.
 
-To remove a pack, delete its folder. Its cars and files are gone from the next start. A car you bought is in your save by its Id, and what the game does with a save whose car has gone hasn't been tried yet, so keep a copy of your saves before removing a pack whose car you own. A car keeps its Id for good (see below), so putting the pack back gives it the same one.
+To remove a pack, delete its folder. Its cars and files are gone from the next start. A car you bought is in your save by its Id, and in the one test so far the game loaded a save whose car had gone, put the player in another car where the missing one had been the car in use, and had the car back once the pack was. Other cars and packs may go differently, so keep a copy of your saves before removing a pack whose car you own. A car keeps its Id for good (see below), so putting the pack back gives it the same one.
 
 ### When a pack's cars are missing
 

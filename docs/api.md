@@ -115,7 +115,7 @@ Edits are written to Extra Options' `mediaoverride` folder, as `mediaoverride\St
 void set_notice(FH2Mod* mod, const char* utf8_lines);
 ```
 
-Sets your lines on the title screen, under "PRESS (A) TO START". Separate lines with `\n`; empty lines are dropped, and null or `""` clears them. Each line fits about 40 characters. Your lines appear together with every other mod's, sorted by mod name, with the platform's own update and version lines for your mod after yours.
+Sets your lines on the title screen, under "PRESS (A) TO START". Separate lines with `\n`; empty lines are dropped, and null or `""` clears them. Each line fits about 40 characters. From platform 2.9.0 a line past 59 letters is wrapped at a space; on an older platform it runs off the screen. Your lines appear together with every other mod's, sorted by mod name, with the platform's own update and version lines for your mod after yours.
 
 From platform 2.9.0, lines you got from [tr()](#translations-api-10) are written into each language's `Main.str` in that language's words, so the title screen matches the game's language whatever it picks.
 
