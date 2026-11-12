@@ -29,6 +29,8 @@ struct PlayerText {
 };
 
 // The platform's two rows on its page: "Mod pop-ups" (a choice: Same as Notifications, Off) and "Tips" (On/Off).
+// ExitTile under [player] in fh2-mods\platform-popups.ini: 0 leaves the pause menu's Exit Game tile out (default 1).
+bool player_exit_tile();
 enum class PlayerRow { mod_popups, tips };
 PlayerText player_row_text(PlayerRow row);
 int player_row_value(PlayerRow row);                  // as the row shows it: the choice's index, or 1 for On

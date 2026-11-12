@@ -17,6 +17,8 @@ d3dcompiler_47.dll (platform 2.7.3 or older), copy DWrite.dll from here
 next to azimuth.exe. Mod settings are under Pause > MODS > YOUR MODS
 (Pause > Settings > MODS opens the same list), and the platform's own
 page at the end of that list says whether mods' pop-ups and tips show.
+The pause menu's Home tab has an EXIT GAME tile from 2.9.0 (ExitTile=0
+under [player] in fh2-mods\platform-popups.ini leaves it out).
 A mod zip that ships an older platform puts it back over this one:
 reinstall a mod that ships 2.9.0 afterwards. FH2MP players: the FH2MP
 launcher puts back the platform it was built with every time you press

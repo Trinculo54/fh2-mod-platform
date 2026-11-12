@@ -353,6 +353,8 @@
  * 0x2DEF9C8); for play_ui_sound from outside a mod's callbacks, the tick; for the HUD layer (preview,
  * when a mod adds a layer), the tick and the same three HUD slots; for the pad layer (preview, when a
  * mod adds one), game+0x10768D0; and for the database guard (when the game reads a database a car
- * pack or mod changed), DriveTrainConverter's two type checks at game+0xB99CA0 and 0xB99D74. */
+ * pack or mod changed), DriveTrainConverter's two type checks at game+0xB99CA0 and 0xB99D74; and for
+ * the pause menu's Exit Game tile, the call that makes the menu's navigation grid at game+0xDC6F29
+ * and the constructor of a grid's cell at game+0x1400030. */
 
 #endif /* FH2GAME_H */

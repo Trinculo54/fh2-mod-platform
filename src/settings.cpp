@@ -700,7 +700,7 @@ uint8_t* tile_descriptor(int prop, std::size_t t) {
 // the tiles' other lines (kHubLine...): YOUR MODS' subtitle and the mods' names, GET MODS' line, and the Settings
 // page's MODS tile's.
 constexpr int kHubTiles = 5;   // YOUR MODS, UPDATES, GET MODS, ABOUT, HELP: write_pause_menu's order
-enum HubLine { kHubLineMods = kHubTiles, kHubLineName1, kHubLineName4 = kHubLineName1 + 3, kHubLineGetMods, kHubLineSettings, kHubTexts };
+enum HubLine { kHubLineMods = kHubTiles, kHubLineName1, kHubLineName4 = kHubLineName1 + 3, kHubLineGetMods, kHubLineSettings, kHubLineExit, kHubTexts };
 uint8_t* g_hub_tile_desc[kHubTexts] = {};
 std::atomic<void*> g_hub_tile_obj[kHubTexts] = {};   // the page that read each (the pause menu; Settings for its tile)
 std::string hub_tile_text(int k);               // with the MODS tab's pages, below
@@ -2224,6 +2224,7 @@ std::string hub_tile_text(int k) {
     if (k == kHubLineMods) return tr("Settings for each mod");
     if (k == kHubLineGetMods) return tr("Opens in your browser");
     if (k == kHubLineSettings) return tr("Same as Pause > MODS");
+    if (k == kHubLineExit) return upper_game(tr("Exit game"));   // the Home tab's Exit Game tile
     if (k == 1)
         if (const int out = updates_out(); out > 0) return trf("UPDATES ({0})", {std::to_string(out)});
     return tr(kHubTileNames[k]);
@@ -3393,6 +3394,86 @@ bool add_tile_text(std::string& page, const char* button, std::size_t t) {
     return true;
 }
 
+// ---- the Exit Game tile (platform 2.9.0) ---------------------------------------------------
+// The Home tab's SETTINGS tile at half its height, with an EXIT GAME tile of the same size under it: a third row in
+// the tab's last column. From the ExitToWindows mod, which did it in memory with hooks of its own. Here the tile is
+// in the page the platform writes anyway, a plain button of ours wired like the MODS tab's (wire_exit_tile), and it
+// asks first, in the game's message box. A tile is 276 high and the rows start at 0 and 282, so the halves are 135
+// high with 6 between them: tops 282 and 423. The third row needs the pause menu's navigation grid to have one
+// (hook_exit_tile); where those hooks can't go in, the page is written again without the tile.
+// Off with ExitTile=0 under [player] in fh2-mods\platform-popups.ini.
+bool g_exit_wanted = true;    // the player's choice, and that the grid's hooks can go in
+bool g_exit_tile   = false;   // A_PauseMenu.xaml has the tile
+
+bool add_exit_tile(std::string& page, std::string& res) {
+    const std::size_t name = page.find("x:Name=\"PART_Button_MyProfile\"");
+    if (name == std::string::npos) return false;
+    const std::size_t a = page.rfind("<Button", name), b = page.find("/>", name);
+    if (a == std::string::npos || b == std::string::npos) return false;
+    std::string el = page.substr(a, b + 2 - a);
+    // only the tile as the game has it: a 1x1 icon tile in the last column's second row
+    const std::string style = "Style=\"{StaticResource A_Style_Button_Tile_1x1}\"";
+    const std::string icon  = "Template=\"{StaticResource A_ControlTemplate_IconTile}\"";
+    if (el.find("/>") != el.size() - 2 || el.find(style) == std::string::npos || el.find(icon) == std::string::npos ||
+        el.find("TileMenuNavigationManager.GridX=\"5\"") == std::string::npos ||
+        el.find("TileMenuNavigationManager.GridY=\"1\"") == std::string::npos)
+        return false;
+    el.replace(el.find(style), style.size(), "Style=\"{StaticResource FH2Mod_Style_Tile_Half}\"");
+    el.replace(el.find(icon), icon.size(), "Template=\"{StaticResource FH2Mod_Template_SettingsHalf}\"");
+    el += "\r\n                        <Button Canvas.Left=\"{StaticResource A_Double_TileCoord_X_5}\""
+          "\r\n                                Canvas.Top=\"423\""
+          "\r\n                                Style=\"{StaticResource FH2Mod_Style_Tile_Half}\""
+          "\r\n                                Template=\"{StaticResource FH2Mod_Template_ExitHalf}\""
+          "\r\n                                Tag=\"{Binding FH2Mod_HubTile_" + std::to_string(kHubLineExit) +
+          ", RelativeSource={RelativeSource AncestorType=Page, Mode=FindAncestor}}\""
+          "\r\n                                local:TileMenuNavigationManager.TileState=\"Enabled\""
+          "\r\n                                local:TileMenuNavigationManager.GridX=\"5\""
+          "\r\n                                local:TileMenuNavigationManager.GridY=\"2\""
+          "\r\n                                local:UIPageTransitionManager.TransitionIndex=\"9\""
+          "\r\n                                x:Name=\"PART_Button_FH2Mod_Exit\" />";
+    page.replace(a, b + 2 - a, el);
+    // A half tile: the game's icon tile (as tile_template's), its icon at the right and its title at the left.
+    const auto half = [](const char* key, const std::string& picture, const char* title) {
+        return std::string("\r\n            <ControlTemplate x:Key=\"") + key + "\" TargetType=\"{x:Type Button}\">\r\n"
+               "                <Grid Style=\"{StaticResource A_Style_FrameworkElement_DefaultTransition}\" "
+               "local:UIPageTransitionManager.TransitionIndex=\"{Binding (local:UIPageTransitionManager.TransitionIndex), RelativeSource={RelativeSource TemplatedParent}}\">\r\n"
+               "                    <Grid Style=\"{StaticResource A_Style_Grid_HiddenWhenLocked}\">\r\n"
+               "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_TileShadow}\" />\r\n"
+               "                    </Grid>\r\n"
+               "                    <Grid Style=\"{StaticResource A_Style_Grid_MotionBlur}\">\r\n"
+               "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_TileBackground}\" />\r\n" + picture +
+               "                        <Grid Margin=\"{StaticResource A_Thickness_TilePadding}\">\r\n"
+               "                            <local:FZTextBlock Text=\"{Binding " + title + ", RelativeSource={RelativeSource TemplatedParent}}\" "
+               "Style=\"{StaticResource A_Style_FZTextBlock_TileTitle}\" HorizontalAlignment=\"Left\" TextAlignment=\"Left\" />\r\n"
+               "                        </Grid>\r\n"
+               "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_TileSelectionBar}\" />\r\n"
+               "                    </Grid>\r\n"
+               "                </Grid>\r\n"
+               "            </ControlTemplate>";
+    };
+    res += "\r\n            <Style x:Key=\"FH2Mod_Style_Tile_Half\" TargetType=\"{x:Type Button}\" BasedOn=\"{StaticResource A_Style_Button_Tile_1x1}\">\r\n"
+           "                <Setter Property=\"Height\" Value=\"135\" />\r\n"
+           "            </Style>";
+    // Settings keeps the game's own icon, smaller; Exit Game has a power symbol in the grey of the game's icons,
+    // drawn 300 wide and shown at 35%
+    res += half("FH2Mod_Template_SettingsHalf",
+                "                        <local:FZMaterial Style=\"{StaticResource A_Style_FZMaterial_LockableIcon}\" "
+                "ImageSource=\"{Binding DataContext.Icon, RelativeSource={RelativeSource TemplatedParent}}\" Width=\"100\" Height=\"100\" "
+                "HorizontalAlignment=\"Right\" VerticalAlignment=\"Center\" Margin=\"0,0,12,0\" />\r\n",
+                "DataContext.Heading");
+    res += half("FH2Mod_Template_ExitHalf",
+                "                        <Grid Width=\"300\" Height=\"300\" HorizontalAlignment=\"Right\" VerticalAlignment=\"Center\" "
+                "Margin=\"0,0,12,0\" RenderTransformOrigin=\"1,0.5\">\r\n"
+                "                            <Grid.RenderTransform>\r\n"
+                "                                <ScaleTransform ScaleX=\"0.35\" ScaleY=\"0.35\" />\r\n"
+                "                            </Grid.RenderTransform>\r\n"
+                "                            <Path Data=\"M211,77 A95,95 0 1 1 89,77\" Stroke=\"#FFDCDCDC\" StrokeThickness=\"24\" />\r\n"
+                "                            <Path Data=\"M150,35 L150,140\" Stroke=\"#FFDCDCDC\" StrokeThickness=\"24\" />\r\n"
+                "                        </Grid>\r\n",
+                "Tag");
+    return true;
+}
+
 bool write_pause_menu() {
     std::string page = read_ui("Scenes/Anthem/A_PauseMenu.xaml");
     if (page.empty()) return false;
@@ -3481,6 +3562,8 @@ bool write_pause_menu() {
     }
     buttons += "                    ";
     if (!replace_between(page, scope, "</Canvas>", buttons, false)) return false;
+    g_exit_tile = g_exit_wanted && add_exit_tile(page, res);
+    if (g_exit_wanted && !g_exit_tile) slog("the Home tab's Settings tile doesn't look as expected; no Exit Game tile");
     // the tiles mods' pages have: their text (the template goes in after the club tile's style)
     if (page.find("x:Key=\"A_Style_FZTextBlock_TileClubMemberCount\"") < page.find(items_at))
         for (std::size_t t = 0; t < kTileCount; ++t) {
@@ -4561,6 +4644,101 @@ void wire_installed_tile(void* page) {
     }
 }
 
+// ---- the Exit Game tile: its click, and its row of the navigation grid ---------------------
+// The tile asks first: "Stay in the game" comes first and B closes the box, and where the game's message box can't
+// be used the tile does nothing, so the game is never closed without a question. Exit game closes the game's
+// window, as Restart now and Azimuth's own Quit do.
+enum { kExitStay = 0, kExitGame = 1 };
+void handle_exit_choice(PopupFn* self) {
+    if (chosen_item(self->popup) != kExitGame) {
+        slog("Exit game: staying in the game");
+        return;
+    }
+    HWND w = nullptr;
+    EnumWindows(find_game_window, reinterpret_cast<LPARAM>(&w));
+    if (!w) {
+        slog("Exit game: couldn't find the game window to close");
+        return;
+    }
+    slog("Exit game: closing the game window, as Azimuth's Quit does");
+    PostMessageW(w, WM_CLOSE, 0, 0);
+}
+void fn_call_exit(PopupFn* self) { handle_exit_choice(self); }
+void* g_exit_fn_vt[7] = {reinterpret_cast<void*>(&fn_copy), reinterpret_cast<void*>(&fn_copy), reinterpret_cast<void*>(&fn_call_exit),
+                         reinterpret_cast<void*>(&fn_type), reinterpret_cast<void*>(&fn_delete), reinterpret_cast<void*>(&fn_dtor),
+                         reinterpret_cast<void*>(&fn_get)};
+
+void tile_exit(void* page) {
+    static FakeLocString* title    = loc_string(L"Exit game");
+    static FakeLocString* message  = loc_string(L"Close the game? Unsaved progress will be lost.");
+    static FakeLocString* labels[] = {loc_string(L"Stay in the game"), loc_string(L"Exit game")};
+    play_sound(kSoundSelect);
+    if (g_popup_ok && show_list(page, title, message, labels, 2, g_exit_fn_vt)) return;
+    slog("Exit game: the game's message box can't be used, so the tile does nothing");
+}
+
+void wire_exit_tile(void* page) {
+    static const Pmf pmf{reinterpret_cast<void*>(&tile_exit), 0, 0};
+    __try {
+        reinterpret_cast<WireButtonFn>(g_base + RVA_PAUSE_WIRE_BTN)(page, "PART_Button_FH2Mod_Exit", &pmf);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+// The pause menu makes its navigation grid 6 columns by 2 rows (0x140DC6F29: call 0x140DA5F60(out, &page, &columns,
+// &rows)); with the tile it's made with 3.
+// A grid's cells are 32 bytes each, and their constructor (0x141400030) clears only the tile (+0x00) and +0x18: a
+// cell's x, y, width and height (+0x08 to +0x17) stay as the heap had them. The game's own pages have a tile over
+// every cell it reads, so that never showed. A third row that's nearly empty does: moving the selection reads the
+// empty neighbours' width and height and loops over them, millions of times, and the pause menu freezes
+// (ExitToWindows 3.0). So every cell starts out empty.
+constexpr uintptr_t RVA_PAUSE_GRID_CALL = 0x0DC6F29;
+constexpr uintptr_t RVA_NAV_CELL_CTOR   = 0x1400030;
+using MakeGridFn = void* (*)(void* out, void* page, int* columns, int* rows);
+using NavCellFn  = void* (*)(void* cell);
+MakeGridFn o_pause_grid = nullptr;
+NavCellFn o_nav_cell    = nullptr;
+
+void* d_pause_grid(void* out, void* page, int* columns, int* rows) {
+    if (g_exit_tile && columns && rows && *columns == 6 && *rows == 2) *rows = 3;
+    return o_pause_grid(out, page, columns, rows);
+}
+void* d_nav_cell(void* cell) {
+    void* r = o_nav_cell(cell);
+    if (cell) std::memset(static_cast<char*>(cell) + 8, 0, 16);
+    return r;
+}
+
+void hook_exit_tile(FH2Mod* m) {
+    if (!g_exit_tile) return;
+    // mov dword [rbp+0x630], 6; mov [rsp+0x60], rdi; lea r9, [rbp+0x628]; lea r8, [rbp+0x630]; lea rdx, [rsp+0x60];
+    // lea rcx, [rbp-0x40]; call 0x140DA5F60
+    static const uint8_t grid[] = {0xC7, 0x85, 0x30, 0x06, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x48, 0x89, 0x7C, 0x24, 0x60,
+                                   0x4C, 0x8D, 0x8D, 0x28, 0x06, 0x00, 0x00, 0x4C, 0x8D, 0x85, 0x30, 0x06, 0x00, 0x00, 0x48,
+                                   0x8D, 0x54, 0x24, 0x60, 0x48, 0x8D, 0x4D, 0xC0, 0xE8, 0x32, 0xF0, 0xFD, 0xFF};
+    // xor eax, eax; mov [rcx], rax; mov [rcx+0x18], rax; mov rax, rcx; ret
+    static const uint8_t cell[] = {0x33, 0xC0, 0x48, 0x89, 0x01, 0x48, 0x89, 0x41, 0x18, 0x48, 0x8B, 0xC1, 0xC3};
+    FH2Hook *rows = nullptr, *cells = nullptr;
+    bool ok = code_matches(RVA_PAUSE_GRID_CALL + 5 - sizeof grid, grid, sizeof grid) && code_matches(RVA_NAV_CELL_CTOR, cell, sizeof cell);
+    if (ok) {
+        rows  = g_api->hook_call(m, "PauseMenu: navigation grid rows", reinterpret_cast<void*>(g_base + RVA_PAUSE_GRID_CALL),
+                                 reinterpret_cast<void*>(&d_pause_grid), reinterpret_cast<void**>(&o_pause_grid));
+        cells = g_api->hook_function(m, "Navigation grid: empty cells", reinterpret_cast<void*>(g_base + RVA_NAV_CELL_CTOR),
+                                     reinterpret_cast<void*>(&d_nav_cell), reinterpret_cast<void**>(&o_nav_cell));
+        // the cells first: a third row is never made without them
+        ok = rows && cells && g_api->enable_hooks(m, cells) && g_api->enable_hooks(m, rows);
+    }
+    if (ok) {
+        slog("Exit Game tile ready: the Home tab's Settings tile is half its height, with Exit Game under it");
+        return;
+    }
+    if (rows) g_api->disable_hooks(m, rows);
+    if (cells) g_api->disable_hooks(m, cells);
+    slog("the pause menu's navigation grid doesn't look as expected, or another mod has hooked it; no Exit Game tile");
+    g_exit_wanted = false;
+    if (!write_pause_menu()) slog("couldn't write the pause menu again without the Exit Game tile");
+}
+
 // ---- the game's tiles that mods' pages take over (API 8) ----------------------------------
 // See kTiles. Each CALL to 0x140CB47B0(page, ObjectPtr* out, int command) -> out goes to a
 // detour of ours (one per call site, for its `original`) that opens the page the way the MODS
@@ -4646,6 +4824,7 @@ void d_pause_menu_wire(void* page) {
     g_hub_builds = 0;
     o_pause_menu_wire(page);
     wire_installed_tile(page);
+    if (g_exit_tile) wire_exit_tile(page);
     // the MODS tab's tiles aren't there: the game isn't reading the platform's files. Logged once a session; the
     // player is told only when a mod has settings, links or pages there to miss, and once for each platform version.
     static bool looked = false;
@@ -4814,6 +4993,7 @@ void hook_hub() {
         if (!g_find_button_ok) slog("the pause menu's tile lookup doesn't look as expected; a missing MODS tab won't be told to the player");
     }
     hook_tiles(m);
+    hook_exit_tile(m);
     // The freeroam HUD shown: for the HUD's notice, and for the crash guard when a mod's page is on a tile (its mark
     // comes off once the player is back driving). The notice's property is made on the game's thread (d_hud_shown).
     bool tile_page = false;
@@ -6500,7 +6680,9 @@ void settings_start(const FH2ModApi* api) {
         hud_layer_start();
         return;
     }
-    // the MODS tab
+    // the MODS tab, and the Home tab's Exit Game tile
+    g_exit_wanted = player_exit_tile();
+    if (!g_exit_wanted) slog("Exit Game tile: off (ExitTile=0 under [player] in fh2-mods\\platform-popups.ini)");
     g_hub_files = write_pause_menu() && write_pause_flow();
     remove_leftover_file("stateflow/ui_screens.xml");
     for (int p : {kHubInstalled, kHubUpdates, kHubAbout, kHubHelp})

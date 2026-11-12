@@ -420,7 +420,7 @@ int wmain(int argc, wchar_t** argv) {
         std::ofstream{"aaa_popups.txt"} << "1";   // for "ui set" on AaaMod's Pop-ups row
     }
     if (phase == L"home")
-        std::ofstream{"fh2-mods\\platform-popups.ini", std::ios::binary} << "[popups]\r\nDeveloper=1\r\n[player]\r\nModPopups=0\r\nTips=0\r\n";
+        std::ofstream{"fh2-mods\\platform-popups.ini", std::ios::binary} << "[popups]\r\nDeveloper=1\r\n[player]\r\nModPopups=0\r\nTips=0\r\nExitTile=0\r\n";
     if (phase == L"hud") {   // the HUD layer's diagnostics (Debug=1 in its ini): on in the second layout's run, off in the first
         if (own_layer()) std::ofstream{"fh2-mods\\platform-hudlayer.ini", std::ios::binary} << "[HudLayer]\r\nDebug=1\r\n";
         else fs::remove("fh2-mods\\platform-hudlayer.ini");
@@ -896,6 +896,27 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(hub_tags && !has(pause, "FH2Mod_HubTile_11") &&
                   has(pause, "<ControlTemplate x:Key=\"FH2Mod_Tile_Installed_Template\"") &&
                   has(pause, "<local:FZTextBlock Text=\"{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}\" Style=\"{StaticResource A_Style_FZTextBlock_TileTitle}\""));
+            // the Home tab's Exit Game tile (platform 2.9.0): Settings at half its height, the tile under it in a
+            // third row, its name from FH2Mod_HubTile_12, and the page still well-formed
+            {
+                const std::size_t settings = pause.find("x:Name=\"PART_Button_MyProfile\"");
+                const std::size_t exit_at  = pause.find("x:Name=\"PART_Button_FH2Mod_Exit\"");
+                CHECK(settings != std::string::npos && exit_at != std::string::npos && settings < exit_at);
+                const std::size_t from = settings == std::string::npos ? settings : pause.rfind("<Button", settings);
+                const std::string tile_s = from == std::string::npos ? std::string() : pause.substr(from, settings - from);
+                CHECK(has(tile_s, "Style=\"{StaticResource FH2Mod_Style_Tile_Half}\"") &&
+                      has(tile_s, "Template=\"{StaticResource FH2Mod_Template_SettingsHalf}\"") && !has(tile_s, "A_ControlTemplate_IconTile") &&
+                      has(tile_s, "TileMenuNavigationManager.GridY=\"1\""));
+                CHECK(has(pause, "<Style x:Key=\"FH2Mod_Style_Tile_Half\"") && has(pause, "<ControlTemplate x:Key=\"FH2Mod_Template_SettingsHalf\"") &&
+                      has(pause, "<ControlTemplate x:Key=\"FH2Mod_Template_ExitHalf\"") &&
+                      has(pause, "Tag=\"{Binding FH2Mod_HubTile_12, RelativeSource={RelativeSource AncestorType=Page, Mode=FindAncestor}}\"") &&
+                      has(pause, "local:TileMenuNavigationManager.GridY=\"2\"\r\n                                "
+                                 "local:UIPageTransitionManager.TransitionIndex=\"9\"\r\n                                x:Name=\"PART_Button_FH2Mod_Exit\" />"));
+                std::string why;
+                const bool ok = well_formed(pause, why);
+                std::printf("%s A_PauseMenu.xaml is well-formed%s%s\n", ok ? "ok  " : "FAIL", ok ? "" : ": ", why.c_str());
+                if (!ok) ++fails;
+            }
             // the title screen: the entries' lines under PRESS (A) TO START, fading with it in all five states
             const auto splash = slurp(scenes / "A_Splash.xaml");
             std::size_t refs = 0;
@@ -1292,6 +1313,11 @@ int wmain(int argc, wchar_t** argv) {
             const bool ok = well_formed(hud, why);
             std::printf("%s A_Hud.xaml is well-formed%s%s\n", ok ? "ok  " : "FAIL", ok ? "" : ": ", why.c_str());
             if (!ok) ++fails;
+            // ExitTile=0 (the home phase's platform-popups.ini) leaves the Exit Game tile out; the others have it
+            const std::string pause = slurp(layer() / L"UI\\Scenes\\Anthem\\A_PauseMenu.xaml");
+            CHECK(has(pause, "x:Name=\"PART_Button_FH2Mod_Exit\"") == (phase != L"home"));
+            CHECK(has(pause, "FH2Mod_Style_Tile_Half") == (phase != L"home"));
+            CHECK(has(log, "Exit Game tile: off (ExitTile=0 under [player]") == (phase == L"home"));
         }
         CHECK(!fs::exists(L"fh2-mods\\notices\\~platform.txt"));
         if (phase == L"upgrade") {

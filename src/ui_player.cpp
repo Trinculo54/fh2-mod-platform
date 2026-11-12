@@ -53,6 +53,7 @@ const FH2ModApi* g_api = nullptr;
 FH2Mod g_self;                           // "Platform"
 std::atomic<bool> g_developer{false};
 std::atomic<bool> g_mod_popups{true};    // "Mod pop-ups": Same as Notifications (true), or Off
+std::atomic<bool> g_exit_tile{true};     // ExitTile: the pause menu's Exit Game tile (the file only: it has no row)
 std::atomic<bool> g_tips{true};
 std::mutex g_mu;
 std::map<std::wstring, bool> g_mod_on;   // [mods]: each mod's "Pop-ups" row by its DLL's file name, lower case
@@ -401,6 +402,7 @@ void on_select_test(void*, const char*, const char* row) {
 
 FH2Mod* platform_self() { return &g_self; }
 bool ui_developer() { return g_developer.load(); }
+bool player_exit_tile() { return g_exit_tile.load(); }
 
 void ui_player_start(const FH2ModApi* api) {
     g_api       = api;
@@ -410,6 +412,7 @@ void ui_player_start(const FH2ModApi* api) {
     g_developer  = GetPrivateProfileIntW(L"popups", L"Developer", 0, ini.c_str()) == 1;
     g_mod_popups = GetPrivateProfileIntW(L"player", L"ModPopups", 1, ini.c_str()) != 0;
     g_tips       = GetPrivateProfileIntW(L"player", L"Tips", 1, ini.c_str()) != 0;
+    g_exit_tile  = GetPrivateProfileIntW(L"player", L"ExitTile", 1, ini.c_str()) != 0;
     read_mods(ini);
     popups_set_platform_toasts(g_mod_popups);
     popups_set_tips(g_tips);
