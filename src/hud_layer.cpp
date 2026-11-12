@@ -468,7 +468,7 @@ bool check_marker() {
                  "using it (crash report %s); the crash may have had another cause, but the layer is left out this session to be safe",
                  narrow(newest).c_str());
         else
-            hlog("crash marker: the HUD page started loading with the layer in two sessions running and was never on screen for 10 s; "
+            hlog("crash marker: the HUD page started loading with the layer in two sessions running and was never on screen for 2 s; "
                  "the layer is left out this session");
         DeleteFileW(marker_path().c_str());
         return true;
@@ -479,13 +479,14 @@ bool check_marker() {
 }
 
 // CreateFileW and WriteFile only: the "loading" write happens on the game's UI thread as the page is built.
-bool write_marker(bool loading) {
+// on_screen: the page has loaded and frames are running, so this session no longer counts towards the two running.
+bool write_marker(bool loading, bool on_screen = false) {
     SYSTEMTIME t;
     GetSystemTime(&t);
     char b[320];
     const int n = std::snprintf(b, sizeof b, "written %04u-%02u-%02u %02u:%02u:%02u UTC\r\nsession %s\r\nstate %s\r\nloading_sessions %d\r\n",
                                 t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, session_id(), loading ? "loading" : "written",
-                                loading ? g_marker_n + 1 : g_marker_n);
+                                on_screen ? 0 : loading ? g_marker_n + 1 : g_marker_n);
     HANDLE f = CreateFileW(marker_path().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) {
         hlog("crash marker: couldn't be written (the layer stays in, with no protection against a crash loop)");
@@ -499,7 +500,8 @@ bool write_marker(bool loading) {
         return false;
     }
     g_marker_state = loading ? 2 : 1;
-    hlog("crash marker: %s", loading ? "loading" : "written");
+    hlog("crash marker: %s", on_screen ? "the HUD page has been on screen for 2 s: closing the game from here doesn't count against the layer"
+                             : loading ? "loading" : "written");
     return true;
 }
 
@@ -1124,6 +1126,13 @@ void pump(double t0) {
     if (out.sound >= 0) play(out.sound, out.sound_layer);
     // the crash marker, 10 s after the page was first on screen
     const double first = g_first_on_screen.load();
+    // After 2 s of frames with the page up, a session that ends with no crash report was closed by the player (a restart
+    // from the Mods page, a quick look and out), not hung on the page: two of those running left the layer out for a start.
+    static bool up = false;   // the pump's thread only
+    if (!up && first > 0 && t0 - first >= 2000 && g_marker_state.load() == 2) {
+        up = true;
+        write_marker(true, true);
+    }
     if (first > 0 && t0 - first >= 10000 && g_marker_state.load() != 0 && !g_marker_cleared.exchange(true)) {
         DeleteFileW(marker_path().c_str());
         g_marker_state = 3;
