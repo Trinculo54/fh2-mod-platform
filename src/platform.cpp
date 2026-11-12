@@ -1341,6 +1341,13 @@ DWORD WINAPI load_mods(LPVOID) {
         SetEvent(g_mods_ready);
         return 0;
     }
+    // With other games in the launcher, a mod's DLL isn't even loaded until the pick is FH2 (the title gate).
+    if (!wait_for_launcher_pick(g_mods_ready)) {
+        plog(std::string("title gate: Azimuth started ") + launched_game_name() +
+             ", not Forza Horizon 2: no mods are loaded, and the platform leaves the game alone");
+        SetEvent(g_mods_ready);
+        return 0;
+    }
     start_media_overrides();
     l10n_start();
     // What the player has already been shown (tips, the settings' first-run cues), read before any mod starts.

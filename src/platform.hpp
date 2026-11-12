@@ -87,6 +87,10 @@ std::string other_game_at(const void* p);
 // Watches for Azimuth mapping the game, says in platform.log which one it is, and then calls
 // `fh2` or `other` on its own thread.
 void watch_launched_game(std::function<void()> fh2, std::function<void()> other);
+// The title gate: in an Azimuth folder set up for another game besides FH2, waits for the launcher's pick before
+// any mod is loaded, and holds Azimuth at FH2's start until `mods_ready` (an event) is set. False when the pick is
+// another game: load nothing. True straight away where the gate doesn't apply (titles.cpp says when).
+bool wait_for_launcher_pick(void* mods_ready);
 
 std::filesystem::path azimuth_dir();
 std::filesystem::path game_mount(); // empty if not found

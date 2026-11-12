@@ -128,6 +128,13 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         target_link_libraries(aaa_mod PRIVATE fh2mod_api)
         set_target_properties(aaa_mod PROPERTIES OUTPUT_NAME AaaMod PREFIX "")
         target_link_options(aaa_mod PRIVATE -static)
+        # The title gate test: tests/run_title_gate_test.sh
+        add_executable(title_gate_test tests/title_gate_test.cpp)
+        target_link_options(title_gate_test PRIVATE -static -Wl,--image-base=0x10000000)
+        add_library(title_gate_mod SHARED tests/title_gate_mod.cpp)
+        target_link_libraries(title_gate_mod PRIVATE fh2mod_api)
+        set_target_properties(title_gate_mod PROPERTIES OUTPUT_NAME GateMod PREFIX "")
+        target_link_options(title_gate_mod PRIVATE -static)
         # The hook test: tests/run_hook_test.sh <forza_durango_release_final.exe>
         add_executable(hook_test tests/hook_test.cpp)
         target_compile_definitions(hook_test PRIVATE UNICODE _UNICODE)
