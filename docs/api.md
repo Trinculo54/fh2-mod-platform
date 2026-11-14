@@ -369,7 +369,7 @@ typedef struct FH2Setting {
     const char* url;               /* with kind = FH2_SETTING_LINK */
     /* API 9: choices */
     const char* const* choices;    /* with kind = FH2_SETTING_CHOICE: the names, UTF-8 */
-    uint32_t choice_count;         /* 2 to FH2_SETTING_MAX_CHOICES (32) */
+    uint32_t choice_count;         /* 2 to FH2_SETTING_MAX_CHOICES (100; 32 up to platform 2.9.0) */
 } FH2Setting;
 ```
 
@@ -423,7 +423,7 @@ if (api->api_version >= 5) {
 }
 ```
 
-**Choices (API 9, platform 2.8.0).** Set `kind = FH2_SETTING_CHOICE` and give `choices` and `choice_count`, and the row shows one of them by name, between the same left and right arrows as the game's own option rows ("Speedometer: Analogue / Digital"). Left and right step through them, stopping at the ends. `value` is the index of the one chosen, from 0, and `on_change`, `get_setting` and `set_setting` use that index (`set_setting` keeps it in range). The names are copied when you add the row; there can be 2 to 32 of them, and a dozen or so characters of each fit. `needs_restart` works as for a switch. Use it wherever a number would otherwise stand for something with a name, like a button or a mode. An older platform would show it as an On/Off row, so only add one when `api_version >= 9`:
+**Choices (API 9, platform 2.8.0).** Set `kind = FH2_SETTING_CHOICE` and give `choices` and `choice_count`, and the row shows one of them by name, between the same left and right arrows as the game's own option rows ("Speedometer: Analogue / Digital"). Left and right step through them, stopping at the ends. `value` is the index of the one chosen, from 0, and `on_change`, `get_setting` and `set_setting` use that index (`set_setting` keeps it in range). The names are copied when you add the row; there can be 2 to 100 of them, and a dozen or so characters of each fit. Up to platform 2.9.0 a row took 32 at most and `add_setting` returned 0 for more, so for a longer list either check `api->platform_version` or, when `add_setting` returns 0, add the choices as two rows. `needs_restart` works as for a switch. Use it wherever a number would otherwise stand for something with a name, like a button or a mode. An older platform would show it as an On/Off row, so only add one when `api_version >= 9`:
 
 ```cpp
 static const char* const kButtons[] = {"LB", "RB", "A", "B", "X", "Y"};

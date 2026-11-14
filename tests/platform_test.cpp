@@ -482,7 +482,7 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("---- platform.log\n%s----\n", log.c_str());
 
     if (phase == L"full") {
-        CHECK(has(log, "FH2 Mod Platform 2.9.0 (API 10)"));
+        CHECK(has(log, "FH2 Mod Platform 2.9.1 (API 10)"));
         CHECK(has(log, "media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride"));
         // decided once, at start, and said so; the files, text and database below are where it said
         CHECK(has(log, own_layer() ? "media overrides: this Azimuth folder has data\\titles\\1A96545B (where Azimuth keeps the game's T:\\ "
@@ -647,8 +647,8 @@ int wmain(int argc, wchar_t** argv) {
               has(log, "[TestMod] set_page_tile_colors: Other isn't on a tile"));
         // choice rows and online play (API 9)
         CHECK(has(log, "[TestMod] choice row ok"));
-        CHECK(has(log, "[TestMod] add_setting: One is a choice row but needs 2 to 32 choices"));
-        CHECK(has(log, "[TestMod] add_setting: Lots is a choice row but needs 2 to 32 choices"));
+        CHECK(has(log, "[TestMod] add_setting: One is a choice row but needs 2 to 100 choices"));
+        CHECK(has(log, "[TestMod] add_setting: Lots is a choice row but needs 2 to 100 choices"));
         CHECK(has(log, "[TestMod] playing offline") && !has(log, "started from the FH2MP launcher"));
         // text in the game's language (API 10)
         CHECK(has(log, "[TestMod] no game language yet") && has(log, "[TestMod] setting text ok"));
@@ -821,7 +821,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(id.size() >= 17 && id[8] == '-' && id[15] == '-' && id.substr(16) == std::to_string(GetCurrentProcessId()));
             CHECK(has(log, ("session " + id + ": started ").c_str()));
             const std::string copy = slurp(fs::path(L"fh2-mods\\platform-logs") / ("platform-" + id + ".log"));
-            CHECK(has(copy, "FH2 Mod Platform 2.9.0 (API 10)") && has(copy, "[TestMod] session id "));
+            CHECK(has(copy, "FH2 Mod Platform 2.9.1 (API 10)") && has(copy, "[TestMod] session id "));
             CHECK(slurp(fs::path(L"TestModData\\logs") / (id + ".log")) == "test mod's own log\n");
             CHECK(has(log, ("[TestMod] session log: TestModData\\logs\\" + id + ".log (the newest 3 kept)").c_str()));
             CHECK(has(log, "[TestMod] bad log folder refused") &&
@@ -841,7 +841,7 @@ int wmain(int argc, wchar_t** argv) {
                       !has(log, "[TestMod] save snapshot asked for"));
             }
             CHECK(has(status, ("\"session\": \"" + id + "\"").c_str()) && has(status, "\"state\": \"running\"") &&
-                  has(status, "\"platform\": \"2.9.0\"") && has(status, "\"TestMod\": \"1.0.0\""));
+                  has(status, "\"platform\": \"2.9.1\"") && has(status, "\"TestMod\": \"1.0.0\""));
         }
         // The game's menus were given: the pages are written. (Not with the game mapped: this
         // test's copy of it doesn't pass the menus' code checks, so the platform takes them out; see map_game.)
@@ -941,7 +941,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(installed, "set later."));
             // the platform's own lines as whole sentences, one for each state (platform 2.9.0)
             CHECK(has(installed, "Heading=\"Version 0.5.0 (doesn't check for updates)\""));
-            CHECK(has(installed, "It isn't working: It needs FH2 Mod Platform 9.9.9 or newer; this is 2.9.0. Reinstall it to get the "
+            CHECK(has(installed, "It isn't working: It needs FH2 Mod Platform 9.9.9 or newer; this is 2.9.1. Reinstall it to get the "
                                  "platform it came with. fh2-mods\\platform.log has more."));
             // "One home" (platform 2.9.0): YOUR MODS, "MODS / YOUR MODS", a row per mod ending in ">" with what A shows
             CHECK(has(installed, "Tag=\"MODS\" Content=\"YOUR MODS\""));
@@ -989,7 +989,7 @@ int wmain(int argc, wchar_t** argv) {
             // view, with one row while nothing has shown); no UI templates page without Developer=1. AaaMod's page has the
             // platform's Pop-ups row; TestMod has a row of its own (FH2_UI_USES_OWN_SWITCH), so it has none.
             {
-                CHECK(has(installed, "local:BindingProxy.A=\"FH2 Mod Platform\" local:BindingProxy.C=\"2.9.0  &gt;\""));
+                CHECK(has(installed, "local:BindingProxy.A=\"FH2 Mod Platform\" local:BindingProxy.C=\"2.9.1  &gt;\""));
                 CHECK(has(installed, "Heading=\"FH2 Mod Platform\" Description=\"Pop-ups and tips from every mod, and the last ones shown. Press A to open it.\""));
                 CHECK(has(installed, "Tag=\"MODS\" Content=\"FH2 MOD PLATFORM\"") && has(installed, "Content=\"RECENT POP-UPS\""));
                 const std::size_t heading = installed.find("Heading=\"Pop-ups and tips\""), choice = installed.find("Heading=\"Mod pop-ups\"");

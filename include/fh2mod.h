@@ -803,7 +803,7 @@ typedef void (*FH2SliderChangedFn)(void* user, const char* key, float value);
 #define FH2_SETTING_SLIDER 1
 #define FH2_SETTING_LINK   2   /* API 6 */
 #define FH2_SETTING_CHOICE 3   /* API 9 */
-#define FH2_SETTING_MAX_CHOICES 32
+#define FH2_SETTING_MAX_CHOICES 100   /* 32 up to platform 2.9.0 */
 
 /* One row on your mod's page (API 4; sliders API 5). */
 struct FH2Setting {
@@ -841,7 +841,10 @@ struct FH2Setting {
        them. `value` is the index of the one chosen (0 = the first), and
        on_change, get_setting and set_setting use that index. The names are
        copied. The slider fields are ignored. On an older platform it would
-       come out as an On/Off row, so only add one when api_version >= 9. ---- */
+       come out as an On/Off row, so only add one when api_version >= 9.
+       A row takes up to 100 choices from platform 2.9.1, and 32 before: an
+       older platform refuses a longer list (add_setting returns 0), so
+       when it does, add the choices as two rows instead. ---- */
     const char* const* choices;    /* UTF-8, shown as given: "LB", "RB", "A" ... */
     uint32_t choice_count;         /* 2 to FH2_SETTING_MAX_CHOICES */
 };
