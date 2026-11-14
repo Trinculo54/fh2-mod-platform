@@ -1,0 +1,58 @@
+# TestMod's Polish, for the platform test (tests/run_platform_test.sh). Built into TestMod.dll by
+# tools/l10n/po2inc.py as tests/l10n/test_mod_l10n.inc.
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: pl\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+#. its title-screen notice: two lines
+#, max-length:40
+msgctxt "notice"
+msgid ""
+"Test notice line\n"
+"\n"
+"second line  "
+msgstr ""
+"Testowa linia ogłoszenia\n"
+"\n"
+"druga linia  "
+
+#. a row on the Mods page
+#, max-length:30
+msgctxt "row.Greeting.label"
+msgid "Test greeting"
+msgstr "Testowe powitanie – cześć"
+
+#, max-length:450
+msgctxt "row.Greeting.description"
+msgid "A row whose text is in the game's language."
+msgstr "Wiersz, którego tekst jest w języku gry."
+
+# the singular says "one" instead of {n}: Polish uses that form for 1 alone
+msgctxt "count.cars"
+msgid "{n} car"
+msgid_plural "{n} cars"
+msgstr[0] "Jeden samochód"
+msgstr[1] "{n} samochody"
+msgstr[2] "{n} samochodów"
+
+msgctxt "loading.tip"
+msgid "A loading tip from TestMod"
+msgstr "Wskazówka z TestMod"
+
+# translated before the English changed: TestMod passes "New English"
+msgctxt "row.Stale.label"
+msgid "Old English"
+msgstr "Stary polski"
+
+# not checked yet: never shown
+#, fuzzy
+msgctxt "row.Fuzzy.label"
+msgid "Not sure yet"
+msgstr "Jeszcze nie wiem"
+
+# its placeholder isn't the English's: po2inc.py leaves it out with a warning
+msgctxt "row.Bad.label"
+msgid "{count} unlocked"
+msgstr "Odblokowano {liczba}"

@@ -19,9 +19,18 @@
 #include <windows.h>
 #include <psapi.h>
 
+#include "db_guards.hpp"
+#include "hud_layer.hpp"
+#include "l10n.hpp"
+#include "lang.hpp"
 #include "platform.hpp"
 #include "platform_version.h"
+#include "popups.hpp"
+#include "seen.hpp"
 #include "strings.hpp"
+#include "text.hpp"
+#include "ui_player.hpp"
+#include "ui_templates.hpp"
 #include "updates.hpp"
 
 #ifdef _MSC_VER
@@ -60,6 +69,7 @@ std::wstring g_azimuth_str, g_game_str;
 std::recursive_mutex g_mu;
 std::vector<std::unique_ptr<FH2Mod>> g_mods;
 std::map<std::string, std::string> g_table_names; // lower -> as first given
+std::map<std::string, unsigned> g_table_roots;    // lower -> the roots the platform wrote it to (platform-tables.txt)
 std::set<std::string> g_dirty;                    // lower-case table names
 std::wstring g_current_dll;                       // the DLL whose fh2mod_init is running
 struct Found {                                    // every DLL in fh2-mods, in load order
@@ -70,7 +80,17 @@ struct Found {                                    // every DLL in fh2-mods, in l
 };
 std::vector<Found> g_found;
 std::vector<std::unique_ptr<FH2Mod>> g_held;      // mods that registered but don't run online (offline_only)
-bool g_online = false;                            // started from the FH2MP launcher (set before any mod loads)
+// FH2MP is on and has a session to play online with: set before any mod loads, and from false to
+// true at most once after that (go_online), never back.
+std::atomic<bool> g_online{false};
+// FH2MP this launch: FH2MP.dll when it's there and turned on, else the first DLL to register as
+// FH2MP, or "" (under g_mu)
+std::wstring g_fh2mp_dll;
+// What go_online stopped that had already run (FH2Mod::ran), and the mods from before the platform it found
+// running that shouldn't run online: what FH2Platform.Online's going_online tells FH2MP (under g_mu)
+std::vector<std::string> g_started_offline;
+// the loader has begun its first write of the tables and the database (set under g_mu; first_write_begun)
+std::atomic<bool> g_first_write{false};
 
 std::mutex g_log_mu;
 FILE* g_log = nullptr;
@@ -250,18 +270,57 @@ bool this_copy_runs() {
 
 fs::path manifest_path() { return g_azimuth / "fh2-mods" / "platform-tables.txt"; }
 
+// The tables written last time, and where (g_table_roots): "Table.str<TAB>roots" lines (platform.hpp). 2.8.0 wrote
+// the name alone, and takes the rest of a line for part of the name, as a table it never finds.
 std::set<std::string> read_manifest() {
     std::set<std::string> t;
+    g_table_roots.clear();
     std::ifstream in{manifest_path()};
     std::string line;
     while (std::getline(in, line)) {
         while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
-        if (!line.empty()) {
-            t.insert(lower(line));
-            g_table_names.emplace(lower(line), line);
+        const auto tab = line.find('\t');
+        const std::string name = line.substr(0, tab);
+        if (!name.empty()) {
+            t.insert(lower(name));
+            g_table_names.emplace(lower(name), name);
+            // every root its lines name: 2.8.0 can leave a table's 2.9.0 line and its own one both in the file
+            g_table_roots[lower(name)] |= tab == std::string::npos ? kRootBoth : parse_roots(line.substr(tab + 1));
         }
     }
     return t;
+}
+
+void write_manifest(const std::set<std::string>& written) {
+    std::ofstream out{manifest_path(), std::ios::trunc};
+    for (const auto& t : written)
+        out << (g_table_names.count(t) ? g_table_names[t] : t) << "\t"
+            << root_names(g_table_roots.count(t) ? g_table_roots[t] : current_root()) << "\n";
+}
+
+std::vector<std::string> split_lines(const char* s);   // below
+
+// The platform's own lines on the title screen (settings.cpp: where mod settings are), after the mods' notices. In
+// English; each language's Main.str gets them in its own words (apply_all). They're kept in
+// fh2-mods\platform-title.txt, not in fh2-mods\notices: older platforms read that folder too, so a mod zip that
+// brings an older platform back would have them shown in English at every start. The file holds the last launch's
+// lines, so this launch's first write of Main.str has them already, and an unchanged line needs no second write.
+std::vector<std::string> g_platform_lines;   // under g_mu
+bool g_platform_lines_read = false;
+fs::path platform_title_path() { return g_azimuth / "fh2-mods" / "platform-title.txt"; }
+const std::vector<std::string>& platform_lines() {   // under g_mu
+    if (!g_platform_lines_read) {
+        g_platform_lines_read = true;
+        std::ifstream in{platform_title_path()};
+        for (std::string l; std::getline(in, l);) {
+            while (!l.empty() && (l.back() == '\r' || l.back() == '\n')) l.pop_back();
+            if (!l.empty() && l[0] != '#') g_platform_lines.push_back(l);
+        }
+        // 2.9.0's test builds kept them in the notices folder, where older platforms would show them
+        std::error_code ec;
+        fs::remove(g_azimuth / "fh2-mods" / "notices" / "~platform.txt", ec);
+    }
+    return g_platform_lines;
 }
 
 // Rebuilds every dirty table from all mods' edits (later registrations win
@@ -273,13 +332,30 @@ void apply_all() {
     for (const auto& table : g_dirty) {
         std::map<uint16_t, std::wstring> keys;
         std::map<std::wstring, std::wstring> texts;
+        // set_string_tr's (API 10): each language's table gets that language's text
+        struct TrText {
+            FH2Mod* mod;
+            std::string key;
+            std::wstring english;
+        };
+        std::map<uint16_t, TrText> tr_keys;
         for (const auto& m : g_mods) {
+            if (stopped_online(m.get())) continue;   // stopped for online play: its edits were taken out (go_online)
             if (auto it = m->set.find(table); it != m->set.end())
                 for (const auto& [k, v] : it->second) {
-                    if (keys.count(k) && keys[k] != v)
+                    if ((keys.count(k) && keys[k] != v) || tr_keys.count(k))
                         plog("note: " + m->name + " overrides another mod's string " + std::to_string(k) + " in " +
                              g_table_names[table]);
                     keys[k] = v;
+                    tr_keys.erase(k);
+                }
+            if (auto it = m->set_tr.find(table); it != m->set_tr.end())
+                for (const auto& [k, v] : it->second) {
+                    if (keys.count(k) || tr_keys.count(k))
+                        plog("note: " + m->name + " overrides another mod's string " + std::to_string(k) + " in " +
+                             g_table_names[table]);
+                    tr_keys[k] = {m.get(), v.first, v.second};
+                    keys.erase(k);
                 }
             if (auto it = m->repl.find(table); it != m->repl.end())
                 for (const auto& [f, t] : it->second) texts[f] = t;
@@ -292,20 +368,53 @@ void apply_all() {
             // this mutex, from the same notice files.
             mu = CreateMutexW(nullptr, FALSE, L"Local\\FH2ModNotices");
             if (mu) WaitForSingleObject(mu, 10000);
-            notices = any_notices(g_azimuth);
+            notices = any_notices(g_azimuth) || !platform_lines().empty();
         }
-        const bool remove = keys.empty() && texts.empty() && !notices;
+        // Car names a pack or mod gave as text, as new keys (database.cpp).
+        const auto add    = table == "data_car.str" ? database_strings() : std::map<uint16_t, std::wstring>{};
+        const bool remove = keys.empty() && tr_keys.empty() && texts.empty() && !notices && add.empty();
         const auto name   = g_table_names.count(table) ? g_table_names[table] : table;
-        const int n       = override_string_table(
-            g_game, name,
-            [&](uint16_t key, const std::wstring& t) {
-                std::wstring s = t;
-                if (auto k = keys.find(key); k != keys.end()) s = k->second;
-                if (auto x = texts.find(s); x != texts.end()) s = x->second;
-                if (is_main && key == kToStartKey) s = title_with_notices(g_azimuth, s);
-                return s;
-            },
-            remove);
+        // Where the platform wrote it before: removed from each; written to this session's root, and still listed in
+        // a root a copy couldn't be moved from at start (move_old_tables), so a later removal reaches it too.
+        const unsigned was = g_table_roots.count(table) ? g_table_roots[table] : 0u;
+        int removed_elsewhere = 0;
+        if (remove)
+            for (const unsigned r : {kRootOverride, kRootLayer})
+                if ((was & r) && r != current_root())
+                    removed_elsewhere += override_string_table(g_game, name, {}, true, root_folder(r));
+        const auto edit = [&](std::string_view lang, uint16_t key, const std::wstring& t) {
+            std::wstring s = t;
+            if (auto k = keys.find(key); k != keys.end()) s = k->second;
+            if (auto k = tr_keys.find(key); k != tr_keys.end())
+                s = l10n_table_text(k->second.mod, k->second.key, k->second.english, lang);
+            if (auto x = texts.find(s); x != texts.end()) s = x->second;
+            if (is_main && key == kToStartKey) {
+                std::vector<std::string> own;   // the platform's own lines, in this table's language
+                for (const std::string& l : platform_lines()) own.push_back(shown_in(l, lang));   // later() messages too
+                // a notice a mod got from tr() (API 10) in this table's language, then the platform's own lines
+                s = title_with_notices(
+                    g_azimuth, s,
+                    [&](const std::wstring& who, const std::vector<std::string>& lines) {
+                        for (const auto& m : g_mods) {
+                            std::string text;
+                            if (_wcsicmp(m->wname.c_str(), who.c_str()) || !l10n_text_in(m.get(), "notice", lang, text)) continue;
+                            // as refresh_notice writes the file: the notice, the update line, then the status lines
+                            return mod_title_lines(split_lines(text.c_str()), m->update_notice, m->status);
+                        }
+                        return lines;
+                    },
+                    own);
+            }
+            return s;
+        };
+        const int n = removed_elsewhere + override_string_table(g_game, name, edit, remove, override_root(), add);
+        // With Extra Options and car packs, eo-media has a database of its own, read ahead of mediaoverride's: its car
+        // names go in a Data_Car.str beside it, with the same edits. (eo-media's tables are removed at every start.)
+        if (table == "data_car.str" && eo_packs())
+            if (const auto eo_add = eo_database_strings(); !eo_add.empty())
+                plog("wrote " + name + " in " + temp_drive_spelling(eo_media()) + " for " +
+                     std::to_string(override_string_table(g_game, name, edit, false, eo_media(), eo_add)) + " languages (" +
+                     std::to_string(eo_add.size()) + " car names added, for the database there)");
         if (mu) {
             ReleaseMutex(mu);
             CloseHandle(mu);
@@ -313,22 +422,64 @@ void apply_all() {
         if (remove) {
             if (n) plog("removed " + name + " overrides (" + std::to_string(n) + " languages)");
             written.erase(table);
+            g_table_roots.erase(table);
         } else {
-            plog("wrote " + name + " for " + std::to_string(n) + " languages (" + std::to_string(keys.size()) +
-                 " key edits, " + std::to_string(texts.size()) + " text replacements" +
+            g_table_roots[table] = was | current_root();
+            plog("wrote " + name + " for " + std::to_string(n) + " languages (" + std::to_string(keys.size() + tr_keys.size()) +
+                 " key edits, " + (tr_keys.empty() ? "" : std::to_string(tr_keys.size()) + " of them in each language's own words, ") + std::to_string(texts.size()) + " text replacements" +
+                 (add.empty() ? "" : ", " + std::to_string(add.size()) + " car names added") +
                  (is_main && notices ? ", title notices" : "") + ")");
             written.insert(table);
         }
     }
     g_dirty.clear();
-    std::ofstream out{manifest_path(), std::ios::trunc};
-    for (const auto& t : written) out << (g_table_names.count(t) ? g_table_names[t] : t) << "\n";
+    write_manifest(written);
 }
 
+} // namespace
+
+void move_old_tables() {
+    std::scoped_lock lk{g_mu};
+    if (g_game.empty()) return;
+    const std::set<std::string> tables = read_manifest();
+    const unsigned at = current_root();
+    bool changed      = false;
+    std::size_t moved = 0;
+    for (const auto& t : tables) {
+        const std::string name = g_table_names.count(t) ? g_table_names[t] : t;
+        unsigned roots         = at;   // and those a copy couldn't be moved from, to try again next time
+        for (const unsigned r : {kRootOverride, kRootLayer}) {
+            if (!(g_table_roots[t] & r) || r == at) continue;
+            // each language's copy: <root>\Stripped\StringTables\<language>\<table>
+            std::error_code ec;
+            for (const auto& lang : fs::directory_iterator(root_folder(r) / "Stripped" / "StringTables", ec)) {
+                if (!lang.is_directory(ec)) continue;
+                const fs::path rel = fs::path{L"Stripped"} / L"StringTables" / lang.path().filename() / fs::path{name};
+                std::string error;
+                const int done = move_old_override(r, rel, error);
+                if (done > 0) ++moved;
+                if (done < 0) {
+                    roots |= r;
+                    plog("string tables: couldn't move " + root_names(r) + "\\" + narrow(rel.wstring()) +
+                         " to fh2-mods\\platform-old-overrides (" + error + "); trying again next launch");
+                }
+            }
+        }
+        changed          = changed || roots != g_table_roots[t];
+        g_table_roots[t] = roots;
+    }
+    if (changed) write_manifest(tables);
+    if (moved)
+        plog("string tables: " + std::to_string(moved) + " table file(s) the platform wrote to " + root_shown(kRootBoth & ~at) +
+                 " before (an older platform, or a session that wrote there) were moved to fh2-mods\\platform-old-overrides\\" +
+                 root_names(kRootBoth & ~at) + ", as this session's go to " + root_shown(at) +
+                 "; moved.txt there lists them");
+}
+
+namespace {
+
 void refresh_notice(FH2Mod* m) {
-    std::vector<std::string> lines = m->notice;
-    lines.insert(lines.end(), m->status.begin(), m->status.end());
-    write_notice_file(g_azimuth, m->wname, m->dll, lines);
+    write_notice_file(g_azimuth, m->wname, m->dll, mod_title_lines(m->notice, m->update_notice, m->status));
     g_dirty.insert("main.str");
     g_table_names.emplace("main.str", "Main.str");
 }
@@ -431,15 +582,12 @@ void check_updates(FH2Mod* m) {
                                           "); couldn't reach GitHub this time"
                                     : "newer than the latest release on GitHub (" + latest + ")")
                           : "up to date (latest release " + latest + when + ")");
-    const std::string line = m->name + " " + (latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest) +
-                             " is available";
-    auto& st     = m->status;
-    const auto it = std::find_if(st.begin(), st.end(), [](const std::string& s) {
-        return s.size() > 13 && s.compare(s.size() - 13, 13, " is available") == 0;
-    });
-    const bool had = it != st.end();
-    if (had) st.erase(it);
-    if (newer) st.insert(st.begin(), line);
+    // The platform's own notice has a place of its own (update_notice), so it's found whatever language it's in.
+    // It's in English for now, as the old-platform notice is: it goes into Main.str for every language, and
+    // translated it would be in English or the player's language depending on when the check finishes.
+    const bool had   = !m->update_notice.empty();
+    m->update_notice = newer ? fill("{0} {1} is out: Pause > MODS > UPDATES", {m->name, latest[0] == 'v' || latest[0] == 'V' ? latest.substr(1) : latest})
+                             : std::string();
     if (newer || had) {
         refresh_notice(m);
         apply_all();
@@ -449,6 +597,21 @@ void check_updates(FH2Mod* m) {
 // In the MODS tab's section below.
 std::map<std::wstring, bool> online_choices();   // the player's "Load when playing online", per DLL (lower case)
 bool remembered_offline_only(const std::wstring& dll);
+// In the online play section below.
+bool fh2mp_session(std::string* why);
+void go_online(const std::string& why);
+bool is_the_fh2mp(const std::wstring& dll);
+std::map<std::wstring, bool> online_choices();
+
+// Under g_mu: whether this DLL stays off in online play: the player's "Load when playing online" choice for it, else
+// its own mod's offline_only (the first mod it registered; the mods it loads besides don't speak for it).
+bool dll_off_online(const std::wstring& dll, const std::map<std::wstring, bool>& choices) {
+    if (const auto c = choices.find(lower_w(dll)); c != choices.end()) return !c->second;
+    for (const auto* list : {&g_mods, &g_held})
+        for (const auto& o : *list)
+            if (!o->member && lower_w(o->dll) == lower_w(dll)) return o->offline_only;
+    return false;
+}
 
 FH2Mod* api_register(const FH2ModInfo* info) {
     if (!info || info->size < offsetof(FH2ModInfo, check_updates) + sizeof(int) || !info->name) return nullptr;
@@ -464,28 +627,58 @@ FH2Mod* api_register(const FH2ModInfo* info) {
         m->offline_only = info->offline_only != 0;   // API 9
     m->wname           = widen(m->name);
     FH2Mod* raw        = m.get();
-    if (m->offline_only && g_online) {
-        std::scoped_lock lk{g_mu};
-        const auto choices = online_choices();
-        const auto chosen  = choices.find(lower_w(g_current_dll));
-        if (chosen == choices.end() || !chosen->second) {
-            // Its author says it shouldn't run online, and the player hasn't said otherwise. It
-            // isn't registered, so its fh2mod_init returns; it's remembered (platform-mods.txt),
-            // so the next online launch doesn't load it at all.
-            m->dll = g_current_dll;
-            for (auto& f : g_found)
-                if (lower_w(f.file) == lower_w(g_current_dll)) f.online_off = true;
-            log_line(m->name, m->version + " doesn't run in online play (its author says so), so it isn't started; "
-                                           "MODS > Installed mods has its \"Load when playing online\" switch");
-            g_held.push_back(std::move(m));
-            return nullptr;
+    // the description in the game's language, from the mod's catalogue (API 10), once it has one
+    if (!m->description.empty()) l10n_note_key(raw, "mod.description", "mod.description", m->description);
+    if (lstrcmpiA(info->name, "FH2MP") == 0) {
+        // FH2MP itself, under whatever file name. If the loader didn't know it was there (a DLL
+        // renamed from FH2MP.dll), its session decides now, before it reads it and before the mods
+        // after it start.
+        std::string why;
+        bool late = false;
+        {
+            std::scoped_lock lk{g_mu};
+            if (g_fh2mp_dll.empty()) g_fh2mp_dll = g_current_dll;
+            late = !g_online && fh2mp_session(&why);
         }
+        if (late) go_online("FH2MP started from " + narrow(g_fh2mp_dll) + ", and " + why);
     }
     {
+        // One hold of the lock from the online check to the list: go_online (FH2MP going online
+        // from its own thread) then either sees this mod in g_mods or has set g_online before it.
         std::scoped_lock lk{g_mu};
+        // A DLL that loads other mods registers each one: the first stands for the DLL, the rest are its members.
+        if (!g_current_dll.empty())
+            for (const auto* list : {&g_mods, &g_held})
+                for (const auto& o : *list) m->member = m->member || lower_w(o->dll) == lower_w(g_current_dll);
+        if (g_online && !is_the_fh2mp(g_current_dll)) {
+            // The same rule as at load (loads_online): the player's "Load when playing online" switch,
+            // else its author's offline_only. That matters here when FH2MP went online after this DLL
+            // was loaded, or for a mod that registers outside its fh2mod_init.
+            // The switch is the DLL's, so it speaks for the DLL's own mod. A member stays off with its DLL, and its
+            // author's offline_only counts whatever the DLL's switch says.
+            const auto choices  = online_choices();
+            const auto chosen   = choices.find(lower_w(g_current_dll));
+            const bool player   = !m->member && chosen != choices.end();
+            const bool with_dll = m->member && dll_off_online(g_current_dll, choices);
+            if (player ? !chosen->second : with_dll || m->offline_only) {
+                // It isn't registered, so its fh2mod_init returns; an offline-only one is remembered
+                // (platform-mods.txt), so the next online launch doesn't load it at all.
+                m->dll = g_current_dll;
+                if (!m->member)
+                    for (auto& f : g_found)
+                        if (lower_w(f.file) == lower_w(g_current_dll)) f.online_off = true;
+                log_line(m->name, m->version +
+                                      (player     ? " is set to stay off when playing online, so it isn't started"
+                                       : with_dll ? " isn't started: " + narrow(g_current_dll) + ", which loads it, stays off when playing online"
+                                                  : " doesn't run in online play (its author says so), so it isn't started") +
+                                      (m->member ? "" : "; MODS > Installed mods has its \"Load when playing online\" switch"));
+                g_held.push_back(std::move(m));
+                return nullptr;
+            }
+        }
         m->dll = g_current_dll;
         if (!m->platform_version.empty() && compare_versions(m->platform_version, FH2MOD_PLATFORM_VERSION) > 0) {
-            m->status.push_back("Old FH2 Mod Platform: reinstall " + m->name);
+            m->status.push_back(fill("Old FH2 Mod Platform: reinstall {0}", {m->name}));   // in English (see check_updates)
             log_line(m->name, "built for FH2 Mod Platform " + m->platform_version + ", but this is " +
                                   FH2MOD_PLATFORM_VERSION + "; reinstall it to get the platform it came with");
         }
@@ -493,6 +686,9 @@ FH2Mod* api_register(const FH2ModInfo* info) {
         refresh_notice(raw); // also clears a stale notice from last launch
     }
     log_line(raw->name, raw->version + " registered");
+    if (raw->dll.empty())
+        log_line(raw->name, "registered after its DLL's fh2mod_init had returned, so the MODS tab can't tell which DLL it's from: "
+                            "it works, but YOUR MODS doesn't list it this time (register in fh2mod_init to be listed)");
     if (!raw->repo.empty() && raw->check_updates) std::thread([raw] { check_updates(raw); }).detach();
     return raw;
 }
@@ -508,13 +704,30 @@ void touch(const char* table) {
 void api_set_string(FH2Mod* m, const char* table, uint16_t key, const wchar_t* text) {
     if (!m || !table) return;
     std::scoped_lock lk{g_mu};
+    if (stopped_online(m)) return;   // stopped for online play (go_online)
+    if (g_first_write) note_ran(m, kRanEdits);   // from now on its text is the game's
     m->set[lower(table)][key] = text ? text : L"";
+    if (auto it = m->set_tr.find(lower(table)); it != m->set_tr.end()) it->second.erase(key);
+    touch(table);
+}
+
+// Each language's table with its own text (API 10): looked up in the mod's catalogues as the
+// tables are written, for every language, so the game picks the text itself.
+void api_set_string_tr(FH2Mod* m, const char* table, uint16_t key, const char* msg_key, const wchar_t* english) {
+    if (!m || !table) return;
+    std::scoped_lock lk{g_mu};
+    if (stopped_online(m)) return;   // stopped for online play (go_online)
+    if (g_first_write) note_ran(m, kRanEdits);
+    m->set_tr[lower(table)][key] = {msg_key ? msg_key : "", english ? english : L""};
+    if (auto it = m->set.find(lower(table)); it != m->set.end()) it->second.erase(key);
     touch(table);
 }
 
 void api_replace_string(FH2Mod* m, const char* table, const wchar_t* from, const wchar_t* to) {
     if (!m || !table || !from) return;
     std::scoped_lock lk{g_mu};
+    if (stopped_online(m)) return;   // stopped for online play (go_online)
+    if (g_first_write) note_ran(m, kRanEdits);
     m->repl[lower(table)][from] = to ? to : L"";
     touch(table);
 }
@@ -524,20 +737,49 @@ void api_clear_strings(FH2Mod* m, const char* table) {
     std::scoped_lock lk{g_mu};
     if (table) {
         m->set.erase(lower(table));
+        m->set_tr.erase(lower(table));
         m->repl.erase(lower(table));
         touch(table);
     } else {
         for (const auto& [t, _] : m->set) g_dirty.insert(t);
+        for (const auto& [t, _] : m->set_tr) g_dirty.insert(t);
         for (const auto& [t, _] : m->repl) g_dirty.insert(t);
         m->set.clear();
+        m->set_tr.clear();
         m->repl.clear();
     }
 }
 
 void api_apply_strings(FH2Mod*) { apply_all(); }
 
+} // namespace
+
+void set_platform_notice(const std::vector<std::string>& english_lines) {
+    {
+        std::scoped_lock lk{g_mu};
+        // The lines as the last launch left them: the first write of Main.str this launch already had them, so the
+        // same lines again need no second write
+        if (english_lines == platform_lines()) return;
+        g_platform_lines = english_lines;
+        std::error_code ec;
+        if (english_lines.empty()) {
+            fs::remove(platform_title_path(), ec);
+        } else {
+            std::ofstream out{platform_title_path(), std::ios::binary | std::ios::trunc};
+            out << "# The FH2 Mod Platform's own lines on the title screen, in English (each language shows them in its own words).\n";
+            for (const std::string& l : english_lines) out << l << "\n";
+        }
+        g_dirty.insert("main.str");
+        g_table_names.emplace("main.str", "Main.str");
+    }
+    apply_all();
+}
+
+namespace {
+
 void api_set_notice(FH2Mod* m, const char* lines) {
     if (!m) return;
+    l10n_note(m, "notice", lines);   // tr()'s text (API 10): each language's title screen gets its own
     std::scoped_lock lk{g_mu};
     m->notice = split_lines(lines);
     refresh_notice(m);
@@ -556,12 +798,14 @@ void* api_wait_for_game(uint32_t timeout_ms) {
 
 // ---- API 2: files, database, other mods ------------------------------------------
 
-int api_set_file(FH2Mod* m, const char* path, const void* data, size_t size) { return set_file(m, path, data, size); }
+int api_set_file(FH2Mod* m, const char* path, const void* data, size_t size) { return mod_set_file(m, path, data, size); }
 void api_clear_file(FH2Mod* m, const char* path) { clear_file(m, path); }
 
 void api_add_sql(FH2Mod* m, const char* sql) {
     if (!m || !sql || !*sql) return;
     std::scoped_lock lk{g_mu};
+    if (stopped_online(m)) return;   // stopped for online play (go_online)
+    if (g_first_write) note_ran(m, kRanEdits);
     m->sql.emplace_back(sql);
 }
 
@@ -572,11 +816,16 @@ void api_clear_sql(FH2Mod* m) {
 }
 
 void build_database() {
+    // One build at a time, from snapshot to file, so a build from an older snapshot (a mod stopped for
+    // online play since) can't finish after a newer one.
+    static std::mutex build_mu;
+    std::scoped_lock build{build_mu};
     // Work from a snapshot, so mods can keep adding while it's built.
     std::vector<FH2Mod> snap;
     {
         std::scoped_lock lk{g_mu};
         for (const auto& m : g_mods) {
+            if (stopped_online(m.get())) continue;   // stopped for online play (go_online)
             FH2Mod c;
             c.name = m->name;
             c.sql  = m->sql;
@@ -586,6 +835,14 @@ void build_database() {
     std::vector<FH2Mod*> ptrs;
     for (auto& c : snap) ptrs.push_back(&c);
     apply_database(ptrs);
+    // Its car names given as text go into Data_Car.str (and come out again once there are none).
+    {
+        std::scoped_lock lk{g_mu};
+        if (database_strings().empty() && eo_database_strings().empty() && !read_manifest().count("data_car.str")) return;
+        g_dirty.insert("data_car.str");
+        g_table_names.emplace("data_car.str", "Data_Car.str");
+    }
+    apply_all();
 }
 
 void api_apply_database(FH2Mod*) { build_database(); }
@@ -640,33 +897,360 @@ const char* api_mod_version(const char* name) {
     return nullptr;
 }
 
+// ---- the game's language (API 10): see lang.cpp -----------------------------------
+
+int api_game_language(char* code, size_t size) { return game_language(code, size); }
+
+void api_set_mod_description(FH2Mod* m, const char* description) {
+    if (!m) return;
+    l10n_note(m, "mod.description", description);   // tr()'s text follows the game's language; other text stays
+    std::scoped_lock lk{g_mu};
+    m->description = description ? description : "";
+}
+
 // ---- loading mods --------------------------------------------------------------
 
 int api_playing_online() { return g_online ? 1 : 0; }
 
 // ---- online play (FH2MP) ---------------------------------------------------------
 //
-// FH2MP's launcher hands the game a session in data\bin\fh2mp-session.txt before starting it,
-// and removes the file when the game ends (FH2MP's own DLL reads it and never deletes it, as
-// Azimuth can start the game twice in one launch). It holds the player's token, so the platform
-// only looks for it and never reads it. FH2MP_TOKEN in the environment does the same for FH2MP's
-// tests. Either only counts while FH2MP.dll is in fh2-mods and turned on: FH2MP then plays
-// online with it, even with a session file a crashed launcher left behind.
-bool detect_online(const std::set<std::wstring>& off) {
-    std::error_code ec;
-    if (!fs::is_regular_file(g_azimuth / "fh2-mods" / "FH2MP.dll", ec) || off.count(L"fh2mp.dll")) return false;
+// FH2MP's launcher hands the game a session in fh2mp-session.txt before starting it, and removes
+// the file when the game ends (FH2MP's own DLL reads it and never deletes it, as Azimuth can start
+// the game twice in one launch). It's where FH2MP looks: in data\bin when there's one, else next to
+// azimuth.exe. It holds the player's token, so the platform only looks at the file and never reads
+// it. FH2MP_TOKEN in the environment does the same for FH2MP's tests. Either only counts while FH2MP
+// is in fh2-mods and turned on: FH2MP then plays online with it.
+//
+// Mods load before FH2MP connects and can't be unloaded, so the platform decides by FH2MP's own
+// rules for its session (fh2mp_session), and on the safe side (issue #22): a file it can't check
+// counts as there. Offline needs FH2MP turned off or missing, or no session FH2MP would use. Then it
+// looks again:
+// - when a mod registers as FH2MP: a DLL renamed from FH2MP.dll, which the loader didn't know;
+// - when FH2MP's fh2mod_init has returned: FH2MP reads its session there, and the launcher may have
+//   written it after the loader looked (Play pressed while the game was starting);
+// - when FH2MP asks through FH2Platform.Online before it connects (going_online).
+// Online found as FH2MP starts (the first two), the mods that shouldn't run online and had already
+// started are stopped (go_online): FH2MP is online whatever the platform says. Asked through
+// going_online, the platform first looks for those that have already run (FH2Mod::ran): with any,
+// nothing changes and FH2MP is told, so it can stay offline; with none, it goes online as at load.
+// The other way round (online at load, and FH2MP then finds its session too old) only leaves those
+// mods out for that one start.
+
+// How old FH2MP lets its session file be, in 100 ns ticks (0: no limit), and the limit for the log:
+// FH2MP's session_age.inc, 30 minutes, or FH2MP_SESSION_MAX_AGE_S in seconds, read as FH2MP reads it
+// (its leading digits: 0, or a value that starts with no digit, is no limit).
+uint64_t fh2mp_session_max_age(std::string* shown) {
+    uint64_t max_age = 30ull * 60 * 10000000;
+    *shown           = "FH2MP's limit of 30 minutes";
+    wchar_t limit[16];
+    const DWORD len = GetEnvironmentVariableW(L"FH2MP_SESSION_MAX_AGE_S", limit, 16);
+    if (len && len < 16) {
+        uint64_t secs = 0;
+        for (DWORD k = 0; limit[k] >= L'0' && limit[k] <= L'9'; ++k) secs = secs * 10 + static_cast<unsigned>(limit[k] - L'0');
+        max_age = secs * 10000000ull;
+        *shown  = "FH2MP's limit of " + std::to_string(secs) + " s (FH2MP_SESSION_MAX_AGE_S)";
+    }
+    return max_age;
+}
+
+// Whether FH2MP may have a session to play online with: why, for the log. By FH2MP's own rules (its
+// session_load): only where FH2MP looks, data\bin when anything of that name is there, else next to
+// azimuth.exe; and not once it was last written longer ago than FH2MP's limit, or dated that far
+// ahead (FH2MP ignores and removes such a file, and plays offline). A file that can't be checked
+// counts as there, and one whose date reads as 0 isn't too old (FH2MP's rules too).
+bool fh2mp_session(std::string* why) {
     wchar_t env[8];
-    if (GetEnvironmentVariableW(L"FH2MP_TOKEN", env, 8) > 0) return true;
-    return fs::is_regular_file(g_azimuth / "data" / "bin" / "fh2mp-session.txt", ec);
+    if (GetEnvironmentVariableW(L"FH2MP_TOKEN", env, 8) > 0) {
+        *why = "FH2MP_TOKEN is set";
+        return true;
+    }
+    const bool bin      = GetFileAttributesW((g_azimuth / "data" / "bin").c_str()) != INVALID_FILE_ATTRIBUTES;
+    const fs::path path = bin ? g_azimuth / "data" / "bin" / "fh2mp-session.txt" : g_azimuth / "fh2mp-session.txt";
+    const char* name    = bin ? "data\\bin\\fh2mp-session.txt" : "fh2mp-session.txt next to azimuth.exe";
+    WIN32_FILE_ATTRIBUTE_DATA a{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &a)) {
+        const DWORD err = GetLastError();
+        if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND) return false;
+        *why = std::string("FH2MP's session file can't be checked (") + name + ", error " + std::to_string(err) + ")";
+        return true;
+    }
+    if (a.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return false;
+    std::string limit;
+    const uint64_t max_age = fh2mp_session_max_age(&limit);
+    const uint64_t written = (static_cast<uint64_t>(a.ftLastWriteTime.dwHighDateTime) << 32) | a.ftLastWriteTime.dwLowDateTime;
+    FILETIME now_ft;
+    GetSystemTimeAsFileTime(&now_ft);
+    const uint64_t now = (static_cast<uint64_t>(now_ft.dwHighDateTime) << 32) | now_ft.dwLowDateTime;
+    if (max_age && written && now) {
+        const uint64_t age = now >= written ? now - written : written - now;
+        if (age > max_age) {
+            static std::atomic<bool> told{false};
+            if (!told.exchange(true))
+                plog(std::string("FH2MP's session file (") + name + ") was written " + std::to_string(age / 600000000ull) +
+                     (now >= written ? " minutes ago" : " minutes ahead of the clock") + ", outside " + limit +
+                     ", so FH2MP won't use it; it doesn't make this game online");
+            return false;
+        }
+    }
+    *why = std::string("FH2MP's session file is there (") + name + ")";
+    return true;
+}
+
+// The DLLs that registered as FH2MP at earlier launches (platform-mods.txt), lower case.
+std::set<std::wstring> remembered_fh2mp();
+
+// Whether `dll` (in fh2-mods) may be FH2MP: FH2MP.dll, or a DLL that registered as FH2MP, this launch or
+// an earlier one. Only for finding out whether the game is online, where taking a mod that merely calls
+// itself FH2MP for it errs on the safe side.
+bool fh2mp_dll(const std::wstring& dll, const std::set<std::wstring>& remembered) {
+    const std::wstring l = lower_w(dll);
+    if (l == L"fh2mp.dll" || remembered.count(l)) return true;
+    std::scoped_lock lk{g_mu};
+    return !g_fh2mp_dll.empty() && lower_w(g_fh2mp_dll) == l;
+}
+
+// Whether `dll` is FH2MP itself, which always loads online and is never stopped: FH2MP.dll; else the
+// DLL that registered as FH2MP first this launch; before that, the only DLL in fh2-mods that registered
+// as FH2MP at an earlier launch, when there's no FH2MP.dll. Another mod that registers as FH2MP gets
+// none of that, so the player's "Load when playing online" switch still counts for it.
+bool is_the_fh2mp(const std::wstring& dll) {
+    const std::wstring l = lower_w(dll);
+    if (l.empty()) return false;
+    if (l == L"fh2mp.dll") return true;
+    {
+        std::scoped_lock lk{g_mu};
+        if (!g_fh2mp_dll.empty()) return lower_w(g_fh2mp_dll) == l;
+    }
+    std::error_code ec;
+    if (fs::is_regular_file(g_azimuth / "fh2-mods" / "FH2MP.dll", ec)) return false;
+    std::wstring only;
+    int n = 0;
+    for (const auto& r : remembered_fh2mp())
+        if (fs::is_regular_file(g_azimuth / "fh2-mods" / r, ec)) {
+            only = r;
+            ++n;
+        }
+    return n == 1 && only == l;
+}
+
+// Online at load: FH2MP is among the DLLs about to load (`files`, less those turned off), and has a
+// session. Says why in the log.
+bool detect_online(const std::set<std::wstring>& off, const std::vector<std::wstring>& files) {
+    const auto remembered = remembered_fh2mp();
+    std::wstring fh2mp;
+    for (const auto& f : files)
+        if (fh2mp_dll(f, remembered) && !off.count(lower_w(f))) fh2mp = f;
+    if (fh2mp.empty()) return false;
+    std::string why;
+    if (!fh2mp_session(&why)) return false;
+    plog(narrow(fh2mp) + " (FH2MP) is turned on and " + why + ", so this game counts as online play");
+    return true;
 }
 
 // Whether `dll` loads when playing online: the player's choice, else not if its author marked it
 // offline-only at an earlier launch, else yes. FH2MP itself always does.
 bool loads_online(const std::wstring& dll, const std::map<std::wstring, bool>& choices) {
-    if (lower_w(dll) == L"fh2mp.dll") return true;
+    if (is_the_fh2mp(dll)) return true;
     if (const auto it = choices.find(lower_w(dll)); it != choices.end()) return it->second;
     return !remembered_offline_only(dll);
 }
+
+// FH2MP is online, or about to be, after the mods started offline. From now on the game counts as
+// online: playing_online() says so, mods that shouldn't run online and start or register from here on
+// are held back, and the ones that had started (their author's offline_only, or the player's "Load
+// when playing online" switch) are stopped until the game restarts:
+// - their hooks and byte patches go off, and enable_hooks is refused;
+// - their game text, SQL and files (set_file) are taken out, and new ones refused;
+// - their waiting pop-ups, tips and UI sounds are dropped, and their HUD layer lapses;
+// - their hotkeys, commands, pad layers, HUD layer calls and title-screen entries do nothing.
+// As FH2MP starts, that's before the loader's first write of the tables and the database, which then
+// leaves them out. FH2Platform.Online's going_online only gets here when none of them has run
+// (FH2Mod::ran), so none of them has anything in the tables or the database to take out then. What
+// they had already done (FH2Mod::ran) can't be undone, so they're kept for going_online to tell FH2MP
+// (g_started_offline). Mods from before the platform can't be stopped at all: they're named in the
+// log, and told to FH2MP the same way.
+struct GoingOnline {
+    std::vector<FH2Mod*> stop;
+    std::vector<std::wstring> others;   // mods from before the platform (fh2wheel too) already loaded
+    bool strings = false, sql = false, rewrite = false;
+};
+
+// Under g_mu: the mods that have started and shouldn't run online, and the mods from before the
+// platform already loaded that shouldn't either.
+void online_off(std::vector<FH2Mod*>& mods, std::vector<std::wstring>& others) {
+    const auto choices = online_choices();
+    for (const auto& m : g_mods) {
+        if (is_the_fh2mp(m->dll)) continue;
+        // a mod its DLL loads besides its own goes off with the DLL, or when its own author says so
+        const bool off = m->dll.empty() ? m->offline_only : dll_off_online(m->dll, choices) || (m->member && m->offline_only);
+        if (!off) continue;
+        mods.push_back(m.get());
+    }
+    for (const auto& f : g_found) {
+        if (!f.loaded || f.has_init) continue;
+        // a mod from before the platform loads once the game is found: one that hasn't yet won't
+        if (lower_w(f.file) != L"fh2wheel.dll" && launched_game() == Launched::not_yet) continue;
+        const auto c = choices.find(lower_w(f.file));
+        if (c != choices.end() ? c->second : !remembered_offline_only(f.file)) continue;
+        others.push_back(f.file);
+    }
+}
+
+// Under g_mu: the game counts as online from now on, and finish_online stops `g`'s mods (online_off's,
+// from the same hold of the lock). False if it already did. The mods are marked stopped before
+// playing_online turns 1, so a mod that sees it turn finds itself stopped.
+bool begin_online(GoingOnline& g) {
+    if (g_online) return false;
+    for (FH2Mod* m : g.stop) {
+        stop_online(m);
+        // its text and SQL go: the tables it edits are written again, and the database built again
+        for (const auto& [t, _] : m->set) g_dirty.insert(t);
+        for (const auto& [t, _] : m->set_tr) g_dirty.insert(t);
+        for (const auto& [t, _] : m->repl) g_dirty.insert(t);
+        g.strings = g.strings || !m->set.empty() || !m->set_tr.empty() || !m->repl.empty();
+        g.sql     = g.sql || !m->sql.empty();
+        m->set.clear();
+        m->set_tr.clear();
+        m->repl.clear();
+        m->sql.clear();
+        if (ran_bits(m)) g_started_offline.push_back(m->name);
+    }
+    for (const auto& f : g.others) g_started_offline.push_back(narrow(f));
+    // Before the loader's first write of the tables and the database, that write leaves them out.
+    g.rewrite = g_first_write;
+    g_online  = true;
+    return true;
+}
+
+void finish_online(const std::string& why, const GoingOnline& g) {
+    plog("online play after all: " + why + ". The mods had started as for offline play; from now on the game counts as "
+         "online");
+    for (FH2Mod* m : g.stop) {
+        const int off = g_api.disable_hooks(m, nullptr);
+        clear_file(m, nullptr);
+        log_line(m->name, off ? "stopped for online play: it shouldn't run online, and FH2MP went online after it had started. Its "
+                                "hooks and byte patches are off, and its game text, database changes and files are taken out, "
+                                "until the game restarts"
+                              : "stopped for online play: it shouldn't run online, and FH2MP went online after it had started. "
+                                "Its game text, database changes and files are taken out, but some of its hooks or byte patches "
+                                "couldn't be turned off (the lines above say which)");
+        ui_mod_stopped(m);           // its waiting pop-ups, tips and UI sounds
+        hud_layer_mod_stopped(m);    // its HUD layer lapses at the next frame, whatever it calls
+    }
+    for (const auto& f : g.others)
+        plog(narrow(f) + " shouldn't run online, but it's a mod from before the platform, so it can't be stopped; start the "
+             "game from the FH2MP launcher to leave it out");
+    if (g.stop.empty() && g.others.empty()) plog("no mod that shouldn't run online had started");
+    eo_packs_went_online();   // FH2MP found online as it started: the packs' folder stops hiding mediaoverride's database
+    if (g.rewrite && (g.strings || g.sql)) {
+        // Only when a DLL registers as FH2MP after the loader's first write (FH2MP registers in its fh2mod_init):
+        // going_online stops only mods with nothing written for the game. On a thread of its own, as the caller may
+        // be the game's.
+        const bool sql = g.sql;
+        std::thread([sql] {
+            if (sql) build_database();
+            apply_all();
+        }).detach();
+    }
+}
+
+void go_online(const std::string& why) {
+    GoingOnline g;
+    {
+        // With the hooks' and files' locks held too, as in online_going: a hook of theirs that goes in meanwhile is
+        // either in what begin_online reads (FH2Mod::ran), or refused as theirs is stopped.
+        std::scoped_lock lk{g_mu};
+        if (g_online) return;
+        hooks_locked([&] {
+            return files_locked([&] {
+                online_off(g.stop, g.others);
+                return begin_online(g);
+            });
+        });
+    }
+    finish_online(why, g);
+}
+
+// ---- FH2Platform.Online (platform 2.9.0): for FH2MP ---------------------------------
+
+int online_playing() { return g_online ? 1 : 0; }
+
+// What FH2MP is told. Online already: the mods go_online stopped that had run, and the mods from
+// before the platform it couldn't stop. Not yet: the mods that shouldn't run online and have already
+// run, and the mods from before the platform already loaded. With any of those, nothing changes; with
+// none, the game goes online, those mods stopped as at load. Counted and gone online as one step: under
+// g_mu, so a mod can't write text or SQL in between, and with the hooks' and files' locks held, so no
+// hook of theirs goes in and no file of theirs is set in between either.
+int online_going(char* names, size_t size) {
+    std::vector<std::string> ran;
+    std::string what;   // for the log: each one, and what it did
+    GoingOnline g;
+    bool went = false, refused = false;
+    {
+        std::scoped_lock lk{g_mu};
+        if (g_online) {
+            ran = g_started_offline;
+        } else {
+            // One list, both to count and to stop: the player's "Load when playing online" read again could differ
+            online_off(g.stop, g.others);
+            hooks_locked([&] {
+                return files_locked([&] {
+                    for (FH2Mod* m : g.stop)
+                        if (const uint32_t r = ran_bits(m)) {
+                            ran.push_back(m->name);
+                            what += (what.empty() ? "" : "; ") + m->name + " (" +
+                                    ((r & kRanHooks) && (r & kRanEdits) ? "its hooks went in, and its game text, files or database changes were written"
+                                     : (r & kRanHooks)                  ? "its hooks went in"
+                                                                        : "its game text, files or database changes were written") +
+                                    ")";
+                        }
+                    for (const auto& f : g.others) {
+                        ran.push_back(narrow(f));
+                        what += (what.empty() ? "" : "; ") + narrow(f) + " (a mod from before the platform, already loaded)";
+                    }
+                    // With Extra Options the game read the packs' own database, ahead of mediaoverride's, where
+                    // FH2MP's copy of the server's is: FH2MP would check one and the game play with the other.
+                    if (eo_packs()) {
+                        ran.push_back("Car packs");
+                        what += std::string(what.empty() ? "" : "; ") + "the car packs in fh2-cars (with Extra Options, the game read their "
+                                "database instead of mediaoverride's)";
+                    }
+                    if (ran.empty()) went = begin_online(g);
+                    return went;
+                });
+            });
+            refused = !ran.empty();
+        }
+    }
+    if (went) finish_online("FH2MP said it's going online (FH2Platform.Online)", g);
+    static std::atomic<bool> told{false};
+    if (refused && !told.exchange(true))
+        plog("FH2MP asked to go online (FH2Platform.Online), but mods that shouldn't run online have already run in this game: " +
+             what + ". Nothing was changed, so the game stays offline and they keep running; FH2MP is told their names, so it "
+             "can ask the player to start the game from the FH2MP launcher");
+    std::string list;
+    for (const auto& n : ran) list += (list.empty() ? "" : ", ") + n;
+    if (names && size) {
+        std::size_t n = std::min(list.size(), static_cast<std::size_t>(size - 1));
+        // cut short between characters, not inside one (UTF-8 continuation bytes are 10xxxxxx)
+        if (n < list.size())
+            while (n > 0 && (static_cast<unsigned char>(list[n]) & 0xC0) == 0x80) --n;
+        std::memcpy(names, list.data(), n);
+        names[n] = '\0';
+    }
+    return static_cast<int>(ran.size());
+}
+
+const FH2PlatformOnline g_online_iface{sizeof(FH2PlatformOnline), online_playing, online_going};
+
+FH2Mod make_online_owner() {
+    FH2Mod m;
+    m.name          = "FH2 Mod Platform";
+    m.wname         = L"FH2 Mod Platform";
+    m.check_updates = false;
+    return m;
+}
+FH2Mod g_online_owner = make_online_owner();   // owns FH2Platform.Online; never registered
 
 // Whether a DLL exports fh2mod_init, read from the file without loading it: 1 yes, 0 no, -1
 // can't tell (then it's loaded as before).
@@ -728,6 +1312,8 @@ int call_init(FH2ModInitFn init, const FH2ModApi* api, DWORD* code) {
     }
 }
 
+bool g_seen_existed = false;   // fh2-mods\platform-seen.txt was there when this launch started (load_mods)
+
 DWORD WINAPI load_mods(LPVOID) {
     g_loader_thread = GetCurrentThreadId();
     g_mods_ready    = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -739,8 +1325,10 @@ DWORD WINAPI load_mods(LPVOID) {
         std::scoped_lock lk{g_log_mu};
         g_log_copy = copy;
     }
+    // A build named other than its version (-DFH2MOD_PLATFORM_BUILD="2.9.0 dev", CMakeLists.txt) says it isn't a release.
+    const bool release = std::strcmp(PLATFORM_BUILD_STR, FH2MOD_PLATFORM_VERSION) == 0;
     plog(std::string("FH2 Mod Platform ") + FH2MOD_PLATFORM_VERSION + " (API " + std::to_string(FH2MOD_API_VERSION) +
-         ") in " + narrow(g_azimuth.wstring()));
+         ") in " + narrow(g_azimuth.wstring()) + (release ? "" : "; this is the " PLATFORM_BUILD_STR " build, not a release"));
     plog("loaded as " + narrow(g_self_name) + (g_copies.empty() ? "" : "; " + g_copies));
     plog(session_line());
     plog(g_game.empty() ? "couldn't find the game's Mount folder; game text, file and database changes are off"
@@ -753,7 +1341,24 @@ DWORD WINAPI load_mods(LPVOID) {
         SetEvent(g_mods_ready);
         return 0;
     }
+    // With other games in the launcher, a mod's DLL isn't even loaded until the pick is FH2 (the title gate).
+    if (!wait_for_launcher_pick(g_mods_ready)) {
+        plog(std::string("title gate: Azimuth started ") + launched_game_name() +
+             ", not Forza Horizon 2: no mods are loaded, and the platform leaves the game alone");
+        SetEvent(g_mods_ready);
+        return 0;
+    }
     start_media_overrides();
+    l10n_start();
+    // What the player has already been shown (tips, the settings' first-run cues), read before any mod starts.
+    // Whether it and platform-mods.txt were there before anything this launch writes either: an older platform ran
+    // here when only platform-mods.txt was (mod_entries).
+    {
+        const fs::path seen = g_azimuth / "fh2-mods" / "platform-seen.txt";
+        g_seen_existed      = fs::is_regular_file(seen, ec);
+        mods_list_existed();
+        seen_open(seen, plog);
+    }
 
     struct Loaded {
         std::wstring file;
@@ -768,7 +1373,12 @@ DWORD WINAPI load_mods(LPVOID) {
     std::sort(files.begin(), files.end());
     std::vector<LoadedDll> dlls;
     const auto off = disabled_mods();
-    g_online       = detect_online(off);
+    for (const auto& f : files)   // FH2MP.dll, turned on, is FH2MP (is_the_fh2mp), whatever else registers as FH2MP
+        if (lower_w(f) == L"fh2mp.dll" && !off.count(L"fh2mp.dll")) {
+            std::scoped_lock lk{g_mu};
+            g_fh2mp_dll = f;
+        }
+    g_online       = detect_online(off, files);
     const auto online_choice = online_choices();
     if (g_online) plog("started from the FH2MP launcher (online play): mods set to stay off online aren't loaded");
     // A DLL not loaded because the game is online: noted for the MODS tab.
@@ -815,10 +1425,16 @@ DWORD WINAPI load_mods(LPVOID) {
                 const DWORD err = GetLastError();
                 plog("FAILED to load fh2wheel.dll (error " + std::to_string(err) + ")");
                 std::scoped_lock lk{g_mu};
-                g_found.back().problem = "Windows couldn't load it (error " + std::to_string(err) + ").";
+                g_found.back().problem = later("Windows couldn't load it (error {0}).", {std::to_string(err)});
             }
         }
     }
+    // The HUD layer preview's interface, there from every mod's fh2mod_init on.
+    publish_platform_interface("FH2Platform.HudLayer", 2, hud_interface(), hud_layer_owner());   // 2: the feed (2.9.0)
+    // The pad layer preview's interface, there from every mod's fh2mod_init on.
+    publish_platform_interface("FH2Platform.PadLayer", 1, pad_interface(), pad_layer_owner());
+    // Online play, for FH2MP (2.9.0), there from every mod's fh2mod_init on.
+    publish_platform_interface(FH2_ONLINE_INTERFACE, 1, &g_online_iface, &g_online_owner);
     for (const auto& f : files) {
         {
             std::scoped_lock lk{g_mu};
@@ -858,7 +1474,7 @@ DWORD WINAPI load_mods(LPVOID) {
             const DWORD err = GetLastError();
             plog("FAILED to load " + narrow(f) + " (error " + std::to_string(err) + ")");
             std::scoped_lock lk{g_mu};
-            g_found.back().problem = "Windows couldn't load it (error " + std::to_string(err) + ").";
+            g_found.back().problem = later("Windows couldn't load it (error {0}).", {std::to_string(err)});
         }
     }
     if (files.empty()) plog("no mods in fh2-mods");
@@ -877,7 +1493,16 @@ DWORD WINAPI load_mods(LPVOID) {
     install_crash_handler(dlls);
     watch_launched_game(
         [legacy] {
+            const auto choices = online_choices();
             for (const auto& f : legacy) {
+                if (g_online && !loads_online(f, choices)) {
+                    // FH2MP went online after the loader looked (go_online), before the game was found
+                    plog(narrow(f) + " is set to stay off when playing online; not loaded (FH2MP went online)");
+                    std::scoped_lock lk{g_mu};
+                    for (auto& e : g_found)
+                        if (e.file == f) e.online_off = true;
+                    continue;
+                }
                 const auto path = (g_azimuth / "fh2-mods" / f).wstring();
                 if (HMODULE h = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) {
                     const auto* base = reinterpret_cast<const char*>(h);
@@ -891,7 +1516,7 @@ DWORD WINAPI load_mods(LPVOID) {
                     plog("FAILED to load " + narrow(f) + " (error " + std::to_string(err) + ")");
                     std::scoped_lock lk{g_mu};
                     for (auto& e : g_found)
-                        if (e.file == f) e.problem = "Windows couldn't load it (error " + std::to_string(err) + ").";
+                        if (e.file == f) e.problem = later("Windows couldn't load it (error {0}).", {std::to_string(err)});
                 }
             }
         },
@@ -914,12 +1539,32 @@ DWORD WINAPI load_mods(LPVOID) {
             plog(narrow(l.file) + " has no fh2mod_init (a mod from before the platform); it runs on its own");
             continue;
         }
+        if (g_online && !loads_online(l.file, online_choices())) {
+            // FH2MP went online after this DLL was loaded (go_online): it isn't started, as it
+            // wouldn't have been loaded had the loader known
+            plog(narrow(l.file) + " is set to stay off when playing online; not started (FH2MP went online after it was loaded)");
+            std::scoped_lock lk{g_mu};
+            for (auto& f : g_found)
+                if (lower_w(f.file) == lower_w(l.file)) f.online_off = true;
+            continue;
+        }
         {
             std::scoped_lock lk{g_mu};
             g_current_dll = l.file;
         }
         DWORD code   = 0;
         const int rc = call_init(init, &g_api, &code);
+        {
+            // FH2MP has read its session now. The launcher may have written it after the loader
+            // looked: if it's there, FH2MP is online.
+            std::string why;
+            bool late = false;
+            {
+                std::scoped_lock lk{g_mu};
+                late = !g_online && !g_fh2mp_dll.empty() && lower_w(g_fh2mp_dll) == lower_w(l.file) && fh2mp_session(&why);
+            }
+            if (late) go_online("FH2MP's session showed up while the mods were starting (" + why + ")");
+        }
         {
             // register_mod turned it away (offline-only, and the game is online): that's not a problem
             std::scoped_lock lk{g_mu};
@@ -936,10 +1581,10 @@ DWORD WINAPI load_mods(LPVOID) {
             char b[16];
             std::snprintf(b, sizeof b, "%08lX", code);
             plog(narrow(l.file) + ": fh2mod_init crashed (exception 0x" + b + ")");
-            problem = std::string("It crashed while starting (exception 0x") + b + ").";
+            problem = later("It crashed while starting (exception 0x{0}).", {b});
         } else if (rc) {
             plog(narrow(l.file) + ": fh2mod_init returned " + std::to_string(rc));
-            problem = "It reported a problem while starting (it returned " + std::to_string(rc) + ").";
+            problem = later("It reported a problem while starting (it returned {0}).", {std::to_string(rc)});
         }
         std::scoped_lock lk{g_mu};
         g_current_dll.clear();
@@ -948,15 +1593,27 @@ DWORD WINAPI load_mods(LPVOID) {
                 if (lower_w(f.file) == lower_w(l.file)) f.problem = problem;
     }
 
+    hud_layer_prepare(&g_api);
+    ui_player_start(&g_api);   // the player's choices for pop-ups and tips, Developer=1, and "fh2mod Platform ui"
+    popups_prepare(&g_api);    // pop-ups and tips (API 10): their hooks, once the game's code is ready
     // First write of everything edited so far, and the title notices.
     {
         std::scoped_lock lk{g_mu};
+        g_first_write = true;   // a mod stopped for online play from here on has the tables and the database written again
         g_dirty.insert("main.str");
         g_table_names.emplace("main.str", "Main.str");
+        // What's in this write is the game's from now on: those mods have run (going_online won't stop them). Their
+        // later edits count as they come (api_set_string and the rest, set_file).
+        for (const auto& m : g_mods)
+            if (!m->set.empty() || !m->set_tr.empty() || !m->repl.empty() || !m->sql.empty() || owns_files(m.get()))
+                note_ran(m.get(), kRanEdits);
     }
     apply_all();
     build_database();
+    eo_overlay_ready();   // with Extra Options: eo-media's database and names are this session's from here on
+    db_guards_start(&g_api);   // the guards for a database missing a car's rows, once the game's code is ready
     settings_start(&g_api);
+    pad_layer_start(&g_api);
     plog(std::to_string(loaded.size()) + " mod(s) loaded");
     start_save_snapshot();
     write_session_status();
@@ -971,7 +1628,7 @@ DWORD WINAPI load_mods(LPVOID) {
         std::scoped_lock lk{g_mu};
         for (const auto& t : read_manifest()) {
             bool edited = false;
-            for (const auto& m : g_mods) edited = edited || m->set.count(t) || m->repl.count(t);
+            for (const auto& m : g_mods) edited = edited || m->set.count(t) || m->set_tr.count(t) || m->repl.count(t);
             if (!edited && t != "main.str") g_dirty.insert(t);
         }
     }
@@ -986,6 +1643,13 @@ DWORD WINAPI load_mods(LPVOID) {
 }
 
 } // namespace
+
+bool in_mod_init() { return GetCurrentThreadId() == g_loader_thread && WaitForSingleObject(g_mods_ready, 0) != WAIT_OBJECT_0; }
+
+void publish_platform_interface(const char* name, uint32_t version, const void* iface, FH2Mod* owner) {
+    std::scoped_lock lk{g_mu};
+    g_interfaces[name] = {owner, version, iface};
+}
 
 // ---- the MODS tab's list of mods -----------------------------------------------------
 //
@@ -1054,14 +1718,33 @@ bool remembered_offline_only(const std::wstring& dll) {
     }
     return false;
 }
+
+// platform-mods.txt's DLLs named FH2MP
+std::set<std::wstring> remembered_fh2mp() {
+    std::set<std::wstring> out;
+    for (const auto& l : read_lines(known_path())) {
+        const auto f = split_tabs(l);
+        if (f.size() > 1 && !f[0].empty() && _wcsicmp(f[1].c_str(), L"FH2MP") == 0) out.insert(lower_w(f[0]));
+    }
+    return out;
+}
 } // namespace
 
 bool playing_online() { return g_online; }
+bool fh2mp_has_session(std::string* why) { return fh2mp_session(why); }
+
+bool first_write_begun() { return g_first_write; }
 
 bool fh2mp_installed() {
     std::error_code ec;
-    return fs::is_regular_file(g_azimuth / "fh2-mods" / "FH2MP.dll", ec);
+    if (fs::is_regular_file(g_azimuth / "fh2-mods" / "FH2MP.dll", ec)) return true;
+    for (const auto& dll : remembered_fh2mp())
+        if (fs::is_regular_file(g_azimuth / "fh2-mods" / dll, ec)) return true;
+    std::scoped_lock lk{g_mu};
+    return !g_fh2mp_dll.empty();
 }
+
+bool is_fh2mp(const ModEntry& e) { return is_the_fh2mp(e.dll); }
 
 void set_mod_online(const std::wstring& dll, bool on) {
     auto choices = online_choices();
@@ -1096,17 +1779,95 @@ std::string latest_known(const FH2Mod* m) {
     return m ? m->latest : std::string();
 }
 
+std::string mod_description(FH2Mod* m) {
+    std::string d;
+    {
+        std::scoped_lock lk{g_mu};
+        d = m->description;
+    }
+    l10n_follow(m, "mod.description", d);
+    return d;
+}
+
+// platform-mods.txt as this launch first found it, before mod_entries writes it again: whether it was there at all
+// (a first launch has none) and the DLLs it listed (lower case). What's new since the last launch is told by it.
+struct KnownBefore {
+    bool existed = false;
+    bool members = false;   // written by a platform that lists a DLL's members (2.9.0): its kMembersLine is there
+    std::set<std::wstring> dlls;   // and members' keys, "<dll>|<name>"
+};
+// The line that says the file lists members. A platform before 2.9.0 reads lines by the DLLs it found and wants three
+// columns, so it passes over this one and the members' lines.
+constexpr const wchar_t* kMembersLine = L"|members\tA line that starts DLL|Name is a mod that DLL loads.";
+const KnownBefore& known_before() {
+    static const KnownBefore k = [] {
+        KnownBefore b;
+        std::error_code ec;
+        b.existed = fs::is_regular_file(known_path(), ec);
+        for (const auto& l : read_lines(known_path())) {
+            if (const auto f = split_tabs(l); !f.empty() && !f[0].empty()) b.dlls.insert(lower_w(f[0]));
+            b.members = b.members || l == kMembersLine;
+        }
+        return b;
+    }();
+    return k;
+}
+
+bool mods_list_existed() { return known_before().existed; }
+
+// What the first look at the list tells, kept in the seen store (settings.cpp, "being told once") before
+// platform-mods.txt is written again. Azimuth can start the game twice in one launch, and the first copy can be
+// ended before the store's worker writes platform-seen.txt; told only by this copy's snapshot, the second copy would
+// find every DLL in platform-mods.txt already, and nothing new.
+//   first    "upgrade" when an older platform ran here (platform-mods.txt was there, platform-seen.txt wasn't),
+//            else "new"; set once, at the platform's first start here
+//   mod.new  each mod new in fh2-mods since the last start (and its mod.announced cleared, so it's told again)
+// Returns false when they couldn't be written to the file yet.
+bool note_first_start(const std::vector<ModEntry>& entries, bool list_existed) {
+    bool changed = false;
+    if (!seen_has(kSeenPlatform, "first")) {
+        const bool upgrade = list_existed && !g_seen_existed;
+        if (seen_set(kSeenPlatform, "first", upgrade ? "upgrade" : "new")) {
+            changed = true;
+            plog(upgrade ? "this is the platform's first start in this Azimuth folder; an older platform ran here before"
+                         : "this is the platform's first start in this Azimuth folder");
+        }
+    }
+    for (const ModEntry& e : entries)
+        if (e.fresh && e.enabled) {
+            changed = seen_set(e.key, "mod.new") || changed;
+            seen_clear(e.key, "mod.announced");
+        }
+    // the same name twice (a mod installed both as its own DLL and through a loader): both stay listed
+    for (std::size_t i = 0; i < entries.size(); ++i)
+        for (std::size_t j = 0; j < i; ++j)
+            if (entries[i].platform_mod && entries[j].platform_mod && lower(entries[i].name) == lower(entries[j].name))
+                plog("two mods are called " + entries[i].name + " (" + entries[j].key + " and " + entries[i].key +
+                     "): YOUR MODS lists both");
+    if (!changed) return true;
+    // Waited for, unless the store already knows the file can't be written now (it's locked, or a write failed this
+    // session): start-up isn't held up for nothing then, and mod_entries copes with it not being written yet.
+    if (!seen_unwritable() && seen_flush(2000)) return true;
+    plog("platform-seen.txt couldn't be written yet, so platform-mods.txt is left as it was until it is: the mods new "
+         "since the last start stay new");
+    return false;
+}
+
 std::vector<ModEntry> mod_entries() {
+    const KnownBefore& before = known_before();
     // remembered: dll -> name, version, description
     std::map<std::wstring, std::vector<std::wstring>> known;
+    std::vector<std::vector<std::wstring>> known_members;   // "<dll>|<name>" lines, in the file's order
     for (const auto& l : read_lines(known_path())) {
         auto f = split_tabs(l);
-        if (f.size() >= 3) known[lower_w(f[0])] = f;
+        if (f.size() < 3) continue;
+        if (f[0].find(L'|') != std::wstring::npos) known_members.push_back(f);
+        else known[lower_w(f[0])] = f;
     }
     std::vector<ModEntry> out;
     std::vector<std::wstring> remember;
     const auto choices = online_choices();
-    std::scoped_lock lk{g_mu};
+    std::unique_lock lk{g_mu};
     for (const auto& f : g_found) {
         ModEntry e;
         e.dll          = f.file;
@@ -1114,14 +1875,16 @@ std::vector<ModEntry> mod_entries() {
         e.problem      = f.problem;
         e.platform_mod = f.has_init;
         e.online_off   = f.online_off;
+        e.key          = narrow(f.file);
         bool told      = false;   // registered this launch, so its offline_only is known
         for (const auto* list : {&g_mods, &g_held})
             for (const auto& m : *list)
-                if (!told && lower_w(m->dll) == lower_w(f.file)) {
+                if (!told && !m->member && lower_w(m->dll) == lower_w(f.file)) {
                     e.mod          = list == &g_mods ? m.get() : nullptr;   // a held mod isn't running
                     e.name         = m->name;
                     e.version      = m->version;
                     e.description  = m->description;
+                    l10n_follow(m.get(), "mod.description", e.description);   // in the game's language (API 10)
                     e.repo         = m->repo;
                     e.offline_only = m->offline_only;
                     e.platform_mod = true;
@@ -1129,8 +1892,8 @@ std::vector<ModEntry> mod_entries() {
                 }
         if (!e.mod && lower_w(f.file) == L"fh2wheel.dll") {
             e.name        = "fh2wheel";
-            e.description = "Racing wheels with force feedback, by iamAzoDx. Loaded by the platform from next to azimuth.exe, "
-                            "in place of fh2wheel's own d3dcompiler_47.dll.";
+            e.description = later("Racing wheels with force feedback, by iamAzoDx. Loaded by the platform from next to azimuth.exe, "
+                                  "in place of fh2wheel's own d3dcompiler_47.dll.");   // shown in the game's language
             e.repo        = "iamAzoDx/fh2wheel";
         } else if (!told) {
             if (auto it = known.find(lower_w(f.file)); it != known.end()) {
@@ -1144,7 +1907,7 @@ std::vector<ModEntry> mod_entries() {
         }
         if (const auto c = choices.find(lower_w(f.file)); c != choices.end()) e.loads_online = c->second;
         else e.loads_online = !e.offline_only;
-        if (lower_w(f.file) == L"fh2mp.dll") e.loads_online = true;
+        if (is_fh2mp(e)) e.loads_online = true;
         // nothing told us its name: its file's name, without .dll, cut short if it's long
         if (e.name.find_first_not_of(" \t") == std::string::npos) {
             std::wstring stem = f.file;
@@ -1156,11 +1919,92 @@ std::vector<ModEntry> mod_entries() {
                 e.name = e.name.substr(0, cut) + "...";
             }
         }
+        // new in fh2-mods since the last launch: a platform mod the list didn't have (when there was a list)
+        e.fresh = before.existed && (e.mod || e.platform_mod) && !before.dlls.count(lower_w(f.file));
         if (e.mod || e.platform_mod)
             remember.push_back(f.file + L"\t" + widen(e.name) + L"\t" + widen(e.version) + L"\t" + widen(e.description) + L"\t" +
                                widen(e.repo) + L"\t" + (e.offline_only ? L"1" : L"0"));
         out.push_back(e);
+        // The other mods this DLL registered (it loads them): an entry each, straight after its own. When its own
+        // mod isn't running this time (turned off, off for online play, or a problem), the ones remembered from the
+        // last time it ran, so they don't vanish from the list with it.
+        const std::string host = e.name;
+        std::set<std::string> names;   // one entry for a name registered twice by one DLL
+        if (e.mod) {
+            for (const auto* list : {&g_mods, &g_held})
+                for (const auto& m : *list) {
+                    if (!m->member || lower_w(m->dll) != lower_w(f.file) || !names.insert(lower(m->name)).second) continue;
+                    ModEntry me;
+                    me.dll          = f.file;
+                    me.enabled      = !f.disabled;
+                    me.platform_mod = true;
+                    me.host         = host;
+                    me.key          = narrow(f.file) + "|" + m->name;
+                    me.mod          = list == &g_mods ? m.get() : nullptr;   // a held mod isn't running
+                    me.online_off   = list == &g_held;
+                    me.name         = m->name;
+                    me.version      = m->version;
+                    me.description  = m->description;
+                    l10n_follow(m.get(), "mod.description", me.description);
+                    me.repo         = m->repo;
+                    me.offline_only = m->offline_only;
+                    me.loads_online = !me.offline_only;
+                    // new since the last launch: the list had members' lines then, and not this one
+                    me.fresh = before.members && !before.dlls.count(lower_w(widen(me.key)));
+                    remember.push_back(widen(me.key) + L"\t" + widen(me.name) + L"\t" + widen(me.version) + L"\t" +
+                                       widen(me.description) + L"\t" + widen(me.repo) + L"\t" + (me.offline_only ? L"1" : L"0"));
+                    out.push_back(me);
+                }
+        } else if (e.platform_mod) {
+            const std::wstring prefix = lower_w(f.file) + L"|";
+            for (const auto& k : known_members) {
+                if (lower_w(k[0]).rfind(prefix, 0) != 0 || !names.insert(lower(narrow(k[1]))).second) continue;
+                ModEntry me;
+                me.dll          = f.file;
+                me.enabled      = !f.disabled;
+                me.platform_mod = true;
+                me.host         = host;
+                me.key          = narrow(f.file) + "|" + narrow(k[1]);
+                me.online_off   = f.online_off;
+                me.name         = narrow(k[1]);
+                me.version      = narrow(k[2]);
+                if (k.size() > 3) me.description = narrow(k[3]);
+                if (k.size() > 4) me.repo = narrow(k[4]);
+                if (k.size() > 5) me.offline_only = k[5] == L"1";
+                me.loads_online = !me.offline_only;
+                std::wstring line = k[0];
+                for (std::size_t c = 1; c < k.size(); ++c) line += L"\t" + k[c];
+                remember.push_back(line);
+                out.push_back(me);
+            }
+        }
     }
+    lk.unlock();
+    static std::mutex write_mu;   // the seen entries, then the file, one caller at a time
+    std::scoped_lock wl{write_mu};
+    // The first time, the seen store gets what this list tells, and the file is only written once that's in
+    // platform-seen.txt: a second start of the game in the same launch then reads it there.
+    static bool noted = false, held = false;
+    static std::set<std::string> marked;   // the new entries that have had their mod.new this session
+    const bool first = !noted;
+    if (first) {
+        noted = true;
+        held  = !note_first_start(out, before.existed);
+    } else if (held) {
+        held = !seen_flush(0);
+    }
+    // A mod its loader registered after the list was first made is new too. The list is first made when the session
+    // file is written, which a loader's own first command brings on before it has started its runtime and registered
+    // the mods it loads. Once each, so opening its page takes the mark off for the rest of the session.
+    bool late = false;
+    for (const ModEntry& e : out)
+        if (e.fresh && e.enabled && marked.insert(e.key).second && !first) {
+            late = seen_set(e.key, "mod.new") || late;
+            seen_clear(e.key, "mod.announced");
+        }
+    if (late && !held) held = seen_unwritable() || !seen_flush(2000);   // as note_first_start: the mark, then the file
+    if (held) return out;
+    remember.insert(remember.begin(), kMembersLine);
     write_lines(known_path(),
                 L"# What the MODS tab remembers about each mod (DLL, name, version, description, GitHub repo, offline only).\n",
                 remember);
@@ -1251,6 +2095,17 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_api.add_dump_memory   = add_dump_memory;
                 g_api.add_hotkey        = hotkey_add;
                 g_api.add_command       = command_add;
+                g_api.game_language     = api_game_language;
+                g_api.set_setting_text  = api_set_setting_text;
+                g_api.set_mod_description = api_set_mod_description;
+                g_api.language          = l10n_language;
+                g_api.add_translation   = l10n_add_translation;
+                g_api.tr                = l10n_tr;
+                g_api.tr_plural         = l10n_tr_plural;
+                g_api.set_string_tr     = api_set_string_tr;
+                g_api.format_number     = l10n_format_number;
+                g_api.format_date       = l10n_format_date;
+                fill_ui_api(g_api);
                 return load_mods(nullptr);
             },
             nullptr, 0, nullptr))

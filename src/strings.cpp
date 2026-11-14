@@ -12,10 +12,13 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 
 namespace fh2platform {
 
@@ -224,7 +227,49 @@ bool ieq(std::string_view a, std::string_view b) {
 
 std::vector<char> unzip_file(const fs::path& zip, std::string_view name) {
     std::ifstream in{zip, std::ios::binary};
-    std::vector<char> d((std::istreambuf_iterator<char>(in)), {});
+    const std::vector<char> d((std::istreambuf_iterator<char>(in)), {});
+    return unzip_from(d, name);
+}
+
+bool zip_names(const fs::path& zip, std::vector<std::string>& names) {
+    names.clear();
+    std::ifstream in{zip, std::ios::binary};
+    if (!in) return false;
+    in.seekg(0, std::ios::end);
+    const auto size = static_cast<std::size_t>(in.tellg());
+    if (size < 22) return false;
+    // the end record is in the last 22 bytes plus at most a 64 KB comment
+    const std::size_t tail = std::min<std::size_t>(size, 22 + 65535);
+    std::vector<char> t(tail);
+    in.seekg(static_cast<std::streamoff>(size - tail));
+    if (!in.read(t.data(), static_cast<std::streamsize>(tail))) return false;
+    std::size_t eocd = std::string::npos;
+    for (std::size_t i = tail - 22 + 1; i-- > 0;)
+        if (r32(t, i) == 0x06054b50) {
+            eocd = i;
+            break;
+        }
+    if (eocd == std::string::npos) return false;
+    const std::size_t entries = r16(t, eocd + 10);
+    const std::size_t cd_size = r32(t, eocd + 12), cd_at = r32(t, eocd + 16);
+    if (cd_at + cd_size > size) return false;
+    std::vector<char> cd(cd_size);
+    in.seekg(static_cast<std::streamoff>(cd_at));
+    if (cd_size && !in.read(cd.data(), static_cast<std::streamsize>(cd_size))) return false;
+    std::size_t at = 0;
+    for (std::size_t e = 0; e < entries; ++e) {
+        if (at + 46 > cd.size() || r32(cd, at) != 0x02014b50 || at + 46 + r16(cd, at + 28) > cd.size()) {
+            names.clear();
+            return false;
+        }
+        const uint16_t nlen = r16(cd, at + 28), xlen = r16(cd, at + 30), clen = r16(cd, at + 32);
+        names.emplace_back(cd.data() + at + 46, nlen);
+        at += 46 + nlen + xlen + clen;
+    }
+    return true;
+}
+
+std::vector<char> unzip_from(const std::vector<char>& d, std::string_view name) {
     if (d.size() < 22) return {};
     std::size_t eocd = std::string::npos;
     for (std::size_t i = d.size() - 22 + 1; i-- > 0 && d.size() - i < 22 + 65536;)
@@ -258,9 +303,119 @@ std::vector<char> unzip_file(const fs::path& zip, std::string_view name) {
     return {};
 }
 
+namespace {
+
+// edit_lsb2 with new keys: every section is rebuilt. Section 0 has a (key, offset) record per
+// string in key order, a last one for the end (key 0xFFFF), then the UTF-16 strings; a section
+// with a record per string too is either the IDS_ name table ((key, u16, name offset) records,
+// then the names) or one u16 per string. The sections follow each other in their order.
+std::vector<char> with_added(const std::vector<char>& t, const std::vector<uint16_t>& keys,
+                             const std::vector<std::wstring>& text, const std::map<uint16_t, std::wstring>& add,
+                             int* taken) {
+    const uint32_t hdr = r32(t, 0x0C), nsec = r32(t, 0x10);
+    const auto count   = static_cast<uint32_t>(text.size());
+    std::vector<uint32_t> off(nsec), size(nsec);
+    for (uint32_t k = 0; k < nsec; ++k) {
+        off[k]  = r32(t, 0x14 + 4 * k);
+        size[k] = off[k] + 8 <= t.size() ? r32(t, off[k]) : 0;
+        const std::size_t next = k + 1 < nsec ? r32(t, 0x14 + 4 * (k + 1)) : t.size();
+        if ((k == 0 && off[k] != hdr) || size[k] < 8 || off[k] + std::size_t{size[k]} != next) return {};
+    }
+    // Merged in key order; `from` is the string's index in the table, or -1 for an added one.
+    struct Entry {
+        uint16_t key;
+        std::wstring text;
+        int from;
+    };
+    std::vector<Entry> all;
+    auto a = add.begin();
+    int skipped = 0;
+    for (uint32_t i = 0; i <= count; ++i) {
+        const uint16_t limit = i < count ? keys[i] : keys[count];
+        for (; a != add.end() && a->first <= limit; ++a)
+            if (a->first == limit) ++skipped;
+            else all.push_back({a->first, a->second, -1});
+        if (i < count) all.push_back({keys[i], text[i], static_cast<int>(i)});
+    }
+    skipped += static_cast<int>(std::distance(a, add.end())); // past the end key
+    if (taken) *taken = skipped;
+    const auto n = static_cast<uint32_t>(all.size());
+
+    std::vector<std::vector<char>> secs(nsec);
+    {
+        std::vector<char>& s = secs[0];
+        s.resize(8 + (n + 1) * 6);
+        std::vector<char> blob;
+        uint32_t o = 0;
+        for (uint32_t i = 0; i < n; ++i) {
+            w16(s, 8 + i * 6, all[i].key);
+            w32(s, 8 + i * 6 + 2, o);
+            for (wchar_t c : all[i].text) {
+                blob.push_back(static_cast<char>(c & 0xFF));
+                blob.push_back(static_cast<char>((c >> 8) & 0xFF));
+            }
+            blob.push_back(0);
+            blob.push_back(0);
+            o += static_cast<uint32_t>(all[i].text.size() + 1);
+        }
+        w16(s, 8 + n * 6, keys[count]);
+        w32(s, 8 + n * 6 + 2, o);
+        s.insert(s.end(), blob.begin(), blob.end());
+    }
+    for (uint32_t k = 1; k < nsec; ++k) {
+        const std::size_t o = off[k];
+        std::vector<char>& s = secs[k];
+        if (r32(t, o + 4) != count) { // not a record per string: as it was
+            s.assign(t.begin() + o, t.begin() + o + size[k]);
+            continue;
+        }
+        bool names = 8 + std::size_t{count} * 8 <= size[k];
+        for (uint32_t i = 0; names && i < count; ++i) names = r16(t, o + 8 + i * 8) == keys[i];
+        if (names) {
+            const std::size_t old_blob = o + 8 + std::size_t{count} * 8;
+            std::vector<char> blob(t.begin() + old_blob, t.begin() + o + size[k]);
+            s.resize(8 + std::size_t{n} * 8);
+            for (uint32_t i = 0; i < n; ++i) {
+                w16(s, 8 + i * 8, all[i].key);
+                if (all[i].from >= 0) {
+                    const std::size_t r = o + 8 + static_cast<std::size_t>(all[i].from) * 8;
+                    w16(s, 8 + i * 8 + 2, r16(t, r + 2));
+                    w32(s, 8 + i * 8 + 4, r32(t, r + 4));
+                } else {
+                    char id[24];
+                    std::snprintf(id, sizeof id, "IDS_CarPack_%04X", all[i].key);
+                    w16(s, 8 + i * 8 + 2, 0);
+                    w32(s, 8 + i * 8 + 4, static_cast<uint32_t>(blob.size()));
+                    blob.insert(blob.end(), id, id + std::strlen(id) + 1);
+                }
+            }
+            s.insert(s.end(), blob.begin(), blob.end());
+        } else if (size[k] == 8 + std::size_t{count} * 2) {
+            s.resize(8 + std::size_t{n} * 2);
+            for (uint32_t i = 0; i < n; ++i)
+                w16(s, 8 + i * 2, all[i].from >= 0 ? r16(t, o + 8 + static_cast<std::size_t>(all[i].from) * 2) : 0);
+        } else {
+            return {}; // a record per string, laid out some other way
+        }
+        w32(s, 4, n);
+    }
+    w32(secs[0], 4, n);
+    std::vector<char> out(t.begin(), t.begin() + hdr);
+    for (uint32_t k = 0; k < nsec; ++k) {
+        w32(secs[k], 0, static_cast<uint32_t>(secs[k].size()));
+        w32(out, 0x14 + 4 * k, static_cast<uint32_t>(out.size()));
+        out.insert(out.end(), secs[k].begin(), secs[k].end());
+    }
+    return out;
+}
+
+} // namespace
+
 std::vector<char> edit_lsb2(const std::vector<char>& t,
-                            const std::function<std::wstring(uint16_t, const std::wstring&)>& edit, int* changed) {
+                            const std::function<std::wstring(uint16_t, const std::wstring&)>& edit, int* changed,
+                            const std::map<uint16_t, std::wstring>& add, int* taken) {
     if (changed) *changed = 0;
+    if (taken) *taken = 0;
     if (t.size() < 0x24 || std::memcmp(t.data(), "LSB2", 4) != 0) return {};
     const uint32_t hdr = r32(t, 0x0C), nsec = r32(t, 0x10);
     if (nsec == 0 || nsec > 16 || hdr < 0x14 + 4 * nsec || hdr > t.size()) return {};
@@ -284,6 +439,7 @@ std::vector<char> edit_lsb2(const std::vector<char>& t,
         if (n != s && changed) ++*changed;
         text[i] = std::move(n);
     }
+    if (!add.empty()) return with_added(t, keys, text, add, taken);
 
     std::vector<char> sec(8 + (count + 1) * 6);
     uint32_t off = 0;
@@ -340,10 +496,11 @@ fs::path find_game_mount(const fs::path& azimuth_dir, const fs::path& command_li
 }
 
 int override_string_table(const fs::path& mount, std::string_view file,
-                          const std::function<std::wstring(uint16_t, const std::wstring&)>& edit, bool remove) {
+                          const std::function<std::wstring(std::string_view, uint16_t, const std::wstring&)>& edit, bool remove,
+                          const fs::path& override_root, const std::map<uint16_t, std::wstring>& add) {
     std::error_code ec;
     const fs::path tables   = mount / "media" / "Stripped" / "StringTables";
-    const fs::path override = mount / "mediaoverride" / "Stripped" / "StringTables";
+    const fs::path override = (override_root.empty() ? mount / "mediaoverride" : override_root) / "Stripped" / "StringTables";
     int done                = 0;
     for (const auto& e : fs::directory_iterator(tables, ec)) {
         if (!e.is_regular_file(ec) || !ieq(e.path().extension().string(), ".zip")) continue;
@@ -354,7 +511,9 @@ int override_string_table(const fs::path& mount, std::string_view file,
         }
         const auto orig = unzip_file(e.path(), file);
         if (orig.empty()) continue;
-        const auto data = edit_lsb2(orig, edit);
+        const std::string lang = e.path().stem().string();
+        const auto data        = edit_lsb2(
+            orig, [&](uint16_t key, const std::wstring& text) { return edit(lang, key, text); }, nullptr, add);
         if (data.empty()) continue;
         fs::create_directories(target.parent_path(), ec);
         const auto tmp = target.wstring() + L".tmp";

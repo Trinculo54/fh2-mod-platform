@@ -8,7 +8,7 @@ A mod is a 64-bit Windows DLL, written in anything that can export a C function.
 
 To build, you need either [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) with CMake, which works on Linux and Windows and is what every FH2 mod uses so far, or Visual Studio with CMake. If you plan to use `__try`/`__except` around reads of game memory, llvm-mingw needs `-fms-extensions`, and GCC-based MinGW won't do at all.
 
-To test, you need Forza Horizon 2 running through Azimuth. The platform writes text, file and database changes to the game's `mediaoverride` folder. [Forza Horizon 2 Extra Options](https://github.com/RokkuDayo/forzahorizon2_extraoptions) makes the game read it, and most players have it already. When Extra Options isn't loaded, platform 2.7.3 and newer makes the game read the folder itself.
+To test, you need Forza Horizon 2 running through Azimuth. The platform writes text, file and database changes to the game's `mediaoverride` folder. [Forza Horizon 2 Extra Options](https://github.com/RokkuDayo/forzahorizon2_extraoptions) makes the game read it, and most players have it already. When Extra Options isn't loaded, platform 2.7.3 and newer makes the game read the folder itself. From 2.9.0, on Azimuth 1.0 or later without Extra Options, the changes go to the Azimuth folder's own layer instead, `data\titles\1A96545B\tmp\fh2-platform\media`, which the game reads ahead of `mediaoverride` ([car-packs.md](car-packs.md#this-azimuth-folders-own-files)).
 
 ## Set up the project
 
@@ -81,13 +81,13 @@ If two mods set the same key, the one loaded later wins, in alphabetical order o
 
 `set_notice(mod, "line one\nline two")` puts lines under "PRESS (A) TO START" on the title screen, together with every other mod's. Players see it each time the game starts, so use it for things they need to know, not for status chatter. There's room for about 40 characters per line, and empty lines are dropped. `set_notice(mod, nullptr)` clears yours.
 
-You don't need it for updates: register with `github_repo` and the platform checks your latest GitHub release (at most every six hours, remembered between launches, and again straight away when a different version of your mod is installed) and adds "MyMod 1.1.0 is available" itself when it's newer than your `version`. It compares `x.y.z` numbers, with or without a leading `v`, so tag releases to match your version. It also adds "Old FH2 Mod Platform: reinstall MyMod" when the installed platform is older than your `platform_version`.
+You don't need it for updates: register with `github_repo` and the platform checks your latest GitHub release (at most every six hours, remembered between launches, and again straight away when a different version of your mod is installed) and adds "MyMod 1.1.0 is out: Pause > MODS > UPDATES" itself when it's newer than your `version` ("MyMod 1.1.0 is available" up to platform 2.8.0). It compares `x.y.z` numbers, with or without a leading `v`, so tag releases to match your version. It also adds "Old FH2 Mod Platform: reinstall MyMod" when the installed platform is older than your `platform_version`.
 
 From platform 2.8.0 (API 9), `add_title_entry` adds a line there with a button of its own, like "(Y) START ON STORM ISLAND", and calls your code when the player presses it. Your code can have the platform start the game straight after, and `title_started_by` then tells your mod that this start was its entry's. There are four buttons for every mod together, so add one entry at most. [`api.md`](api.md#title-screen-entries-api-9) has the details.
 
 ## Replacing game files
 
-To swap out a whole file the game loads, such as a texture, an XML file or the Drivatar cache, use `set_file(mod, "drivatarglobalcache/DefaultCache.bin", data, size)` instead of writing into `mediaoverride` yourself. The path is relative to `media`, and a zip counts as a folder: `media\UI.zip\x.xml` is `"UI/x.xml"`. The platform makes sure only one mod replaces a given file and logs it when a second one tries. It also deletes the file once your mod stops claiming it, whether you call `clear_file` or the player removes your mod. Check the return value: 0 means you didn't get the file. These calls need API version 2, so check `api->api_version >= 2` first.
+To swap out a whole file the game loads, such as a texture, an XML file or the Drivatar cache, use `set_file(mod, "drivatarglobalcache/DefaultCache.bin", data, size)` instead of writing into `mediaoverride` yourself. The path is relative to `media`, and a zip counts as a folder: `media\UI.zip\x.xml` is `"UI/x.xml"`. The platform makes sure only one mod replaces a given file and logs it when a second one tries. It also deletes the file once your mod stops claiming it, whether you call `clear_file` or the player removes your mod. Check the return value: 0 means you didn't get the file. These calls need API version 2, so check `api->api_version >= 2` first. From platform 2.9.0 the platform's own menu files (the pause menu, the Mods page, the MODS tab's pages, the HUD and the title screen, listed in [`api.md`](api.md#set_file-and-clear_file-api-2)) can't be replaced: for a page of your own, use pages (API 8). A page of your own design (`set_page_xaml`) is checked before it's shown: every resource key it uses has to be one every page has or one of its own, and every texture one of the game's, or the page shows "This page couldn't be shown" instead of crashing the game. A page that crashed the game as it opened is left out until your DLL changes, or until the player gives it another try with A. [`api.md`](api.md#pages-of-your-own-design) has the rules.
 
 ## Changing the game database
 
@@ -104,6 +104,8 @@ Every mod's statements run against one copy of the database, in load order, so t
 If your mod has something other mods could use, publish it. Write a small header with a struct of function pointers, starting with a `size` member, and call `publish_interface(mod, "MyMod.Thing", 1, &my_struct)` in `fh2mod_init`. Another mod includes your header, and then, on its own thread, waits with `wait_for_mods` and calls `get_interface("MyMod.Thing", 1)`. If it gets null, your mod isn't installed or is too old, and it should carry on without it. `mod_version("MyMod")` tells a mod whether another is installed at all.
 
 Once an interface is published, keep it working: add members at the end and bump the version, never change existing ones. WheresMyBuddy and FH2 Universal Radio both publish one: `WheresMyBuddy.Friends` and `FH2UniversalRadio.NowPlaying`.
+
+**Loaders.** If your DLL loads other mods (scripts, or mods written in another language), call `register_mod` for your own mod first, then once for each mod you load, all before `fh2mod_init` returns. From platform 2.9.0 the player then sees each of them on YOUR MODS, under its own name, with the rows, links and pages it added on its own page. Your mod's page has the Load switches for the whole DLL and names the mods it loads; theirs say "Loaded by" yours. The list remembers them, so they stay listed (as Off) while your DLL is turned off. Give each mod its own `offline_only`: the platform holds such a mod back online by itself. A mod you register later, once `fh2mod_init` has returned, works but isn't listed until a launch where you register it in time.
 
 ## When it crashes
 
@@ -127,7 +129,149 @@ If you can't use the platform's hooks for something (a patch in the middle of a 
 
 ## Switches in the game
 
-If players will want to turn parts of your mod on and off, or tune a number, give them rows on the Mods page (API 4; sliders API 5): Pause > Settings > MODS, shared by every mod. You pass the current value and get told when the player changes it; you keep saving it in your own settings file, as before. Rows that only work after a restart are marked so, and the game then offers to restart for the player. From platform 2.8.0 (API 9) a row can also offer named choices, like a button or a mode, instead of a number standing for one. [`api.md`](api.md#the-mods-page-api-4-sliders-api-5) has the details and an example. Keep it to the main switches; fine-tuning still belongs in your ini.
+If players will want to turn parts of your mod on and off, or tune a number, give them rows (API 4; sliders API 5) on your mod's own page under Pause > MODS > YOUR MODS (Pause > Settings > MODS opens the same list). You pass the current value and get told when the player changes it; you keep saving it in your own settings file, as before. Rows that only work after a restart are marked so, and the game then offers to restart for the player. From platform 2.8.0 (API 9) a row can also offer named choices, like a button or a mode, instead of a number standing for one. [`api.md`](api.md#your-mods-page-api-4-sliders-api-5) has the details and an example. Keep it to the main switches; fine-tuning still belongs in your ini. A few rules make your page easy to use:
+
+- **Put your main switch first.** The page opens with the focus on your first row.
+- **Keep labels to about 24 characters, and leave your mod's name out of them.** They have half the list's width, and the page's title is already your mod's name.
+- **Write `FH2ModInfo.description` for players.** It's the first thing they read about your mod, on the YOUR MODS list.
+- **Link rows and pages show on the same page**, after your settings, so one place has everything.
+
+For your README, a sentence players can follow: "In game: Pause > MODS > YOUR MODS > MyMod (Pause > Settings > MODS opens the same list)."
+
+## Text in the player's language
+
+From platform 2.9.0 (API 10), your rows, pages, title-screen lines and pop-ups can be in the language the game shows. Write the English with a key for each text (`FH2_TR(api, g_mod, "row.Trees.label", "Breakable trees")`, from [`include/fh2mod_l10n.h`](../include/fh2mod_l10n.h), which gives the English on an older platform), list them for translators with `tools/l10n/extract.py`, and build their PO files into your DLL with `tools/l10n/po2inc.py`. Text you pass on as `FH2_TR` gave it follows the game's language by itself, even though the game picks it after `fh2mod_init`. [`translating.md`](translating.md) has the whole workflow, for you and for your translators. To find text that's cut off or never translated, put `test=1` in `fh2-mods\platform-language.ini`: every translatable text then shows padded and in brackets.
+
+## Showing things to the player
+
+From platform 2.9.0 (API 10) a mod never needs XAML to tell the player something: the UI templates are pieces of the game's own UI that you fill with text, and the platform draws them in the game's look, decides when they show and logs what they showed. [`api.md`](api.md#ui-templates-api-10) has every call in full. The rows marked 2.9.1 and 2.9.x below are planned, not in 2.9.0.
+
+| You want to | Use | Since |
+|---|---|---|
+| Tell the player something happened (an unlock, a file written) | `show_toast` (or `fh2ui_notify`) | 2.9.0 |
+| Answer the player's own key press | `show_toast` with `FH2_TOAST_FLAG_REPLY`; `play_ui_sound` if it returns 0 | 2.9.0 |
+| Report a fault the player must act on | `show_toast` with `FH2_TOAST_FLAG_URGENT`, saying what to do | 2.9.0 |
+| Teach a control once | `show_tip` | 2.9.0 |
+| Ask for a confirmation or a choice | `show_message_box`, from your page | 2.9.0 |
+| Say what the buttons do on your page | `set_page_help` | 2.9.0 |
+| Show a short status on your page ("Saved.") | `set_page_hints` and `show_page_hint` | 2.9.0 |
+| Say something before the game starts | `set_notice`, `add_title_entry` | 2.8.0 |
+| Show a state that lasts while driving (a ghost, a score) | a card or status line | 2.9.1 |
+| Acknowledge a press within a tenth of a second | a chip or status line | 2.9.1 |
+| Count down to something | `show_countdown` | 2.9.x |
+| Run a mode with its own controls | the HUD layer and pad layer previews (below); an API for them later | 2.9.0 (preview) |
+| Watch numbers while testing | `set_overlay_text` | 2.9.x |
+
+Use [`include/fh2mod_ui.h`](../include/fh2mod_ui.h): each call there is the API member without `api` and `mod`, and does nothing (returning 0) on a platform older than 2.9.0, so your mod needs no version checks. [`include/fh2mod_l10n.h`](../include/fh2mod_l10n.h)'s `FH2_TR` gives the text in the player's language. Set both up once in `fh2mod_init`, and say what you'll use there too: the platform only hooks the game's notification in a session where a mod has declared pop-ups or tips.
+
+```cpp
+#include "fh2mod_ui.h"
+#include "fh2mod_l10n.h"
+
+g_mod = api->register_mod(&info);
+fh2_helpers_init(api, g_mod);
+fh2ui_ui_uses(FH2_UI_USES_TOASTS | FH2_UI_USES_TIPS);   // ui_uses: from fh2mod_init only
+```
+
+What works this session, whenever it matters (`ui_status`):
+
+```cpp
+const uint32_t ui = fh2ui_ui_status();
+if (ui & FH2_UI_TOASTS_OFF) { /* the player turned pop-ups off: don't nag in other ways either */ }
+if (ui & FH2_UI_KEYBOARD)   { /* buttons are written as keys (the keyboard was used last, or the player chose it): name keys */ }
+```
+
+A pop-up, in one call or in full (`show_toast`), and taking a waiting one down (`clear_toast`):
+
+```cpp
+fh2ui_notify(FH2_TR(FH2_API, FH2_MOD, "toast.ready", "Breakable trees are on"),
+             FH2_TR(FH2_API, FH2_MOD, "toast.ready.line", "Change it under Pause > MODS"));
+
+FH2Toast t{};
+t.size     = sizeof t;
+t.key      = "Snapshot";                          // a second one with this key replaces it while it waits
+t.title    = FH2_TR(FH2_API, FH2_MOD, "toast.snapshot", "Snapshot written");
+t.subtitle = FH2_TR(FH2_API, FH2_MOD, "toast.where", "WreckingBall-defs.txt, next to the game");
+t.icon     = FH2_ICON_PHOTO;
+t.flags    = FH2_TOAST_FLAG_REPLY;                // from a hotkey's on_press: it answers the press
+if (!fh2ui_show_toast(&t)) fh2ui_play_ui_sound(FH2_SOUND_SELECT);   // off, or an older platform
+
+fh2ui_clear_toast("Snapshot");                    // it isn't true any more: take it down if it's still waiting
+```
+
+A fault the player has to fix: `FH2_TOAST_FLAG_URGENT`, and say what to do.
+
+```cpp
+FH2Toast f{};
+f.size     = sizeof f;
+f.key      = "NoData";
+f.title    = FH2_TR(FH2_API, FH2_MOD, "toast.nodata", "Track data missing");
+f.subtitle = FH2_TR(FH2_API, FH2_MOD, "toast.nodata.fix", "Reinstall MyMod from its zip");
+f.flags    = FH2_TOAST_FLAG_URGENT;               // first in the queue; twice a session
+fh2ui_show_toast(&f);
+```
+
+A tip that teaches a control once (`show_tip`), until the player has used it (`set_tip_seen`), and asking whether it was seen (`tip_seen`):
+
+```cpp
+FH2Tip tip{};
+tip.size          = sizeof tip;
+tip.key           = "FirstSnapshot";
+tip.text          = FH2_TR(FH2_API, FH2_MOD, "tip.snapshot", "Press {button} to write a snapshot");
+tip.button.hotkey = "Snapshot";                   // the player's own binding for your hotkey
+tip.flags         = FH2_TIP_FLAG_UNTIL_DONE;
+tip.max_sessions  = 3;
+if (!fh2ui_tip_seen("FirstSnapshot")) fh2ui_show_tip(&tip);
+/* in the hotkey's on_press */ fh2ui_set_tip_seen("FirstSnapshot", 1);
+```
+
+A sound on its own, to answer a press when there's nothing to say (`play_ui_sound`); never the only cue:
+
+```cpp
+fh2ui_play_ui_sound(FH2_SOUND_SELECT);
+```
+
+A confirmation from your page (`show_message_box`, from the page's own callbacks only):
+
+```cpp
+static void on_reset_choice(void*, const char*, uint32_t choice) {
+    if (choice == 1) reset_progress();            // 0 is "Keep my progress"; FH2_BOX_BACK is Back
+}
+static void on_select(void*, const char*, const char* row) {
+    if (strcmp(row, "Reset") != 0) return;
+    const char* choices[] = {FH2_TR(FH2_API, FH2_MOD, "box.keep", "Keep my progress"), FH2_TR(FH2_API, FH2_MOD, "box.reset", "Reset")};
+    FH2MessageBox b{};
+    b.size         = sizeof b;
+    b.key          = "Reset";
+    b.title        = FH2_TR(FH2_API, FH2_MOD, "box.title", "Reset your progress?");
+    b.message      = FH2_TR(FH2_API, FH2_MOD, "box.msg", "Every achievement goes back to locked. Your save isn't touched.");
+    b.choices      = choices;
+    b.choice_count = 2;
+    b.on_choose    = on_reset_choice;
+    fh2ui_show_message_box(&b);
+}
+```
+
+Your page's help bar (`set_page_help`) and a hint line for short statuses (`set_page_hints`, `show_page_hint`):
+
+```cpp
+FH2Prompt open{};
+open.glyph = FH2_GLYPH_A;
+open.label = FH2_TR(FH2_API, FH2_MOD, "help.open", "Open");
+fh2ui_set_page_help("Main", &open, 1);            // relabels A; (B) Back stays
+
+const char* hints[] = {FH2_TR(FH2_API, FH2_MOD, "hint.saved", "Saved."), FH2_TR(FH2_API, FH2_MOD, "hint.reset", "Progress reset.")};
+fh2ui_set_page_hints("Main", hints, 2);           // in fh2mod_init or the page's on_open
+/* in on_reset_choice, after resetting */ fh2ui_show_page_hint("Main", 1, FH2_HINT_INFO);
+```
+
+**The player stays in charge.** The platform's own page under YOUR MODS has "Mod pop-ups" and "Tips" for every mod, "Show tips again" and "Recent pop-ups" (which mod sent what), and your page gets a "Pop-ups" row when you declare pop-ups, unless you have a row of your own (`FH2_UI_USES_OWN_SWITCH`). So write each pop-up as if it might not show: keep what matters in your log and on your page too.
+
+**Trying them out.** With `Developer=1` under `[popups]` in `fh2-mods\platform-popups.ini`, the platform's page gets a "UI templates" page that fires each template once, and `fh2mod Platform ui demo`, `ui toast`, `ui tip`, `ui keyboard` and `ui pad` do the same from a command line; `fh2mod Platform ui` alone says what's on screen and waiting, and why. [`api.md`](api.md#trying-templates-fh2mod-platform-ui-and-the-test-page) has them all.
+
+## A HUD of your own (preview)
+
+From platform 2.9.0, the `FH2Platform.HudLayer` interface (version 2) lets a mod show a bar, labels, button prompts and a feed of its own in the game's free-roam HUD, drawn by the game's UI in its own look, and `FH2Platform.PadLayer` (version 1) lets it have some controller buttons to itself while the player holds a modifier. Both are preview interfaces: they aren't part of the API yet, they'll change before they join it, and platform 2.8.0 and older don't have them, so your mod has to carry on without them. [`hud-layer-preview.md`](hud-layer-preview.md) and [`pad-layer-preview.md`](pad-layer-preview.md) have how to use them. One layer is on screen at a time, so if your mod could use the HUD layer, ask first.
 
 ## Your own files
 

@@ -23,7 +23,7 @@
  * the exe on disk), and the mod that uses it. Names follow the game's own class and function
  * names, from its RTTI and strings, where there are some.
  *
- * The platform's own hook sites are at the end. Don't hook those.
+ * The platform's own sites are at the end. Don't hook those.
  */
 #ifndef FH2GAME_H
 #define FH2GAME_H
@@ -220,23 +220,29 @@
 #define FH2_GAME_SETSTAT_AT 0x2F7977
 #define FH2_GAME_SETSTAT_AT_BYTES "\x45\x33\xC9\x45\x8D\x41\x20"
 
-/* An instruction in the HUD notification's constructor. Achievements. */
+/* An instruction in the HUD notification's constructor. Shared, chained by the platform (its pop-ups, API 10)
+ * and Achievements; new mods use show_toast. */
 #define FH2_GAME_HUD_NOTIFICATION_CTOR_AT 0x73E0B1
 #define FH2_GAME_HUD_NOTIFICATION_CTOR_AT_BYTES "\x48\x8D\x8B\xA0\x01\x00\x00"
 
-/* An instruction in the HUD notification's destructor. Achievements. */
+/* An instruction in the HUD notification's destructor. Shared, chained by the platform (its pop-ups, API 10)
+ * and Achievements; new mods use show_toast. */
 #define FH2_GAME_HUD_NOTIFICATION_DTOR_AT 0x73F046
 #define FH2_GAME_HUD_NOTIFICATION_DTOR_AT_BYTES "\x48\x89\x41\x28\x48\x81\xC1\xA0\x01\x00\x00"
 
-/* An instruction in the AchievementsModule's tick. Achievements. */
+/* An instruction in the AchievementsModule's tick. Shared, chained by the platform (its pop-ups' tick, API 10,
+ * and the HUD layer's pump) and Achievements: instruction hooks there chain. */
 #define FH2_GAME_ACHIEVEMENTSMODULE_TICK_AT 0x3FCD84
 #define FH2_GAME_ACHIEVEMENTSMODULE_TICK_AT_BYTES "\x8B\x81\xA8\x00\x00\x00"
 
-/* MakeDisplayString. Achievements. */
+/* MakeDisplayString. Achievements, FH2MP; new mods use show_toast. Its first 16 bytes must stay unpatched:
+ * Achievements 1.0.x checks 15 of them in memory, FH2MP 1.2.0 all 16. */
 #define FH2_GAME_MAKE_DISPLAY_STRING 0x323310
 #define FH2_GAME_MAKE_DISPLAY_STRING_BYTES "\x40\x57\x48\x83\xEC\x30\x48\xC7\x44\x24\x28\xFE"
 
-/* Shows a HUD notification. Achievements. */
+/* Shows a HUD notification. Achievements; new mods use show_toast, which shares the game's notification with
+ * every mod and paces it with the game's own. Its first 16 bytes must stay unpatched: Achievements 1.0.x checks 15
+ * of them in memory. */
 #define FH2_GAME_SHOW_NOTIFICATION 0x755330
 #define FH2_GAME_SHOW_NOTIFICATION_BYTES "\x4C\x89\x4C\x24\x20\x4C\x89\x44\x24\x18\x48\x89"
 
@@ -264,14 +270,91 @@
 /* Calls MSVCR110's rand (import slot 0x141DD0A90). */
 #define FH2_GAME_RAND 0x1259200
 #define FH2_GAME_RAND_BYTES "\x48\x83\xEC\x28\xFF\x15\x86\x78\xB7\x00"
+
+/* ---- The free-roam HUD (the platform's HUD layer preview) ---------------------------------------- */
+
+/* The free-roam HUD page's vtable (the Hud class); slot 0 is its deleting destructor, 0x140D244C0, +0x488
+ * runs each time the page is shown and +0x4F8 when it's hidden. Used by the platform's HUD layer
+ * (preview). */
+#define FH2_GAME_HUD_VTABLE 0x2DEF9C8
+#define FH2_GAME_HUD_VTABLE_BYTES "\xC0\x44\xD2\x40\x01\x00\x00\x00"
+
+/* The free-roam HUD page shown (its vtable +0x488): sets page+0x410 = 1. Used by the platform's HUD layer
+ * (preview). */
+#define FH2_GAME_HUD_SHOWN 0xD38DD0
+#define FH2_GAME_HUD_SHOWN_BYTES "\x40\x55\x53\x56\x57\x41\x54\x41\x56\x41\x57\x48"
+
+/* The free-roam HUD page hidden (its vtable +0x4F8): sets page+0x410 = 0. Used by the platform's HUD layer
+ * (preview). */
+#define FH2_GAME_HUD_HIDDEN 0xD41540
+#define FH2_GAME_HUD_HIDDEN_BYTES "\x48\x8B\xC4\x55\x48\x8D\x68\xA1\x48\x81\xEC\xF0"
+
+/* void(HUDModule*): suspends the game's own HUD (its HUDStatusPrioritiserModule's +0xA8 = 1). Used by
+ * the platform's HUD layer (preview) for hold_game_hud. */
+#define FH2_GAME_HUD_SUSPEND 0x78B0F0
+#define FH2_GAME_HUD_SUSPEND_BYTES "\x40\x57\x48\x83\xEC\x50\x48\xC7\x44\x24\x20\xFE"
+
+/* void(HUDModuleAR*): the same for the game's other HUD module. Used by the platform's HUD layer
+ * (preview). */
+#define FH2_GAME_HUD_SUSPEND_AR 0x78B1A0
+#define FH2_GAME_HUD_SUSPEND_AR_BYTES "\x40\x57\x48\x83\xEC\x50\x48\xC7\x44\x24\x20\xFE"
+
+/* void(module): resumes either HUD module (clears the prioritiser's +0xA8). Used by the platform's HUD
+ * layer (preview). */
+#define FH2_GAME_HUD_RESUME 0x785CD0
+#define FH2_GAME_HUD_RESUME_BYTES "\x40\x53\x48\x83\xEC\x30\x48\x8D\x54\x24\x20\x48"
+
+/* void*(size, type): allocates an AVUI object (the game's UI framework). Used by the platform's HUD layer
+ * (preview) for its Strings. */
+#define FH2_GAME_AVUI_ALLOC 0x14424E0
+#define FH2_GAME_AVUI_ALLOC_BYTES "\x48\x89\x5C\x24\x08\x57\x48\x83\xEC\x20\x48\x8B"
+
+/* String(obj, const wchar_t*, length): makes an AVUI String, with one reference. Used by the platform's
+ * HUD layer (preview). */
+#define FH2_GAME_AVUI_STRING_WIDE 0x1663340
+#define FH2_GAME_AVUI_STRING_WIDE_BYTES "\x48\x89\x4C\x24\x08\x57\x41\x56\x41\x57\x48\x83"
+
+/* void(obj, descriptor): raises PropertyChanged, so a page's bindings read the property again. Used by
+ * the platform's Mods page and its HUD layer (preview). */
+#define FH2_GAME_AVUI_PROPERTY_CHANGED 0xCF9C60
+#define FH2_GAME_AVUI_PROPERTY_CHANGED_BYTES "\x40\x57\x48\x83\xEC\x60\x48\xC7\x44\x24\x20\xFE"
+
+/* ---- Text ---------------------------------------------------------------------------------------- */
+
+/* A pointer to the string tables' manager. At its +0x30, the text language's code, an MSVC
+ * std::string ("EN", "CHT", "br"...: short, so in place, its length at +0x40), set once the game
+ * has read its language option. The platform's game_language() (API 10) reads it for you.
+ * Extra Options, FH2 ANNA. */
+#define FH2_GAME_STRING_TABLES 0x3662990
+
 /* ---- The platform's own ----------------------------------------------------------------------- */
 
-/* Hooked by the platform for the Mods page, its own pages, the MODS tab and the title-screen
- * entries: AVUI::Type::FindProperty game+0x157FF60; the pause and settings menus' tiles
- * 0xD9FC10, 0xDC8A60, 0xDC6C40, 0xDC6E30 and 0xD9F9F0; the HUD options page 0xB3A3E0 and
- * 0xB0B990; the Marketplace handlers 0xDBD720, 0xDBDD00, 0xDBDD60 and 0xDBFE40; the
- * Achievements tile's calls 0xDBD635 and 0xDBF185; and the title screen's buttons (Splash vtable
- * +0x578, game+0x2E53940). Don't hook them: use the platform's settings, pages and title-screen
- * entries instead. */
+/* Hooked, patched or called by the platform. Don't hook these, patch them or check their bytes in
+ * memory: use the platform's settings, pages, title-screen entries, pop-ups and HUD and pad layers
+ * instead. docs/game-notes.md ("Sites the platform hooks") says when each goes in.
+ *
+ * The menus, every session their code matches: AVUI::Type::FindProperty game+0x157FF60; the Settings
+ * page's tile wiring 0xDC8A60 (which calls 0xD9FC10, and its HUD tile 0xDC6C40); the HUD options
+ * page's scene record 0xB3A3E0 (its factory 0xB0B990 makes the page from it) and its vtable slots
+ * game+0x2DF06C0 (+0x488) and 0x2DF07B0 (+0x578); the pause menu's tile wiring 0xDC6E30 (which calls
+ * 0xD9F9F0); the Marketplace handlers 0xDBD720, 0xDBDD00, 0xDBDD60 and 0xDBFE40; and the Marketplace
+ * tab's five byte patches at 0xDDACAD, 0xDDAE1F, 0xDDB2F5, 0xDDB910 and 0xDDBB3E.
+ *
+ * When something needs them: the Achievements tile's calls 0xDBD635 and 0xDBF185 (a mod's page takes
+ * the tile); the title screen's buttons, Splash vtable +0x578 at game+0x2E53940 (a mod added an
+ * entry); the free-roam HUD's +0x488 slot game+0x2DEFE50 (the platform's notices on the HUD); and the
+ * media resolver's slot game+0x2E6EF28 (without Extra Options).
+ *
+ * New in 2.9.0, each only in a session that needs it: for pop-ups and tips (API 10, when a mod
+ * declared them with ui_uses, or with Developer=1), FH2_GAME_ACHIEVEMENTSMODULE_TICK_AT,
+ * FH2_GAME_HUD_NOTIFICATION_CTOR_AT and _DTOR_AT (shared with Achievements: instruction hooks there
+ * chain), the three calls of the minor-notification gate game+0x754920 at game+0x75542C, 0x7555A5 and
+ * 0x750FB1, and the free-roam HUD's vtable slots +0x488, +0x4F8 and 0 (game+0x2DEFE50, 0x2DEFEC0 and
+ * 0x2DEF9C8); for play_ui_sound from outside a mod's callbacks, the tick; for the HUD layer (preview,
+ * when a mod adds a layer), the tick and the same three HUD slots; for the pad layer (preview, when a
+ * mod adds one), game+0x10768D0; and for the database guard (when the game reads a database a car
+ * pack or mod changed), DriveTrainConverter's two type checks at game+0xB99CA0 and 0xB99D74; and for
+ * the pause menu's Exit Game tile, the call that makes the menu's navigation grid at game+0xDC6F29
+ * and the constructor of a grid's cell at game+0x1400030. */
 
 #endif /* FH2GAME_H */

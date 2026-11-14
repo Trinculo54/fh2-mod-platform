@@ -21,7 +21,7 @@ BEGIN
             VALUE "LegalCopyright",   "MIT License"
             VALUE "OriginalFilename", "d3dcompiler_47.dll"
             VALUE "ProductName",      "FH2 Mod Platform"
-            VALUE "ProductVersion",   PLATFORM_VERSION_STR
+            VALUE "ProductVersion",   PLATFORM_BUILD_STR
         END
     END
     BLOCK "VarFileInfo"

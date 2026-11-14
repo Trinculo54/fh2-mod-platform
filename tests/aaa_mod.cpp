@@ -1,6 +1,9 @@
 // A mod for the platform test that loads first (alphabetically): owns a
 // file TestMod also wants, has SQL that fails, uses TestMod's interface,
-// and crashes on request (the "crash" phase).
+// and crashes on request (the "crash" phase). With aaa_popups.txt there (the
+// "full" and "newmod" phases), it declares pop-ups without a row of its own, so its page
+// gets the platform's "Pop-ups" row (API 10), and sends one once every mod
+// has started.
 #include "fh2mod.h"
 #include <windows.h>
 
@@ -30,8 +33,15 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
         api->add_dump_memory(g_mod, state, 4096);
         api->add_dump_memory(g_mod, state, (64u << 20) + 1);
     }
-    CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
+    const bool popups = api->api_version >= 10 && GetFileAttributesW(L"aaa_popups.txt") != INVALID_FILE_ATTRIBUTES;
+    if (popups) api->ui_uses(g_mod, FH2_UI_USES_TOASTS);
+    CreateThread(nullptr, 0, [](LPVOID popups) -> DWORD {
         if (!g_api->wait_for_mods(20000)) return 0;
+        if (popups) {
+            FH2Toast t{sizeof t};
+            t.key = "Hello"; t.title = "Hello from AaaMod"; t.subtitle = "A test pop-up";
+            g_api->log(g_mod, g_api->show_toast(g_mod, &t) ? "pop-up queued" : "pop-up not queued");
+        }
         char line[160];
         if (auto* m = static_cast<const MathV1*>(g_api->get_interface("TestMod.Math", 1))) {
             std::snprintf(line, sizeof line, "TestMod.Math says %d", m->add(2, 3));
@@ -46,6 +56,6 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
             *static_cast<volatile int*>(nullptr) = 1;
         }
         return 0;
-    }, nullptr, 0, nullptr);
+    }, popups ? g_mod : nullptr, 0, nullptr);
     return 0;
 }

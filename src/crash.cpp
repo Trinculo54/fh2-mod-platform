@@ -15,7 +15,9 @@
 // add_dump_memory; and with fh2-mods\platform-dump.txt saying "full", the
 // whole process (several GB under Azimuth: only the newest is kept). The
 // report names each of those DLLs' PDB (GUID and age), for symbols later.
+#include "hud_layer.hpp"
 #include "platform.hpp"
+#include "platform_version.h"
 
 #include <windows.h>
 #include <dbghelp.h>
@@ -49,7 +51,13 @@ Range g_ranges[kMaxDumpRanges];
 std::atomic<int> g_nranges{0};
 std::atomic_flag g_ranges_mu = ATOMIC_FLAG_INIT;
 bool g_full_dump = false; // fh2-mods\platform-dump.txt
+// Where crashes go after ours: the filter that was there when ours went in (Azimuth's, or
+// Windows'), and one installed after ours that recheck_crash_handler put ours back in front of.
+// They're kept apart because a filter like the C runtime's passes crashes on to the one it
+// replaced, which is ours: handing them back to it each time would go round the two until the
+// stack overflowed.
 LPTOP_LEVEL_EXCEPTION_FILTER g_prev = nullptr;
+std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER> g_taken{nullptr};
 std::atomic<bool> g_in_crash{false};
 LONG WINAPI on_crash(EXCEPTION_POINTERS* ep);
 
@@ -236,6 +244,8 @@ void put_pdb(Out& o, const Dll& d, bool& said) {
 }
 
 LONG WINAPI on_crash(EXCEPTION_POINTERS* ep) {
+    // Here again: the filter we took over handing the crash back, or another thread crashing
+    // meanwhile. On to the first filter only, never back to the one we took over.
     if (!ep || !ep->ExceptionRecord || g_in_crash.exchange(true))
         return g_prev ? g_prev(ep) : EXCEPTION_CONTINUE_SEARCH;
     const EXCEPTION_RECORD& er = *ep->ExceptionRecord;
@@ -255,6 +265,8 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS* ep) {
     where(er.ExceptionAddress, at, sizeof at);
     o.put("CRASH: %s (0x%08lX) at %s, thread %lu", exception_name(er.ExceptionCode), er.ExceptionCode, at,
           GetCurrentThreadId());
+    o.put("platform: FH2 Mod Platform %s", PLATFORM_BUILD_STR);
+    if (const char* hud = hud_layer_crash_text(); hud[0]) o.put("HUD layer: %s", hud);
     if (launched_game() == Launched::other)
         o.put("game: %s, not the Forza Horizon 2 the platform and its mods are made for; they left it alone",
               launched_game_name());
@@ -336,6 +348,9 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS* ep) {
                   t.wMinute, t.wSecond);
     write_session_crashed(g_dir, report);
 
+    // Then the filter we took over, if there is one (if it passes the crash on, that's back to us,
+    // and so on to the first one), or else the first one.
+    if (const auto taken = g_taken.load()) return taken(ep);
     return g_prev ? g_prev(ep) : EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -399,11 +414,11 @@ void add_crash_dll(const LoadedDll& m) {
 }
 
 // Azimuth may install its own filter after we did; put ours back in front,
-// passing crashes on to theirs.
+// passing crashes on to theirs. Not as g_prev: see on_crash.
 void recheck_crash_handler() {
     LPTOP_LEVEL_EXCEPTION_FILTER cur = SetUnhandledExceptionFilter(on_crash);
     if (cur != on_crash) {
-        g_prev = cur;
+        g_taken = cur;
         plog("crash reports: another crash handler was installed after the platform's; both run");
     }
 }

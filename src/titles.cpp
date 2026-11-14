@@ -22,6 +22,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <cwchar>
 #include <string>
@@ -287,6 +288,134 @@ void watch_launched_game(std::function<void()> fh2, std::function<void()> other)
         }
         other();
     }).detach();
+}
+
+// ---- the title gate (platform 2.9.0) ------------------------------------------------
+//
+// The platform loads as azimuth.exe starts, before the player picks a game in the launcher, and it used to load
+// every FH2 mod there and then. When the pick was another game, the platform kept its own hooks out of it, but the
+// mods' DLLs were already in the process: their DllMain and fh2mod_init had run, with whatever they start outside
+// the platform (their own hooks on input or the window, threads, overlays).
+//
+// So in an Azimuth folder set up for another game besides FH2, the loader waits here for the pick:
+//  - another game: no mod is loaded this session;
+//  - FH2: the mods load now. They have to be ready before the game runs, since it reads its string tables, files
+//    and database once as it starts, so Azimuth is held meanwhile. Its import of VirtualProtect is pointed at
+//    hold_until_ready, and the first time Azimuth makes part of the game executable, that call returns only once
+//    every fh2mod_init has. Only azimuth.exe's own import slot is changed.
+//
+// Mods load as Azimuth starts, as before, when FH2 is the only title set up, when Azimuth was told which game to
+// start (--skip-launcher, --game=), under Wine and Proton (the game isn't always mapped at 0x140000000 there), and
+// when azimuth.exe has no VirtualProtect import to hold it by.
+namespace {
+
+using ProtectFn = BOOL(WINAPI*)(LPVOID, SIZE_T, DWORD, PDWORD);
+ProtectFn g_azimuth_protect = nullptr; // what Azimuth's VirtualProtect import pointed at
+HANDLE g_gate_ready         = nullptr; // the loader's event: every fh2mod_init has returned
+std::atomic<bool> g_gate_held{false};
+
+BOOL WINAPI hold_until_ready(LPVOID at, SIZE_T n, DWORD protect, PDWORD old) {
+    const BOOL ok   = g_azimuth_protect(at, n, protect, old);
+    const DWORD err = GetLastError();
+    constexpr DWORD kExecutable = PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (ok && (protect & kExecutable) && launched_game() != Launched::other &&
+        VirtualQuery(at, &mbi, sizeof mbi) == sizeof mbi &&
+        mbi.AllocationBase == reinterpret_cast<void*>(kGamesBase) && mbi.Type != MEM_IMAGE) {
+        // A code section is in by now, so the header is whole and FH2's counts at once. Another game's is left to
+        // the loader's 50 ms rule.
+        Header h;
+        if (launched_game() == Launched::not_yet && header_at_base(h) && h.fh2())
+            g_state.store(static_cast<int>(Launched::fh2), std::memory_order_release);
+        if (launched_game() == Launched::fh2 && WaitForSingleObject(g_gate_ready, 0) != WAIT_OBJECT_0) {
+            const bool first   = !g_gate_held.exchange(true); // Azimuth may get here on more than one thread
+            const ULONGLONG t0 = GetTickCount64();
+            if (first) plog("title gate: Azimuth is held at the game's start until the mods are ready");
+            const bool ready = WaitForSingleObject(g_gate_ready, 120000) == WAIT_OBJECT_0;
+            if (first)
+                plog(ready ? "title gate: the mods were ready " + std::to_string(GetTickCount64() - t0) +
+                                 " ms later; the game starts"
+                           : "title gate: the mods weren't ready after 2 minutes; the game starts without waiting "
+                             "for them any longer");
+        }
+    }
+    SetLastError(err);
+    return ok;
+}
+
+// Points azimuth.exe's import of VirtualProtect at hold_until_ready.
+bool hold_azimuth() {
+    auto* image     = reinterpret_cast<char*>(GetModuleHandleW(nullptr));
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(image + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64) return false;
+    const auto dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!dir.VirtualAddress || dir.Size < sizeof(IMAGE_IMPORT_DESCRIPTOR)) return false;
+    for (auto* dll = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(image + dir.VirtualAddress); dll->Name; ++dll) {
+        if (!dll->OriginalFirstThunk) continue;
+        auto* names = reinterpret_cast<const IMAGE_THUNK_DATA64*>(image + dll->OriginalFirstThunk);
+        auto* slots = reinterpret_cast<IMAGE_THUNK_DATA64*>(image + dll->FirstThunk);
+        for (; names->u1.AddressOfData; ++names, ++slots) {
+            if (IMAGE_SNAP_BY_ORDINAL64(names->u1.Ordinal)) continue;
+            const auto* name = reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(image + names->u1.AddressOfData);
+            if (std::strcmp(reinterpret_cast<const char*>(name->Name), "VirtualProtect")) continue;
+            auto* slot        = reinterpret_cast<void**>(&slots->u1.Function);
+            g_azimuth_protect = reinterpret_cast<ProtectFn>(*slot);
+            DWORD old         = 0;
+            if (!VirtualProtect(slot, sizeof *slot, PAGE_READWRITE, &old)) return false;
+            InterlockedExchangePointer(slot, reinterpret_cast<void*>(&hold_until_ready));
+            VirtualProtect(slot, sizeof *slot, old, &old);
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+bool wait_for_launcher_pick(void* mods_ready) {
+    for (const auto& a : arguments())
+        if (!_wcsicmp(a.c_str(), L"--skip-launcher") || !_wcsnicmp(a.c_str(), L"--game=", 7)) return true;
+    int others = 0;
+    for (const auto& t : titles())
+        if (_wcsicmp(t.id.c_str(), kFH2Title)) ++others;
+    if (!others) return true;
+    const std::string folder = "title gate: this Azimuth folder is set up for " + std::to_string(others) +
+                               (others == 1 ? " other game" : " other games") + " besides Forza Horizon 2";
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (ntdll && GetProcAddress(ntdll, "wine_get_version")) {
+        plog(folder + ". Under Wine and Proton the mods load now all the same, as before");
+        return true;
+    }
+    g_gate_ready = static_cast<HANDLE>(mods_ready);
+    if (!hold_azimuth()) {
+        plog(folder + ", but azimuth.exe has no VirtualProtect import to hold the game by: the mods load now, as "
+                      "before");
+        return true;
+    }
+    plog(folder + ", so no mod is loaded until a game is picked");
+    // As watch_launched_game: another game's header has to stay the same for 50 ms before it counts.
+    Header seen;
+    ULONGLONG since = 0;
+    for (unsigned i = 0; launched_game() == Launched::not_yet; ++i) {
+        Header h;
+        if (!header_at_base(h)) {
+            seen = {};
+        } else if (h.fh2()) {
+            g_state.store(static_cast<int>(Launched::fh2), std::memory_order_release);
+        } else if (!(h == seen)) {
+            seen  = h;
+            since = GetTickCount64();
+        } else if (GetTickCount64() - since >= 50) {
+            settle_other(describe(h).name);
+        }
+        if (i % 200 == 199 && find_game()) g_state.store(static_cast<int>(Launched::fh2), std::memory_order_release);
+        if (launched_game() == Launched::not_yet) Sleep(5);
+    }
+    if (launched_game() == Launched::other) return false;
+    plog("title gate: Forza Horizon 2 was picked; loading the mods");
+    return true;
 }
 
 } // namespace fh2platform

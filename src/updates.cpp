@@ -193,9 +193,18 @@ void write_notice_file(const fs::path& azimuth, const std::wstring& name, const 
     for (const auto& l : lines) out << l << "\n";
 }
 
+std::vector<std::string> mod_title_lines(std::vector<std::string> notice, const std::string& update,
+                                         const std::vector<std::string>& status) {
+    if (!update.empty()) notice.push_back(update);
+    notice.insert(notice.end(), status.begin(), status.end());
+    return notice;
+}
+
 namespace {
 
-std::vector<std::string> notice_lines(const fs::path& azimuth) {
+std::vector<std::string> notice_lines(
+    const fs::path& azimuth,
+    const std::function<std::vector<std::string>(const std::wstring&, const std::vector<std::string>&)>& lines_for = {}) {
     std::error_code ec;
     std::vector<std::pair<std::wstring, std::vector<std::string>>> notes; // sorted by mod name
     for (const auto& e : fs::directory_iterator(notices_dir(azimuth), ec)) {
@@ -208,6 +217,7 @@ std::vector<std::string> notice_lines(const fs::path& azimuth) {
         std::vector<std::string> lines;
         while (std::getline(in, text))
             if (!(text = trim(text)).empty()) lines.push_back(text);
+        if (lines_for) lines = lines_for(e.path().stem().wstring(), lines);
         if (!lines.empty()) notes.emplace_back(e.path().stem().wstring(), lines);
     }
     std::sort(notes.begin(), notes.end());
@@ -220,15 +230,50 @@ std::vector<std::string> notice_lines(const fs::path& azimuth) {
 
 bool any_notices(const fs::path& azimuth) { return !notice_lines(azimuth).empty(); }
 
-std::wstring title_with_notices(const fs::path& azimuth, const std::wstring& to_start) {
+std::wstring title_with_notices(
+    const fs::path& azimuth, const std::wstring& to_start,
+    const std::function<std::vector<std::string>(const std::wstring&, const std::vector<std::string>&)>& lines_for,
+    const std::vector<std::string>& last) {
     // "TO START" is its own text box beside "PRESS (A)", centred vertically
     // on it. Blank lines above balance the notice lines below so it stays
     // level with the button and the notices stack underneath; one extra
     // blank line evens out the box sitting a little high (checked in game).
+    //
+    // The box doesn't wrap, and a long line ran off the right of the screen (2.9.0 rc1: 59 Latin letters just fit,
+    // 63 were cut). So a line is cut at a space once it's past kBudget; Japanese, Korean and Chinese characters
+    // count double, and a line can be cut before any of them. The budget is the 59 that fit: the platform's own
+    // lines are up to 59 letters in some languages (Spanish, French), and they stay whole.
+    constexpr int kBudget = 59;
+    const auto wide       = [](wchar_t c) { return c >= 0x1100; };
     std::wstring above, below;
-    for (const auto& l : notice_lines(azimuth)) {
+    std::vector<std::string> lines = notice_lines(azimuth, lines_for);
+    lines.insert(lines.end(), last.begin(), last.end());
+    const auto add = [&](std::wstring piece) {
+        while (!piece.empty() && piece.back() == L' ') piece.pop_back();
         above += L"\n";
-        below += L"\n" + widen(l);
+        below += L"\n" + piece;
+    };
+    for (const auto& l : lines) {
+        std::wstring cur;
+        std::size_t cut = 0;   // where cur can be cut: after its last space, or before its last wide character
+        int units = 0;
+        for (const wchar_t c : widen(l)) {
+            if (wide(c) && !cur.empty()) cut = cur.size();
+            cur += c;
+            units += wide(c) ? 2 : 1;
+            if (c == L' ') {
+                cut = cur.size();
+                continue;
+            }
+            if (units > kBudget && cut > 0) {
+                add(cur.substr(0, cut));
+                cur.erase(0, cut);
+                cut   = 0;
+                units = 0;
+                for (const wchar_t k : cur) units += wide(k) ? 2 : 1;
+            }
+        }
+        add(cur);
     }
     if (below.empty()) return to_start;
     return above + L"\n" + to_start + below;

@@ -9,6 +9,7 @@
 // these files; keeping to it means old and new mods never fight over it.
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -32,9 +33,21 @@ std::string latest_release(const std::filesystem::path& azimuth, const std::wstr
 void write_notice_file(const std::filesystem::path& azimuth, const std::wstring& name, const std::wstring& dll,
                        const std::vector<std::string>& lines);
 
+// A mod's title-screen lines, in the order its notice file has them: its own notice, the platform's line
+// that a newer version is out (`update`, "" for none), then the platform's other lines about it (`status`).
+// The same order whether the notice is the file's or tr()'s in a string table's language.
+std::vector<std::string> mod_title_lines(std::vector<std::string> notice, const std::string& update,
+                                         const std::vector<std::string>& status);
+
 // The "TO START" text (IDS_To_Start in Main.str) with every installed mod's
 // notice lines under it, or `to_start` unchanged when there are none.
-std::wstring title_with_notices(const std::filesystem::path& azimuth, const std::wstring& to_start);
+// `lines_for` (may be empty) can swap a mod's lines (its notice file's name, without .txt) for others:
+// its notice in the language of the string table being written (API 10). `last` comes after every mod's lines:
+// the platform's own, which aren't in the notices folder (older platforms read that folder too).
+std::wstring title_with_notices(
+    const std::filesystem::path& azimuth, const std::wstring& to_start,
+    const std::function<std::vector<std::string>(const std::wstring& name, const std::vector<std::string>& lines)>& lines_for = {},
+    const std::vector<std::string>& last = {});
 bool any_notices(const std::filesystem::path& azimuth);
 
 constexpr uint16_t kToStartKey = 0x18F0; // IDS_To_Start in Main.str

@@ -5,7 +5,10 @@
 // user's SID; without one, there's no pipe), and serves one request at a time on its own thread.
 // A request is one line of UTF-8: "list", or "<mod> <command> [args]" (a mod name with spaces
 // in double quotes); the reply is text, and the connection then closes.
+// The platform's own commands ("Platform ui", platform 2.9.0) are listed and run like a mod's, but
+// adding them never starts the pipe: it starts for them only when the platform asks (Developer=1).
 #include "platform.hpp"
+#include "ui_templates.hpp"
 #include "updates.hpp"
 
 #include <windows.h>
@@ -102,11 +105,15 @@ std::string handle(std::string line) {
     }
     if (!known_mod) return "error: no mod called \"" + mod + "\" has commands (fh2mod list shows them)\n";
     if (!fn) return "error: " + mod + " has no command called \"" + name + "\" (fh2mod list shows them)\n";
+    if (stopped_online(owner))
+        return "error: " + owner->name + " was stopped for online play (FH2MP went online after it had started)\n";
     static char reply[kReplyMax];
     reply[0] = '\0';
     log_line(owner->name, "command: " + cname + (args.empty() ? "" : " " + args));
+    ui_note_callback(owner);   // a pop-up in reply to it counts as one (API 10)
     if (!call_command(fn, user, cname.c_str(), args.c_str(), reply, sizeof reply)) {
         log_line(owner->name, "crashed in its command " + cname);
+        ui_mod_faulted(owner);
         return "error: " + owner->name + "'s command " + cname + " crashed\n";
     }
     reply[sizeof reply - 1] = '\0';
@@ -187,9 +194,8 @@ void start() {
     }
 }
 
-} // namespace
-
-int command_add(FH2Mod* m, const char* name, const char* help, FH2CommandFn fn, void* user) {
+// Adds a command; `starts` says whether this one starts the pipe if it isn't running yet.
+int add(FH2Mod* m, const char* name, const char* help, FH2CommandFn fn, void* user, bool starts) {
     if (!m) return 0;
     if (!name_is(name)) {
         log_line(m->name, std::string("add_command: \"") + (name ? name : "") + "\" isn't a usable name (letters, digits, _)");
@@ -208,12 +214,22 @@ int command_add(FH2Mod* m, const char* name, const char* help, FH2CommandFn fn, 
                 return 0;
             }
         g_commands.push_back({m, name, help ? help : "", fn, user});
-        first     = !g_started;
-        g_started = true;
+        first     = starts && !g_started;
+        g_started = g_started || starts;
     }
     log_line(m->name, std::string("command: ") + name + (help && *help ? " (" + std::string(help) + ")" : ""));
     if (first) start();
     return 1;
+}
+
+} // namespace
+
+int command_add(FH2Mod* m, const char* name, const char* help, FH2CommandFn fn, void* user) {
+    return add(m, name, help, fn, user, true);
+}
+
+int command_add_platform(FH2Mod* m, const char* name, const char* help, FH2CommandFn fn, void* user, bool start_pipe) {
+    return add(m, name, help, fn, user, start_pipe);
 }
 
 } // namespace fh2platform
