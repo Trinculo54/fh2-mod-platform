@@ -117,6 +117,9 @@ struct Row {
 };
 std::mutex g_mu;                     // guards the list (rows are never removed)
 std::deque<Row> g_rows;
+// A choice row with more choices than a page of a list box shows: A opens them as a list to pick from (platform
+// 2.9.1; show_pick_list), since left and right alone take a press for each. A row's number of choices never changes.
+bool picks_from_list(const Row& r) { return r.choices.size() > kBoxPageSize; }
 // Link rows (API 6): only on their mod's page under Installed mods, where A opens the URL.
 struct LinkRow {
     FH2Mod* mod;
@@ -359,9 +362,8 @@ void log_set(const Row* r, const std::string& value) {
     if (r->mod != &g_hub_owner) log_line(r->mod->name, r->key + " set to " + value + " on its MODS page");
 }
 
-void slider_set(Row* r, void* obj, uint8_t* value) {
-    float f = 0;
-    std::memcpy(&f, value + 0x28, sizeof f);
+// A slider or choice row moved to `f`, by the player on the row itself or through a choice row's pick list.
+void slider_apply(Row* r, void* obj, float f) {
     if (!std::isfinite(f)) return;
     f               = snap(*r, f);
     const float old = r->fvalue.exchange(f);
@@ -388,7 +390,13 @@ void slider_set(Row* r, void* obj, uint8_t* value) {
             if (!call_on_slide(r->on_slide, r->user, r->key.c_str(), f)) crashed_in(r->mod, "on_slide for " + r->key);
         }
     }
-    if (r->restart) notify_panel(obj);   // the panel names the rows waiting for a restart
+    if (r->restart && obj) notify_panel(obj);   // the panel names the rows waiting for a restart
+}
+
+void slider_set(Row* r, void* obj, uint8_t* value) {
+    float f = 0;
+    std::memcpy(&f, value + 0x28, sizeof f);
+    slider_apply(r, obj, f);
 }
 
 void __cdecl row_set(void* desc, void* obj, uint8_t* value) {
@@ -1300,6 +1308,7 @@ std::string list_rows(const std::vector<PageItem>& items, const std::string& pre
             const std::string label = (it.label.empty() ? r.label : it.label) + (r.restart ? " *" : "");
             std::string desc = it.description.empty() ? r.description : it.description;
             if (r.restart) desc = join_sentences(desc, tr("Takes effect the next time you start the game."));
+            if (picks_from_list(r)) desc = join_sentences(desc, tr("Press A to pick from a list."));
             data_item(label, desc);
             if (!r.choices.empty()) {
                 res += choice_resources(r, it.row);
@@ -2399,11 +2408,15 @@ struct RowAct {
     int view = 0;
     std::string select;
     std::string name;
+    int pick = -1;   // a choice row with a pick list (picks_from_list): its index in g_rows
 };
 std::vector<RowAct> row_acts(const std::vector<PageItem>& items, const std::string& first_name, const std::string& auto_names = "") {
     std::vector<RowAct> acts;
-    for (std::size_t n = 0; n < items.size(); ++n)
-        acts.push_back({items[n].open, items[n].open_view, items[n].select, item_name(items[n], n, first_name, auto_names)});
+    for (std::size_t n = 0; n < items.size(); ++n) {
+        const int row   = items[n].row;
+        const bool pick = row >= 0 && static_cast<std::size_t>(row) < g_rows.size() && picks_from_list(g_rows[row]);
+        acts.push_back({items[n].open, items[n].open_view, items[n].select, item_name(items[n], n, first_name, auto_names), pick ? row : -1});
+    }
     return acts;
 }
 
@@ -4506,6 +4519,7 @@ bool custom_page_button(void* page, int j, int button, bool pressed) {
     return o_hud_page_button(page, button, pressed);
 }
 
+void show_pick_list(void* page, int row);   // with the message boxes, below
 bool d_hud_page_button(void* page, int button, bool pressed) {
     if (page && page == g_help_page.load() && button == kButtonA) return true;   // information only: A doesn't leave it
     if (page && (page == g_updates_page.load() || page == g_about_page.load()) && button == kButtonA) {
@@ -4567,6 +4581,10 @@ bool d_hud_page_button(void* page, int button, bool pressed) {
             if (v < g_view_acts.size() && n >= 0 && static_cast<std::size_t>(n) < g_view_acts[v].size()) act = &g_view_acts[v][n];
         }
         if (button == kButtonA && act) {
+            if (act->pick >= 0 && !on_page) {   // a choice row with many choices: its list
+                if (pressed) show_pick_list(page, act->pick);
+                return true;
+            }
             if (!act->url.empty()) {   // a link row: opens it, and stays
                 if (pressed) {
                     play_sound(kSoundSelect);
@@ -6218,16 +6236,9 @@ std::string box_refusal(const UiCallbackState* cb, FH2Mod* m) {
     return "";
 }
 
-} // namespace
-
-int settings_show_box(FH2Mod* m, const FH2MessageBox* box) {
-    if (!m) return 0;
-    BoxSpec spec;
-    std::string why;
-    if (!read_box(box, spec, why)) {
-        log_line(m->name, "show_message_box: " + why + ", so it isn't shown");
-        return 0;
-    }
+// A box from its spec: a mod's (settings_show_box), or a choice row's pick list. 1 when it's shown, or waiting for
+// its page to open.
+int show_box_spec(FH2Mod* m, const BoxSpec& spec) {
     UiCallbackState* cb = ui_callback_now();
     if (const std::string no = box_refusal(cb, m); !no.empty()) {
         log_line(m->name, "show_message_box: " + no + ", so " + (spec.key.empty() ? std::string("the box") : "box " + spec.key) + " isn't shown");
@@ -6277,6 +6288,51 @@ int settings_show_box(FH2Mod* m, const FH2MessageBox* box) {
     }
     log_line(m->name, "message box shown: " + b.shown_title + what);
     return 1;
+}
+
+// ---- a choice row's pick list (platform 2.9.1) ------------------------------------------------
+// A on a choice row with more choices than a list box's page (picks_from_list) shows them in the game's message
+// box, eight to a page, opening on the page with the one chosen now. The pick is applied as if the player had
+// stepped the row to it: the mod's on_change, the log, the restart panel, and the row shows it (its binding is told
+// the value changed). Back and B leave the row as it was. The box counts as the row's mod's, so it keeps to the
+// rules of a mod's own boxes: one at a time, and none once the mod is stopped for online play.
+void pick_chosen(void* user, const char*, uint32_t choice) {
+    Row* r = static_cast<Row*>(user);
+    if (!r || choice == FH2_BOX_BACK || choice >= r->choices.size()) return;
+    void* obj = g_view_obj.load();
+    slider_apply(r, obj, static_cast<float>(choice));
+    if (obj && r->desc) notify_changed(obj, r->desc);
+}
+
+void show_pick_list(void* page, int row) {
+    if (row < 0 || static_cast<std::size_t>(row) >= g_rows.size()) return;
+    Row* r = &g_rows[row];
+    BoxSpec spec;
+    {
+        std::scoped_lock lk{g_mu};   // set_setting_text can rename the row and its choices from a mod's thread
+        spec.title = cut_text(r->label, kBoxTitleChars);
+        for (const std::string& c : r->choices) spec.choices.push_back(cut_text(c, kBoxChoiceChars));
+    }
+    spec.key       = "pick." + r->key;
+    spec.focus     = static_cast<uint32_t>(std::max(0, r->value.load()));
+    spec.on_choose = &pick_chosen;
+    spec.user      = r;
+    play_sound(kSoundSelect);
+    UiCallback cb{r->mod, UiCb::setting, page};
+    if (!show_box_spec(r->mod, spec)) slog("couldn't show the list of " + r->key + "'s choices; left and right still change it");
+}
+
+} // namespace
+
+int settings_show_box(FH2Mod* m, const FH2MessageBox* box) {
+    if (!m) return 0;
+    BoxSpec spec;
+    std::string why;
+    if (!read_box(box, spec, why)) {
+        log_line(m->name, "show_message_box: " + why + ", so it isn't shown");
+        return 0;
+    }
+    return show_box_spec(m, spec);
 }
 
 int pages_set_help(FH2Mod* m, const char* key, const FH2Prompt* prompts, uint32_t count) {

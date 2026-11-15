@@ -844,7 +844,9 @@ struct FH2Setting {
        come out as an On/Off row, so only add one when api_version >= 9.
        A row takes up to 100 choices from platform 2.9.1, and 32 before: an
        older platform refuses a longer list (add_setting returns 0), so
-       when it does, add the choices as two rows instead. ---- */
+       when it does, add the choices as two rows instead. From 2.9.1 the
+       player can also press A on a row with more than eight choices to
+       pick from a list of them; on_change gets the pick as usual. ---- */
     const char* const* choices;    /* UTF-8, shown as given: "LB", "RB", "A" ... */
     uint32_t choice_count;         /* 2 to FH2_SETTING_MAX_CHOICES */
 };

@@ -979,6 +979,11 @@ int wmain(int argc, wchar_t** argv) {
                 const std::size_t what = installed.find("Heading=\"What it does\"", about), load = installed.find("Heading=\"Load this mod *\"", about);
                 CHECK(own != std::string::npos && own < keys && keys < key_row && key_row < page && page < about && about < what && what < load &&
                       load != std::string::npos);
+                // a row with more than eight choices says A opens its list (platform 2.9.1): the hotkey's keys, not the three buttons
+                const auto item = [&](std::size_t at) {
+                    return at == std::string::npos ? std::string() : installed.substr(at, installed.find("Heading=\"", at + 9) - at);
+                };
+                CHECK(has(item(key_row), "Press A to pick from a list.\"") && !has(item(own), "Press A to pick"));
                 CHECK(has(installed, "Tag=\"MODS\" Content=\"TESTMOD\"") && has(installed, "Label=\"Load this mod *\""));
                 CHECK(has(installed, "Description=\"Off leaves it in fh2-mods, but the game doesn't load it. Takes effect the next time you start the game.\""));
                 CHECK(!has(installed, "(TestMod)\"") && !has(installed, "Load TestMod"));   // no "(Mod)" after descriptions; the old switch
