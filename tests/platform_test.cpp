@@ -482,7 +482,7 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("---- platform.log\n%s----\n", log.c_str());
 
     if (phase == L"full") {
-        CHECK(has(log, "FH2 Mod Platform 2.9.1 (API 10)"));
+        CHECK(has(log, "FH2 Mod Platform 2.9.1 (API 11)"));
         CHECK(has(log, "media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride"));
         // decided once, at start, and said so; the files, text and database below are where it said
         CHECK(has(log, own_layer() ? "media overrides: this Azimuth folder has data\\titles\\1A96545B (where Azimuth keeps the game's T:\\ "
@@ -743,6 +743,13 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] set_page_hints: Stats has 2 hints") && has(log, "[TestMod] set_page_hints: Tools: hint 2 is cut to 80 characters") &&
               has(log, "[TestMod] set_page_hints: Tools has 3 hints"));
         CHECK(has(log, "[TestMod] page Tools's hint line: Ready. (attention), from the next time it opens"));
+        // page texts (API 11): a name is checked, another mod's is refused, and a change nobody shows yet is nothing
+        CHECK(has(log, "[TestMod] page text TestMod_Label: {Binding FH2Mod_Text_TestMod_Label} in a game page it sets with set_file shows its text") &&
+              has(log, "[AaaMod] page text Shared_Text: {Binding FH2Mod_Text_Shared_Text}"));
+        CHECK(has(log, "[TestMod] add_page_text: \"bad name\" isn't a name (1 to 40 letters, digits or _)") &&
+              has(log, "[TestMod] add_page_text: no function to ask for the text") &&
+              has(log, "[TestMod] add_page_text: Shared_Text is AaaMod's; not added"));
+        CHECK(has(log, "[TestMod] page texts: added 11, the wrong ones 0"));
         CHECK(has(log, "[TestMod] show_page_hint: Tools has no hint 9 (it has 3; set them with set_page_hints)") &&
               has(log, "[TestMod] show_page_hint: 7 isn't a hint kind (FH2_HINT_INFO, _ATTENTION or _FAULT)"));
         // the tip TestMod marked seen is in platform-seen.txt, by its DLL's name (written on the store's own thread)
@@ -821,7 +828,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(id.size() >= 17 && id[8] == '-' && id[15] == '-' && id.substr(16) == std::to_string(GetCurrentProcessId()));
             CHECK(has(log, ("session " + id + ": started ").c_str()));
             const std::string copy = slurp(fs::path(L"fh2-mods\\platform-logs") / ("platform-" + id + ".log"));
-            CHECK(has(copy, "FH2 Mod Platform 2.9.1 (API 10)") && has(copy, "[TestMod] session id "));
+            CHECK(has(copy, "FH2 Mod Platform 2.9.1 (API 11)") && has(copy, "[TestMod] session id "));
             CHECK(slurp(fs::path(L"TestModData\\logs") / (id + ".log")) == "test mod's own log\n");
             CHECK(has(log, ("[TestMod] session log: TestModData\\logs\\" + id + ".log (the newest 3 kept)").c_str()));
             CHECK(has(log, "[TestMod] bad log folder refused") &&

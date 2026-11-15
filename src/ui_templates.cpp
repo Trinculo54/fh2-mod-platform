@@ -80,6 +80,9 @@ int api_show_message_box(FH2Mod* m, const FH2MessageBox* box) { return settings_
 int api_set_page_help(FH2Mod* m, const char* key, const FH2Prompt* prompts, uint32_t count) { return pages_set_help(m, key, prompts, count); }
 int api_set_page_hints(FH2Mod* m, const char* key, const char* const* texts, uint32_t count) { return pages_set_hints(m, key, texts, count); }
 int api_show_page_hint(FH2Mod* m, const char* key, int index, uint32_t kind) { return pages_show_hint(m, key, index, kind); }
+// page texts (API 11, settings.cpp)
+int api_add_page_text(FH2Mod* m, const char* name, FH2PageTextFn get, void* user) { return pages_add_text(m, name, get, user); }
+void api_page_text_changed(FH2Mod* m, const char* name, void* page) { pages_text_changed(m, name, page); }
 
 // ---- the callback scope and faults -------------------------------------------------------------------------------
 
@@ -102,6 +105,8 @@ void fill_ui_api(FH2ModApi& api) {
     api.set_page_help    = api_set_page_help;
     api.set_page_hints   = api_set_page_hints;
     api.show_page_hint   = api_show_page_hint;
+    api.add_page_text     = api_add_page_text;
+    api.page_text_changed = api_page_text_changed;
     ui_sounds_prepare(&api);
 }
 

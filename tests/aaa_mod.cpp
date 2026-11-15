@@ -17,11 +17,17 @@ struct MathV1 {
     int (*add)(int, int);
 };
 
+// A page text (API 11) with a name TestMod asks for too: AaaMod starts first, so it's AaaMod's.
+static void shared_text(void*, void*, char* out, size_t size) {
+    if (size) out[0] = 0;
+}
+
 FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     if (api->api_version < 2) return 1;
     g_api = api;
     FH2ModInfo info{sizeof info, "AaaMod", "0.5.0", nullptr, FH2MOD_PLATFORM_VERSION, 0};
     g_mod = api->register_mod(&info);
+    if (api->api_version >= 11 && g_mod) api->add_page_text(g_mod, "Shared_Text", &shared_text, nullptr);
     const char data[] = "from AaaMod";
     api->set_file(g_mod, "drivatarglobalcache/DefaultCache.bin", data, sizeof data - 1);
     api->add_sql(g_mod, "UPDATE NoSuchTable SET x = 1");

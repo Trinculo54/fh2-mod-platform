@@ -15,6 +15,9 @@ int ui_sounds_play(FH2Mod* mod, uint32_t sound);
 bool ui_sound_play_direct(uint32_t sound, uint32_t* code);
 // fill_ui_api: the API the sounds' own hook is made through.
 void ui_sounds_prepare(const FH2ModApi* api);
+// Has `fn` called at every tick of the game's thread from now on (the sounds' own tick, hooked the first time it's wanted): for
+// settings.cpp's page texts. From any thread, as often as wanted. False once the tick couldn't be hooked this session.
+bool ui_tick_also(void (*fn)());
 // The mod was stopped for online play (platform.cpp's go_online): its sounds waiting for the game's tick go.
 void ui_sounds_mod_stopped(FH2Mod* mod);
 

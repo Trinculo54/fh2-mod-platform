@@ -736,6 +736,144 @@ uint8_t* hub_tile_descriptor(int k) {
     return d;
 }
 
+// ---- page texts (API 11, platform 2.9.1) ----------------------------------------------------
+// A mod's own text in one of the game's pages: the page's XAML (a game UI file the mod replaced with set_file) binds
+// FH2Mod_Text_<name>, and the mod's `get` says what each page object that reads it shows. The name tag over a car is
+// one page per car (AR_OpponentLabel), so each tag can show its own: QuickChat's chat pill. An AVUI String, like the
+// MODS tab's tile names. The pages that have read a text are kept with the vtable they had then, so a refresh skips
+// one the game has freed or made into something else since; a page of the same class in its place just reads again.
+struct PageText {
+    FH2Mod* mod = nullptr;
+    std::string name, prop;   // "QuickChat_Pill", "FH2Mod_Text_QuickChat_Pill"
+    FH2PageTextFn get = nullptr;
+    void* user        = nullptr;
+    uint8_t* desc     = nullptr;
+    struct Reader {
+        void *page, *vtable;
+    };
+    std::vector<Reader> readers;      // at most kPageTextReaders, the oldest dropped
+    std::set<std::string> texts;      // the different texts served: tile_string keeps each for the session
+    bool told_full = false, told_crash = false;
+};
+constexpr std::size_t kPageTextReaders = 64, kPageTextTexts = 256, kPageTextName = 40;
+std::mutex g_page_text_mu;
+std::deque<PageText> g_page_texts;                                // only grows: the descriptors point into it
+std::vector<std::pair<PageText*, void*>> g_page_text_pending;     // refreshes waiting for the game's tick (page null: all)
+std::atomic<bool> g_page_text_no_tick{false};
+
+void* vtable_of(void* obj) {
+    __try {
+        return obj && readable(obj, 8) ? *reinterpret_cast<void**>(obj) : nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+bool call_page_text(FH2PageTextFn fn, void* user, void* page, char* out, std::size_t n) {
+    __try {
+        fn(user, page, out, n);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void** __cdecl page_text_get(void** out, void* desc, void* obj) {
+    *out = nullptr;
+    FH2Mod* mod       = nullptr;
+    FH2PageTextFn get = nullptr;
+    void* user        = nullptr;
+    PageText* t       = nullptr;
+    {
+        std::scoped_lock lk{g_page_text_mu};
+        for (PageText& p : g_page_texts)
+            if (p.desc == desc) t = &p;
+        if (t) {
+            mod = t->mod, get = t->get, user = t->user;
+            void* vt        = vtable_of(obj);
+            const auto seen = std::find_if(t->readers.begin(), t->readers.end(), [obj](const PageText::Reader& r) { return r.page == obj; });
+            if (seen != t->readers.end()) {
+                seen->vtable = vt;
+            } else if (vt) {
+                if (t->readers.size() >= kPageTextReaders) t->readers.erase(t->readers.begin());
+                t->readers.push_back({obj, vt});
+            }
+        }
+    }
+    char buf[512] = "";
+    bool crashed  = false;
+    if (get && !stopped_online(mod)) {
+        crashed              = !call_page_text(get, user, obj, buf, sizeof buf);
+        buf[sizeof buf - 1] = 0;
+        if (crashed) buf[0] = 0;
+    }
+    std::string shown = buf;
+    bool full         = false;
+    if (t) {
+        std::scoped_lock lk{g_page_text_mu};
+        if (!shown.empty() && !t->texts.count(shown)) {
+            if (t->texts.size() >= kPageTextTexts) {
+                full = !t->told_full;
+                t->told_full = true;
+                shown.clear();
+            } else {
+                t->texts.insert(shown);
+            }
+        }
+        if (crashed && t->told_crash) crashed = false;
+        if (crashed) t->told_crash = true;
+    }
+    if (crashed) crashed_in(mod, "page text " + t->name + "; it reads as empty when that happens");
+    if (full)
+        log_line(mod->name, "page text " + t->name + " has shown " + std::to_string(kPageTextTexts) +
+                                " different texts: the game keeps each one, so new ones read as empty for the rest of the session");
+    uint8_t* v = tile_string(shown);
+    InterlockedIncrement(reinterpret_cast<volatile LONG*>(v + 0x10));   // the caller releases it
+    *out = v;
+    return out;
+}
+
+uint8_t* page_text_descriptor(const wchar_t* n) {
+    static const uint8_t badge_type[] = {0x48, 0x8D, 0x05, 0x59, 0xB0, 0x02, 0x02, 0xC3};
+    const std::string prop = narrow(n);
+    std::scoped_lock lk{g_desc_mu};
+    std::scoped_lock lk2{g_page_text_mu};
+    for (PageText& t : g_page_texts) {
+        if (t.prop != prop) continue;
+        if (!t.desc && code_matches(RVA_BADGE_TYPE, badge_type, sizeof badge_type)) {
+            void* type = reinterpret_cast<TypeFn>(g_base + RVA_BADGE_TYPE)(0);
+            t.desc     = new_descriptor(t.prop.c_str(), reinterpret_cast<void*>(&page_text_get), reinterpret_cast<void*>(&badge_set), type);
+            if (t.desc) log_line(t.mod->name, "page text " + t.name + ": a page of the game's has bound it");
+        }
+        return t.desc;
+    }
+    return nullptr;
+}
+
+// The game's tick (ui_sounds.cpp's): the refreshes asked for since the last one.
+void page_text_tick() {
+    std::vector<std::pair<void*, void*>> raise;   // page, descriptor
+    {
+        std::scoped_lock lk{g_page_text_mu};
+        if (g_page_text_pending.empty()) return;
+        for (const auto& [t, page] : g_page_text_pending) {
+            if (!t->desc) continue;   // no page has bound it yet: the first read gets the text as it is then
+            for (auto r = t->readers.begin(); r != t->readers.end();) {
+                if (vtable_of(r->page) != r->vtable) {
+                    r = t->readers.erase(r);   // the page has gone
+                    continue;
+                }
+                if (!page || page == r->page) raise.push_back({r->page, t->desc});
+                ++r;
+            }
+        }
+        g_page_text_pending.clear();
+    }
+    std::sort(raise.begin(), raise.end());
+    raise.erase(std::unique(raise.begin(), raise.end()), raise.end());
+    for (const auto& [page, desc] : raise) notify_changed(page, desc);
+}
+
 // The panel under YOUR MODS' list (write_list_page's kPanelBound), the hint line: FH2Mod_PanelShown on the list
 // and on each mod's page, FH2Mod_PanelText what it says there, an AVUI String like the MODS tab's tile names. On the
 // list, a hint; on a mod's page, the legend for the rows marked *; on either, once a restart row has changed, the
@@ -1071,6 +1209,7 @@ uint8_t* d_find_property(uint8_t* type, uint8_t* name) {
     if (const int k = name_number(n, L"FH2Mod_HubTile_", kHubTexts); k >= 0) return hub_tile_descriptor(k);
     if (std::wcsncmp(n, L"FH2Mod_Slot_", 12) == 0) return slot_descriptor(n);
     if (std::wcsncmp(n, L"FH2Mod_Hud_", 11) == 0) return hud_layer_find(n);
+    if (std::wcsncmp(n, L"FH2Mod_Text_", 12) == 0) return page_text_descriptor(n);
     Row* r = row_by_prop(n);
     return r ? descriptor_for(r) : nullptr;
 }
@@ -6420,6 +6559,50 @@ int pages_show_hint(FH2Mod* m, const char* key, int index, uint32_t kind) {
                           (now || opening ? "" : ", from the next time it opens"));
     if (now) notify_panel(nullptr);
     return 1;
+}
+
+// ---- page texts (API 11): the API ----------------------------------------------------------
+
+int pages_add_text(FH2Mod* m, const char* name, FH2PageTextFn get, void* user) {
+    if (!m) return 0;
+    const std::string n = name ? name : "";
+    const bool good     = !n.empty() && n.size() <= kPageTextName &&
+                      std::all_of(n.begin(), n.end(), [](unsigned char c) { return std::isalnum(c) || c == '_'; });
+    if (!good || !get) {
+        log_line(m->name, "add_page_text: " + (get ? "\"" + n + "\" isn't a name (1 to " + std::to_string(kPageTextName) + " letters, digits or _)"
+                                                    : std::string("no function to ask for the text")));
+        return 0;
+    }
+    std::scoped_lock lk{g_page_text_mu};
+    for (PageText& t : g_page_texts) {
+        if (_stricmp(t.name.c_str(), n.c_str()) != 0) continue;
+        if (t.mod != m) {
+            log_line(m->name, "add_page_text: " + n + " is " + t.mod->name + "'s; not added");
+            return 0;
+        }
+        t.get  = get;
+        t.user = user;
+        return 1;
+    }
+    PageText& t = g_page_texts.emplace_back();
+    t.mod = m, t.name = n, t.prop = "FH2Mod_Text_" + n, t.get = get, t.user = user;
+    log_line(m->name, "page text " + n + ": {Binding " + t.prop + "} in a game page it sets with set_file shows its text");
+    return 1;
+}
+
+void pages_text_changed(FH2Mod* m, const char* name, void* page) {
+    if (!m || !name) return;
+    {
+        std::scoped_lock lk{g_page_text_mu};
+        PageText* found = nullptr;
+        for (PageText& t : g_page_texts)
+            if (t.mod == m && _stricmp(t.name.c_str(), name) == 0) found = &t;
+        if (!found || !found->desc) return;   // not its text, or no page shows it yet
+        if (g_page_text_pending.size() < 4096) g_page_text_pending.push_back({found, page});
+    }
+    if (!ui_tick_also(&page_text_tick) && !g_page_text_no_tick.exchange(true))
+        log_line(m->name, "page_text_changed: the game's tick couldn't be hooked this session, so a page text only changes when its page "
+                          "loads again");
 }
 
 int title_add(FH2Mod* m, const FH2TitleEntry* e) {

@@ -22,6 +22,9 @@ struct MathV1 {
 };
 static const MathV1 g_math{sizeof(MathV1), [](int a, int b) { return a + b; }};
 
+// A page text (API 11): what a game page bound to FH2Mod_Text_TestMod_Label would show.
+static void label_text(void*, void*, char* out, size_t size) { std::snprintf(out, size, "from TestMod"); }
+
 FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     g_api = api;
     FH2ModInfo info{sizeof info, "TestMod", "1.0.0", nullptr, "9.9.9", 0};
@@ -327,6 +330,19 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
         api->log(g_mod, ("ui templates: set_page_help " + std::to_string(helped) + ", set_page_hints " + std::to_string(hinted) + ", show_page_hint " +
                          std::to_string(shown) + ", the wrong ones " + std::to_string(wrong))
                             .c_str());
+        // page texts (API 11): added once (again is the same one), every wrong one refused, a change before any page shows it
+        if (api->api_version >= 11 && api->size >= offsetof(FH2ModApi, page_text_changed) + sizeof api->page_text_changed) {
+            const std::string too_long(41, 'a');
+            const int added = api->add_page_text(g_mod, "TestMod_Label", &label_text, nullptr) * 10 +
+                              api->add_page_text(g_mod, "TestMod_Label", &label_text, nullptr);
+            const int wrong = api->add_page_text(g_mod, "bad name", &label_text, nullptr) + api->add_page_text(g_mod, "", &label_text, nullptr) +
+                              api->add_page_text(g_mod, too_long.c_str(), &label_text, nullptr) +
+                              api->add_page_text(g_mod, "TestMod_NoFn", nullptr, nullptr) +
+                              api->add_page_text(g_mod, "Shared_Text", &label_text, nullptr);   // AaaMod's
+            api->page_text_changed(g_mod, "TestMod_Label", nullptr);
+            api->page_text_changed(g_mod, "NotThere", nullptr);
+            api->log(g_mod, ("page texts: added " + std::to_string(added) + ", the wrong ones " + std::to_string(wrong)).c_str());
+        }
         api->ui_uses(g_mod, FH2_UI_USES_OWN_SWITCH);
         fh2_helpers_init(api, g_mod);
         if (fh2ui_ui_status() == 0 && fh2ui_tip_seen("FirstTip") == 1 && fh2ui_notify_or_log("Test pop-up", "from the helper") == 1)

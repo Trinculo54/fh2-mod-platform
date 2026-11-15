@@ -618,7 +618,7 @@ static void check_eo_packs(const std::wstring& phase, char* game) {
     }
     log = slurp(L"fh2-mods\\platform.log");
     std::printf("---- platform.log\n%s----\n", log.c_str());
-    CHECK(has(log, "FH2 Mod Platform 2.9.1 (API 10)"));
+    CHECK(has(log, "FH2 Mod Platform 2.9.1 (API 11)"));
     CHECK(has(log, "media overrides: Extra Options is here, so mediaoverride is left to it"));
     std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
     std::fflush(stdout);
@@ -707,7 +707,7 @@ int wmain(int argc, wchar_t** argv) {
     Sleep(200);
     log = slurp(L"fh2-mods\\platform.log");
     std::printf("---- platform.log\n%s----\n", log.c_str());
-    CHECK(has(log, "FH2 Mod Platform 2.9.1 (API 10)"));
+    CHECK(has(log, "FH2 Mod Platform 2.9.1 (API 11)"));
     if (other_game) {
         Sleep(500); // whatever the platform would still do once the game is up
         log = slurp(L"fh2-mods\\platform.log");
