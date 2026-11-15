@@ -805,7 +805,7 @@ typedef struct FH2ModApi {
        {Binding FH2Mod_Text_<name>} then shows what `get` writes, asked for by each page
        object that reads it: the name tag over each car is one page per car, so each can show
        its own. `name` is 1 to 40 letters, digits or '_'; start it with your mod's name
-       ("QuickChat_Pill"). Call it from fh2mod_init, before the game loads the page. Returns
+       ("MyMod_Tag"). Call it from fh2mod_init, before the game loads the page. Returns
        1, or 0 for a bad name, no `get`, or a name another mod has. The text reads as empty
        while the menus' code doesn't match, on a platform before 2.9.1 (check api_version >=
        11 before calling), and once your mod is stopped for online play. Keep to a small set

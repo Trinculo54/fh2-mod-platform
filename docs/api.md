@@ -1232,7 +1232,7 @@ A text of yours in one of the game's own pages, for the pages the platform's tem
 How it fits together:
 
 1. Replace the game's page with `set_file` (a copy of the game's file with your text block added; not one of the platform's own files), and bind the text block to `{Binding FH2Mod_Text_<name>}`. The game's `StringVisConverter` hides an element while the text is empty.
-2. Call `add_page_text` from `fh2mod_init` with the same `name`: 1 to 40 letters, digits or `_`, starting with your mod's name (`QuickChat_Pill`). It returns 1, or 0 for a bad name, no `get`, or a name another mod has.
+2. Call `add_page_text` from `fh2mod_init` with the same `name`: 1 to 40 letters, digits or `_`, starting with your mod's name (`MyMod_Tag`). It returns 1, or 0 for a bad name, no `get`, or a name another mod has.
 3. `get` is called on the game's UI thread each time a page reads the text, with `page`, the object reading it, and writes UTF-8 into `out`, or `""` for nothing. Which page is which is yours to know: `page` is the game's object, so compare it with what your own hooks or reads tell you about that page, and don't keep it past the page's life. Keep `get` short and don't call into the game from it.
 4. When the text changes, call `page_text_changed` with the page it changed for, or NULL for every page that has read it. From any thread: the pages read it again at the game's next tick. A page the game has freed since is skipped.
 

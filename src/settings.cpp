@@ -739,12 +739,12 @@ uint8_t* hub_tile_descriptor(int k) {
 // ---- page texts (API 11, platform 2.9.1) ----------------------------------------------------
 // A mod's own text in one of the game's pages: the page's XAML (a game UI file the mod replaced with set_file) binds
 // FH2Mod_Text_<name>, and the mod's `get` says what each page object that reads it shows. The name tag over a car is
-// one page per car (AR_OpponentLabel), so each tag can show its own: QuickChat's chat pill. An AVUI String, like the
+// one page per car (AR_OpponentLabel), so each tag can show its own line. An AVUI String, like the
 // MODS tab's tile names. The pages that have read a text are kept with the vtable they had then, so a refresh skips
 // one the game has freed or made into something else since; a page of the same class in its place just reads again.
 struct PageText {
     FH2Mod* mod = nullptr;
-    std::string name, prop;   // "QuickChat_Pill", "FH2Mod_Text_QuickChat_Pill"
+    std::string name, prop;   // "MyMod_Tag", "FH2Mod_Text_MyMod_Tag"
     FH2PageTextFn get = nullptr;
     void* user        = nullptr;
     uint8_t* desc     = nullptr;
