@@ -19,8 +19,8 @@
 
 namespace fh2platform {
 
-const char* const kHudPartNames[kHudParts] = {"BAR", "CHIPS", "TIP", "PANEL", "COUNTDOWN", "FEED"};
-const char* const kHudPartProps[kHudParts] = {"Bar", "Chips", "Tip", "Panel", "Count", "Feed"};
+const char* const kHudPartNames[kHudParts] = {"BAR", "CHIPS", "TIP", "PANEL", "COUNTDOWN", "FEED", "CANVAS"};
+const char* const kHudPartProps[kHudParts] = {"Bar", "Chips", "Tip", "Panel", "Count", "Feed", "Canvas"};
 
 std::string hud_parts_text(uint32_t parts) {
     std::string s;
@@ -33,7 +33,7 @@ const char* hud_type_word(char t) { return t == 'b' ? "bool" : t == 'i' ? "int" 
 
 namespace {
 
-constexpr int kBar = 0, kChips = 1, kTip = 2, kPanel = 3, kCount = 4, kFeed = 5;
+constexpr int kBar = 0, kChips = 1, kTip = 2, kPanel = 3, kCount = 4, kFeed = 5, kCanvas = 6;
 bool has(uint32_t parts, int k) { return (parts & (1u << k)) != 0; }
 bool ring_parts(uint32_t parts) { return has(parts, kBar) || has(parts, kCount); }
 
@@ -88,7 +88,7 @@ std::string num(int i) { return std::to_string(i); }
 
 } // namespace
 
-std::vector<HudProp> hud_build_props(uint32_t parts) {
+std::vector<HudProp> hud_build_props(uint32_t parts, const std::vector<HudCanvas>& canvases) {
     std::vector<int> glyphs;
     for (const Glyph& g : kGlyphs) glyphs.push_back(g.v);
     const std::vector<int> two = {1, 2}, three = {1, 2, 3};
@@ -214,6 +214,20 @@ std::vector<HudProp> hud_build_props(uint32_t parts) {
             t.add(f + "Name", 's');
             t.add(f + "Text", 's');
             t.add(f + "Style", 'i', HudRole::content, {1, 2, 3});
+        }
+    }
+    if (has(parts, kCanvas)) {
+        t.part = kCanvas;
+        t.add("Canvas", 'b', HudRole::part_fade);
+        t.add("CanvasVis", 'b', HudRole::part_vis);
+        for (const HudCanvas& c : canvases) {
+            const std::string cv = "Cv" + num(c.layer);
+            t.add(cv + "On", 'b');   // this canvas is the one showing: its layer has the screen
+            const std::size_t first = t.props.size();
+            for (int i = 0; i < c.numbers; ++i) t.add(cv + "N" + num(i), 'f', HudRole::frame_value);
+            for (int i = 0; i < c.texts; ++i) t.add(cv + "T" + num(i), 's');
+            for (int i = 0; i < c.switches; ++i) t.add(cv + "B" + num(i), 'b');
+            for (std::size_t i = first; i < t.props.size(); ++i) t.props[i].canvas = true;
         }
     }
     return t.props;
@@ -717,6 +731,18 @@ void layer_feed(Xml& x) {
     x.close("Grid");
 }
 
+// The canvases, under the layer's other parts: for each, a Grid over the whole page that shows while its layer
+// has the screen. A canvas's XAML goes in at its placeholder once it has passed its own check (hud_splice).
+void layer_canvas(Xml& x, const std::vector<HudCanvas>& canvases) {
+    x.open("<Grid Style=\"{StaticResource FH2HL_Fade_Canvas}\"" + V("CanvasVis") + ">");
+    for (const HudCanvas& c : canvases) {
+        x.open("<Grid" + V("Cv" + num(c.layer) + "On") + ">");
+        x.line(hud_canvas_placeholder(c.layer));
+        x.close("Grid");
+    }
+    x.close("Grid");
+}
+
 void layer_count(Xml& x) {
     x.open("<Grid Style=\"{StaticResource FH2HL_Fade_Count}\"" + V("CountVis") + ">");
     x.open("<ed:Arc Width=\"220\" Height=\"220\" ArcThickness=\"4\" ArcThicknessUnit=\"Pixel\" StartAngle=\"0\" EndAngle=\"360\" "
@@ -817,10 +843,13 @@ std::string hud_resources_markup(uint32_t parts) {
     return x.s;
 }
 
-std::string hud_layer_markup(uint32_t parts) {
+std::string hud_canvas_placeholder(int layer) { return "<!-- FH2 Mod Platform: canvas " + std::to_string(layer) + " -->"; }
+
+std::string hud_layer_markup(uint32_t parts, const std::vector<HudCanvas>& canvases) {
     Xml x(12);
     x.line("<!-- FH2 Mod Platform: HUD layer -->");
     x.open("<Grid x:Name=\"FH2HL_Root\" Style=\"{StaticResource FH2HL_Root}\">");
+    if (has(parts, kCanvas)) layer_canvas(x, canvases);
     if (has(parts, kChips)) layer_chips(x);
     if (has(parts, kBar) || has(parts, kTip) || has(parts, kPanel)) {
         // the bar in row 1, the panel and the tip in row 0, 16 px above whatever is below them
@@ -1034,7 +1063,8 @@ char bound_kind(const XTag& t, std::string_view name, std::string_view value, st
         return 0;
     }
     if (name == "Text") return 's';
-    if (name == "ScaleX" || name == "ScaleY" || name == "X" || name == "Y" || name == "EndAngle" || name == "Angle") return 'f';
+    if (name == "ScaleX" || name == "ScaleY" || name == "X" || name == "Y" || name == "EndAngle" || name == "Angle" || name == "Opacity")
+        return 'f';
     why = "it's bound through " + std::string(name) + ", which the check doesn't know";
     return 0;
 }
@@ -1101,6 +1131,126 @@ std::size_t line_start(const std::string& page, std::size_t at) {
     return nl == std::string::npos ? 0 : nl + 1;
 }
 
+// The keys every page has: AnthemApp.xaml's and those of the dictionaries it merges, each at its own level.
+bool app_keys(const HudUi& ui, std::map<std::string, KeyDef>& known, int& dicts, std::string& why) {
+    std::string tag_why;
+    const std::string app = ui.read ? ui.read("AnthemApp.xaml") : std::string();
+    if (app.empty()) return why = "AnthemApp.xaml couldn't be read from UI.zip", false;
+    if (!collect_dict_keys(app, known, tag_why)) return why = "AnthemApp.xaml's tags: " + tag_why, false;
+    const std::string src = "Source=\"Resources/Anthem/";
+    for (std::size_t at = app.find(src); at != std::string::npos; at = app.find(src, at + 1)) {
+        const std::size_t b = at + 8, e = app.find('"', b);
+        if (e == std::string::npos) continue;
+        const std::string path = app.substr(b, e - b);
+        const std::string d    = ui.read(path.c_str());
+        if (d.empty()) return why = path + " couldn't be read from UI.zip", false;
+        if (!collect_dict_keys(d, known, tag_why)) return why = path + "'s tags: " + tag_why, false;
+        ++dicts;
+    }
+    return true;
+}
+
+bool ends_with(std::string_view s, std::string_view tail) { return s.size() >= tail.size() && s.substr(s.size() - tail.size()) == tail; }
+
+// A mod's canvas before it goes into the page (FH2HudCanvas in fh2mod_hud.h says what passes): its tags balance,
+// its elements are the page's kinds, every {...} is a binding to one of its own values where that kind of value
+// goes, a key every page has, x:Type or x:Null, and it brings no names, keys, resources or pictures of its own.
+// Then `block` gets the XAML with its N, T and B names made the page's (FH2Mod_Hud_Cv<layer>...), indented for
+// the page. False with why.
+bool canvas_block(const HudCanvas& c, const std::map<std::string, KeyDef>& known, const HudUi& ui, std::string& block, std::size_t& bindings,
+                  bool& ed, std::string& why) {
+    bindings = 0;
+    ed       = false;
+    if (c.xaml.find_first_not_of(" \t\r\n") == std::string::npos) return why = "its XAML is empty", false;
+    std::string tag_why;
+    if (!balanced(ui, c.xaml, tag_why)) return why = "its tags: " + tag_why, false;
+    std::vector<XTag> tags;
+    if (!scan_xml(c.xaml, [&](const XTag& t) { tags.push_back(t); }, tag_why)) return why = "its tags: " + tag_why, false;
+    static const char* const kNoAttr[] = {"x:Name", "Name", "x:Key", "x:Class", "x:Uid", "Source", "ImageSource", "UriSource"};
+    static const char* const kConv[]   = {", Converter={StaticResource A_FZBooleanToVisibilityConverter}}",
+                                          ", Converter={StaticResource A_FZBooleanToVisibilityConverter_Inverse}}"};
+    for (const XTag& t : tags) {
+        if (t.close) continue;
+        const std::string name(t.name);
+        const std::size_t colon = t.name.find(':');
+        if (colon != std::string_view::npos && t.name.substr(0, colon) != "local" && t.name.substr(0, colon) != "ed")
+            return why = "<" + name + "> has a prefix the HUD page doesn't have (it has local: and ed:)", false;
+        if (ends_with(t.name, ".Resources") || t.name == "ResourceDictionary")
+            return why = "<" + name + ">: a canvas can't have resources of its own", false;
+        if (t.name.rfind("ed:", 0) == 0) ed = true;
+        std::string bad;
+        each_attr(t.text, [&](std::string_view an, std::string_view av) {
+            if (!bad.empty()) return;
+            const std::string a(an), v(av);
+            for (const char* no : kNoAttr)
+                if (an == no) bad = a + " on a <" + name + ">: a canvas can't have names, keys or pictures of its own";
+            if (an.rfind("xmlns", 0) == 0) bad = a + " on a <" + name + ">: a canvas can't declare a namespace";
+            if (av.find("FH2Mod_") != std::string_view::npos) bad = a + "=\"" + v + "\" names a platform property: bind N<i>, T<i> or B<i>";
+            if (!bad.empty() || av.find('{') == std::string_view::npos) return;
+            if (av.rfind("{Binding ", 0) == 0) {
+                const char k    = av.size() > 9 ? av[9] : 0;
+                std::size_t e   = 10;
+                int n = 0, digs = 0;
+                for (; e < av.size() && av[e] >= '0' && av[e] <= '9' && digs < 3; ++e, ++digs) n = n * 10 + (av[e] - '0');
+                const int count = k == 'N' ? c.numbers : k == 'T' ? c.texts : k == 'B' ? c.switches : -1;
+                const std::string_view rest = e <= av.size() ? av.substr(e) : std::string_view();
+                const bool tail = rest == "}" || (k == 'B' && (rest == kConv[0] || rest == kConv[1]));
+                if (count < 0 || !digs || !tail) {
+                    bad = a + "=\"" + v + "\" isn't a plain {Binding N<i>}, {Binding T<i>} or {Binding B<i>} (a switch may have the "
+                          "boolean-to-Visibility converter)";
+                    return;
+                }
+                const std::string what = std::string(1, k) + std::to_string(n);
+                if (n >= count) {
+                    bad = "it binds " + what + ", but the canvas has " + std::to_string(count) + " of those (from " + std::string(1, k) + "0)";
+                    return;
+                }
+                std::string kwhy;
+                const char kind = bound_kind(t, an, av, kwhy);
+                const char want = k == 'N' ? 'f' : k == 'T' ? 's' : 'b';
+                if (!kind) bad = what + ": " + kwhy;
+                else if (kind != want) bad = what + " is a " + hud_type_word(want) + ", bound where a " + hud_type_word(kind) + " goes";
+                else ++bindings;
+                return;
+            }
+            for (const char* kind : {"{StaticResource ", "{DynamicResource "}) {
+                if (av.rfind(kind, 0) != 0) continue;
+                const std::string_view key = av.substr(std::strlen(kind), av.size() - std::strlen(kind) - 1);
+                if (av.back() != '}' || key.empty() || key.find_first_of("{}, ") != std::string_view::npos)
+                    bad = a + "=\"" + v + "\" isn't a plain " + kind + "K}";
+                else if (!known.count(std::string(key)))
+                    bad = "the resource key " + std::string(key) + " isn't one every page of the game has (UI.zip's application dictionaries)";
+                return;
+            }
+            if (av == "{x:Null}" || (av.rfind("{x:Type ", 0) == 0 && av.back() == '}' && av.find('{', 1) == std::string_view::npos)) return;
+            bad = a + "=\"" + v + "\" uses a {...} a canvas can't: its own N, T and B bindings, StaticResource, DynamicResource, x:Type and "
+                  "x:Null are what it can";
+        });
+        if (!bad.empty()) return why = bad, false;
+    }
+    if (bindings > kHudCanvasBindings)
+        return why = std::to_string(bindings) + " bindings, more than the " + std::to_string(kHudCanvasBindings) + " a canvas may have", false;
+    if (!styles_fit(std::vector<XTag>{}, tags, std::map<std::string, KeyDef>{}, known, why)) return false;
+    // its names made the page's own, in attribute values only, and its lines indented as the page's are
+    const std::string cv = "FH2Mod_Hud_Cv" + std::to_string(c.layer);
+    std::string x        = c.xaml;
+    for (const char q : {'"', '\''})
+        for (const char k : {'N', 'T', 'B'}) {
+            const std::string from = std::string(1, q) + "{Binding " + k, to = std::string(1, q) + "{Binding " + cv + k;
+            for (std::size_t at = x.find(from); at != std::string::npos; at = x.find(from, at + to.size())) x.replace(at, from.size(), to);
+        }
+    block.clear();
+    for (std::size_t at = 0; at < x.size();) {
+        std::size_t e = x.find('\n', at);
+        if (e == std::string::npos) e = x.size();
+        std::string_view line(x.data() + at, e - at);
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        if (line.find_first_not_of(" \t") != std::string_view::npos) block.append(24, ' ').append(line).append("\r\n");
+        at = e + 1;
+    }
+    return true;
+}
+
 } // namespace
 
 bool hud_check_markup(const std::string& res, const std::string& layer, uint32_t parts, const std::vector<HudProp>& props,
@@ -1116,19 +1266,7 @@ bool hud_check_markup(const std::string& res, const std::string& layer, uint32_t
 
     // 2: the application's keys (AnthemApp.xaml and its merged dictionaries, each at its own level)
     std::map<std::string, KeyDef> known;
-    const std::string app = ui.read ? ui.read("AnthemApp.xaml") : std::string();
-    if (app.empty()) return why = "AnthemApp.xaml couldn't be read from UI.zip", false;
-    if (!collect_dict_keys(app, known, tag_why)) return why = "AnthemApp.xaml's tags: " + tag_why, false;
-    const std::string src = "Source=\"Resources/Anthem/";
-    for (std::size_t at = app.find(src); at != std::string::npos; at = app.find(src, at + 1)) {
-        const std::size_t b = at + 8, e = app.find('"', b);
-        if (e == std::string::npos) continue;
-        const std::string path = app.substr(b, e - b);
-        const std::string d    = ui.read(path.c_str());
-        if (d.empty()) return why = path + " couldn't be read from UI.zip", false;
-        if (!collect_dict_keys(d, known, tag_why)) return why = path + "'s tags: " + tag_why, false;
-        ++out.dicts;
-    }
+    if (!app_keys(ui, known, out.dicts, why)) return false;
     out.known = known.size();
     // the platform's own: each top-level element of the resources block, keyed FH2HL_, once
     std::map<std::string, KeyDef> own;
@@ -1278,6 +1416,7 @@ bool hud_check_markup(const std::string& res, const std::string& layer, uint32_t
         }
     for (int i = 0, n = static_cast<int>(props.size()); i < n; ++i) {
         const HudProp& p = props[static_cast<std::size_t>(i)];
+        if (p.canvas) continue;   // a canvas's own: bound in the mod's XAML, if it uses it
         if (!bound.count(p.short_name)) return why = "the property " + p.name + " isn't bound anywhere", false;
         for (int v : p.values)
             if (!trigger_values[i].count(v)) return why = "no trigger shows " + p.name + " = " + std::to_string(v) + ", one of its values", false;
@@ -1299,7 +1438,8 @@ bool hud_check_markup(const std::string& res, const std::string& layer, uint32_t
     return true;
 }
 
-bool hud_splice(std::string& page, uint32_t parts, const std::vector<HudProp>& props, const HudUi& ui, HudCheck& out, std::string& why) {
+bool hud_splice(std::string& page, uint32_t parts, const std::vector<HudProp>& props, const HudUi& ui, HudCheck& out, std::string& why,
+                const std::vector<HudCanvas>& canvases, std::vector<std::string>* canvas_why) {
     if (page.empty()) return why = "A_Hud.xaml couldn't be read from the game's UI.zip", false;
     // the anchors, in the page as it is now (after the notice's insertions)
     const std::size_t res_n = count_of(page, "</ResourceDictionary>"), zp_n = count_of(page, "</local:ZPanel>");
@@ -1309,14 +1449,39 @@ bool hud_splice(std::string& page, uint32_t parts, const std::vector<HudProp>& p
         return why = "A_Hud.xaml's insertion points aren't each there once (</ResourceDictionary> " + std::to_string(res_n) +
                      ", </local:ZPanel> " + std::to_string(zp_n) + ")",
                false;
-    const bool ring = ring_parts(parts);
+    const std::string res = hud_resources_markup(parts), layer = hud_layer_markup(parts, canvases);
+    if (!hud_check_markup(res, layer, parts, props, ui, out, why)) return false;
+    // the canvases, each checked on its own: one that doesn't pass is left out, and the rest goes in
+    std::vector<std::string> blocks(canvases.size());
+    if (canvas_why) canvas_why->assign(canvases.size(), std::string());
+    bool ed = false;
+    if (!canvases.empty()) {
+        std::map<std::string, KeyDef> known;
+        int dicts = 0;
+        std::string keys_why;
+        const bool keys = app_keys(ui, known, dicts, keys_why);
+        for (std::size_t i = 0; i < canvases.size(); ++i) {
+            std::size_t n = 0;
+            bool uses_ed  = false;
+            std::string cw;
+            if (!keys) cw = keys_why;
+            else if (canvas_block(canvases[i], known, ui, blocks[i], n, uses_ed, cw)) out.bindings += n, ed = ed || uses_ed;
+            if (!cw.empty()) blocks[i].clear();
+            if (canvas_why) (*canvas_why)[i] = cw;
+        }
+    }
+    const bool ring = ring_parts(parts) || ed;
     if (ring && count_of(page, kLocalNs) != 1)
         return why = "the Page tag's xmlns:local wasn't found once, so xmlns:ed (the rings) can't go in", false;
-    const std::string res = hud_resources_markup(parts), layer = hud_layer_markup(parts);
-    if (!hud_check_markup(res, layer, parts, props, ui, out, why)) return false;
-    // insert, from the bottom up: the layer, the resources, xmlns:ed
+    // insert, from the bottom up: the layer (then each canvas at its placeholder), the resources, xmlns:ed
     std::string s = page;
     s.insert(line_start(s, g), layer);
+    for (std::size_t i = 0; i < canvases.size(); ++i) {
+        const std::size_t at = s.find(hud_canvas_placeholder(canvases[i].layer));
+        if (at == std::string::npos || blocks[i].empty()) continue;
+        const std::size_t ls = line_start(s, at), eol = s.find('\n', at);
+        s.replace(ls, (eol == std::string::npos ? s.size() : eol + 1) - ls, blocks[i]);
+    }
     s.insert(line_start(s, s.find("</ResourceDictionary>")), res);
     if (ring) {
         const std::size_t ns  = s.find(kLocalNs);

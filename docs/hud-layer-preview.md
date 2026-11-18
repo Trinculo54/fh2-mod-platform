@@ -6,7 +6,7 @@ The layer is a heads-up display of your own, drawn by the game's own UI inside i
 
 ## What the preview is, and isn't
 
-- **Mods reach it through an interface, not the API:** `FH2Platform.HudLayer`, from `get_interface` (API 2). Platform 2.9.0 publishes version 2, which adds [the feed](#the-feed-290); the 2.8.0 test build had version 1. The platform publishes it itself, before any mod starts, so unlike other mods' interfaces it's there in `fh2mod_init`, and no mod can publish that name in its place.
+- **Mods reach it through an interface, not the API:** `FH2Platform.HudLayer`, from `get_interface` (API 2). Platform 2.9.0 publishes version 2, which adds [the feed](#the-feed-290), and 2.9.1 version 3, which adds [the canvas](#the-canvas-291); the 2.8.0 test build had version 1. The platform publishes it itself, before any mod starts, so unlike other mods' interfaces it's there in `fh2mod_init`, and no mod can publish that name in its place.
 - **Without a mod that adds a layer, it does nothing.** No HUD page is written for it, none of its hooks or threads is made, and `platform.log` has no `[HUD layer]` line.
 - **It isn't for every mod.** One layer is on screen at a time, so two mods with bars would keep taking the screen from each other. If your mod could use it, ask first, and expect the interface to be replaced by an API in a later platform.
 
@@ -33,7 +33,7 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
 ```
 
 - **On platform 2.8.0 and older**, `get_interface` returns null. Nothing in the header is linked, so a mod built with it still loads everywhere; it only has to work without the bar. If one of your features can't work without it, say so in your log or with `set_notice`.
-- **Don't look at `api_version` to find the layer:** the 2.8.0 test build said 9, as 2.8.0 does. Only the interface tells. Asking for `FH2_HUD_INTERFACE_VERSION` (2) needs 2.9.0; ask for 1 instead, and check `version` before using the feed, if your mod should also run on the old test build.
+- **Don't look at `api_version` to find the layer:** the 2.8.0 test build said 9, as 2.8.0 does. Only the interface tells. Asking for `FH2_HUD_INTERFACE_VERSION` (3) needs 2.9.1; ask for 2 instead, and check `version` before using the canvas, if your mod should also run on 2.9.0 (and for 1, checking before the feed too, for the old test build). The example's `size < sizeof(FH2HudInterface)` check is for a mod that needs everything in its header: one that asks for an older version has to check `version` instead.
 - **Three checks before you rely on it:** the interface isn't null, `add_hud_layer` returned 1, and `hud_status` has `FH2_HUD_AVAILABLE`. The last one comes later in the session (see [Status](#status-on_status-and-the-lease)), and can go away again if the layer is turned off.
 
 ## Adding a layer
@@ -69,6 +69,7 @@ Places are in the HUD page's own 1920 x 1080 layout, which the game scales to th
 | `FH2_HUD_PART_PANEL` | 520 px wide at the left (x 108 to 628), its foot 16 px above the bar like the tip's (or 16 px above the bottom of the screen without the bar), so the two sit side by side. | Up to eight rows of 40 px, a label on the left and a value between `<` and `>` on the right, and a footer line. |
 | `FH2_HUD_PART_COUNTDOWN` | A 220 px orange ring round the middle of the screen. | A big number inside it, and a label on dark glass just under the ring. |
 | The shutter | The whole picture, over everything. | A white blink, from `pulse_hud`. It's always there and needs no part. |
+| `FH2_HUD_PART_CANVAS` (2.9.1) | The whole page, under the other parts. | Drawing of your own: XAML you write, with numbers, texts and switches you set. See [The canvas](#the-canvas-291). |
 
 The tip and the panel sit on top of the bar, so they move with its height: up by 56 px when the strip's own row comes, and down to the bottom of the screen when the bar goes while they stay. While the tip or the panel is fading out, the platform keeps the bar's height as it is (a change to the strip's row, the bar coming in, or the bar collapsing after its own fade waits until that fade is over, at most 250 ms), so a card that's leaving never jumps.
 
@@ -102,6 +103,60 @@ The tip and the panel sit on top of the bar, so they move with its height: up by
 - **Each line stays** for its `ms` (8 s if 0, 2 to 30 s) of time with the HUD page on screen, so a line posted while the pause menu or the map is open waits for the HUD.
 - **It stays out of the way.** It's hidden while a layer shows its bar or its panel (they cover the bottom left), while the game's own HUD is held hidden, and from a `show_hud_layer` with `FH2_HUD_PART_INSTANT` (a clean frame: it goes in that frame) until the next show without it. Its lines keep their time meanwhile.
 - **Place:** the left edge is the HUD's 108 px margin and the bottom line's foot 360 px above the bottom of the 1920 x 1080 page, lines 36 px tall, the text trimmed at 720 px.
+
+### The canvas (2.9.1)
+
+Every other part has a layout the platform owns. The canvas is the one that's yours: you give the platform XAML, it puts it in the HUD page, and while your layer shows it you move it with numbers, fill it with texts and switch pieces of it on and off. It's for what the fixed parts can't draw: an instrument, a gauge, a map, a meter. It needs interface version 3 (platform 2.9.1); on 2.9.0 `version` is 2 and the three calls aren't there, so check `version >= 3` first.
+
+```cpp
+FH2HudLayer layer{};
+layer.size  = sizeof layer;
+layer.parts = FH2_HUD_PART_CANVAS;                 // with any other parts you use
+if (g_hud->version >= 3 && g_hud->add_hud_layer(g_mod, &layer)) {
+    FH2HudCanvas canvas{};
+    canvas.size    = sizeof canvas;
+    canvas.xaml    = kMyXaml;
+    canvas.numbers = 2;                            // N0, N1
+    canvas.texts   = 1;                            // T0
+    g_hud->add_hud_canvas(g_mod, &canvas);
+}
+
+// while it shows, from any thread
+const float n[2] = {roll_degrees, pitch_pixels};
+g_hud->set_hud_canvas_numbers(g_mod, n, 2);
+g_hud->set_hud_canvas_text(g_mod, 0, "285");
+g_hud->show_hud_layer(g_mod, FH2_HUD_PART_CANVAS);   // FH2_HUD_PART_ALL leaves the canvas out: name it
+```
+
+- **It's a part like the bar.** `show_hud_layer` brings it in and takes it out with the same fade, it follows the same lease, and one layer has the screen at a time: another mod's layer hides your canvas as it hides your bar. Each mod has its own canvas; the page holds them all, and shows the one whose layer has the screen.
+- **`add_hud_canvas`** only works from `fh2mod_init`, after `add_hud_layer` with `FH2_HUD_PART_CANVAS`, once. It copies the XAML.
+- **The XAML** is the content of a Grid over the whole HUD page, 1920 x 1080, under the layer's other parts. Give it one element or several. In it, bind your values by these names:
+
+  | Name | What | Where it can go |
+  |---|---|---|
+  | `{Binding N0}` to `N31` | a number | a `TranslateTransform`'s `X` or `Y`, a `RotateTransform`'s `Angle`, a `ScaleTransform`'s `ScaleX` or `ScaleY`, an `ed:Arc`'s `EndAngle`, an `Opacity` |
+  | `{Binding T0}` to `T15` | a text | a `Text` |
+  | `{Binding B0}` to `B15` | a switch | a `DataTrigger`'s `Binding` with `Value="True"` or `"False"`, or a `Visibility` with `, Converter={StaticResource A_FZBooleanToVisibilityConverter}` (or `..._Inverse`) after the name |
+
+- **Numbers** (`set_hud_canvas_numbers`, all of them in one call) are told to the page in the frame after they change, each one that changed, outside the 24-values budget. A number that doesn't change costs nothing, and one that does costs about what a playhead does (0.05 ms), so round to what can be seen: a tenth of a degree, half a pixel. **Texts** (`set_hud_canvas_text`, 64 characters) change on screen at most 10 times a second, like every text of the layer. **Switches** (`set_hud_canvas_switches`) are bits: bit 0 is `B0`. Everything is 0, empty and off until you set it, and a canvas that isn't on screen keeps what it showed.
+
+**What the check lets through.** The platform checks the XAML when it writes the HUD page, after every mod's `fh2mod_init`, because a page the game can't load takes the game down as the HUD opens. A canvas that doesn't pass is left out, with the reason in the log under your mod's name (`HUD canvas: left out of the HUD page: ...`), and the rest of your layer works as it would. It passes when:
+
+- its tags balance, and its elements have no prefix or one the page has: `local:` (the game's own controls) or `ed:` (`ed:Arc`);
+- every `{...}` is one of your own bindings where that kind of value goes, `{StaticResource K}` or `{DynamicResource K}` with a key every page of the game has (its text styles, material presets, converters), `{x:Type ...}` or `{x:Null}`;
+- a `Style="..."` names a Style for that element's own type, and an inline Style sits in the element's own `<X.Style>`;
+- it has no `x:Name`, no `x:Key`, no resources of its own and no pictures (`Source`), and at most 64 bindings.
+
+**What's known to work.** Passing the check doesn't mean the game draws it as WPF would: its XAML reader is its own. These have been seen working in the HUD page:
+
+- layout with `Grid`, `StackPanel`, `Border` and `Canvas`, placed with `Width`, `Height`, `Margin`, `HorizontalAlignment`, `VerticalAlignment`, `Canvas.Left` and `Canvas.Top`; `ClipToBounds="True"` (the game's own HUD controls use it);
+- text as `<local:FZTextBlock Style="{StaticResource A_Style_FZTextBlock_HudSmall}" Text="..." />` (22 px; `HudMedium` is 28, `HudMediumLarge` 34, `HudLarge` 60), with `Color="#AARRGGBB"`;
+- a filled box as `<local:FZMaterial Preset="{DynamicResource A_FZMaterialPresetRoundtangle_HudItem}" Color="#AARRGGBB" />`, and dark glass with `A_FZMaterialPresetGlassRoundtangle_HudItem`;
+- lines as a `Path` with `Data` of `M` and `L` commands, a `Stroke` and a `StrokeThickness` (whether the game fills a `Path` isn't known); `Ellipse` with a `Fill`; `ed:Arc`;
+- a `RenderTransform` of one transform, or a `TransformGroup` of several, with bound values; `RenderTransformOrigin`. Scale and move a `Grid` or a material, never a text block itself: put the text in a Grid;
+- letters outside ASCII as `&#x..;` with a lowercase x, never as decimal references.
+
+Not known: gradients, opacity masks, effects of your own, animations in a canvas. Try one thing at a time, and look at `fh2-mods\platform-hudlayer-A_Hud.xaml` (the page as written) when something doesn't show. The crash marker covers a canvas too: if the game goes down as the HUD first opens, the next launch leaves the whole layer out.
 
 ### Limits and text
 

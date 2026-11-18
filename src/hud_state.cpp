@@ -335,6 +335,13 @@ struct Layer {
     Data staged;                        // mu
     std::atomic<uint64_t> gen{0};       // bumped under mu
     std::atomic<uint32_t> playhead{0}, holdv{0};   // float bits
+    // its canvas (interface 3): the counts, set in fh2mod_init (cv_numbers -1: none); the newest numbers and
+    // switches; and its texts, staged as the state is
+    int cv_numbers = -1, cv_texts = 0, cv_switches = 0;
+    std::atomic<uint32_t> cv_n[kHudCanvasNumbers] = {};   // float bits
+    std::atomic<uint32_t> cv_b{0};
+    std::wstring cv_text[kHudCanvasTexts];                // mu
+    std::atomic<uint64_t> cv_gen{0};                      // bumped under mu
     std::atomic<uint64_t> show_seq{0};  // the newest show_hud_layer's sequence number
     std::atomic<uint64_t> parts_seq{0}; // the newest one with parts
     std::atomic<uint32_t> show_parts{0};
@@ -356,6 +363,8 @@ struct Layer {
     // the pump's own
     Data copy;
     uint64_t copy_gen = 0, seen_calls = 0, seen_show = 0;
+    std::wstring cv_copy[kHudCanvasTexts];
+    uint64_t cv_copy_gen = 0;
     uint32_t seen_pulses = 0;
     std::atomic<uint64_t> killed{0};    // the parts_seq whose show the platform ended (pulse_hud reads it on any thread)
     uint64_t taken = 0;                 // the parts_seq another mod's show took the screen from
@@ -410,6 +419,8 @@ struct Ix {
     int PanelFooter = -1, CountText = -1, CountPop = -1, CountLabel = -1, CountLabelShown = -1;
     int FShown[kHudFeedLines], FHasName[kHudFeedLines], FName[kHudFeedLines], FText[kHudFeedLines], FStyle[kHudFeedLines];
     int fade[kHudParts], vis[kHudParts];
+    // each layer's canvas: Cv<layer>On, and its numbers, texts and switches
+    int cvOn[kMaxLayers], cvN[kMaxLayers][kHudCanvasNumbers], cvT[kMaxLayers][kHudCanvasTexts], cvB[kMaxLayers][kHudCanvasSwitches];
 };
 
 // A feed line: staged by post_feed, then the pump's own while it's on screen.
@@ -421,9 +432,14 @@ struct FeedLine {
 constexpr std::size_t kFeedStaged = 16;   // posted lines waiting for the pump; more drops the oldest
 
 constexpr int kOff = 0, kIn = 1, kOut = 2;
-constexpr int kPartBar = 0, kPartTip = 2, kPartPanel = 3, kPartCount = 4, kPartFeed = 5;   // FH2_HUD_PART_ bit order
-static_assert(kPartFeed == kHudParts - 1, "the feed is the last part");
+constexpr int kPartBar = 0, kPartTip = 2, kPartPanel = 3, kPartCount = 4, kPartFeed = 5, kPartCanvas = 6;   // FH2_HUD_PART_ bit order
+static_assert(kPartCanvas == kHudParts - 1, "the canvas is the last part");
 static_assert((1u << kPartFeed) == FH2_HUD_PART_FEED, "the feed's bit");
+static_assert((1u << kPartCanvas) == FH2_HUD_PART_CANVAS, "the canvas's bit");
+static_assert(kHudPartsScreen == (FH2_HUD_PART_ALL | FH2_HUD_PART_CANVAS), "the parts that take the screen");
+static_assert(kHudMaxLayers == FH2_HUD_MAX_LAYERS && kHudCanvasNumbers == FH2_HUD_CANVAS_NUMBERS && kHudCanvasTexts == FH2_HUD_CANVAS_TEXTS &&
+                  kHudCanvasSwitches == FH2_HUD_CANVAS_SWITCHES && kHudCanvasBindings == FH2_HUD_CANVAS_BINDINGS,
+              "the template's limits are the header's");
 struct Part {
     bool declared = false;
     int state     = kOff;
@@ -448,6 +464,7 @@ struct HudEngine::Impl {
     std::unique_ptr<Prop[]> p;
     int np = 0;
     Ix ix;
+    std::vector<int> frame_ix;   // the properties told every frame they change, outside the budget (HudRole::frame_value)
     // Strings
     SRWLOCK str_lock = SRWLOCK_INIT;
     std::atomic<void*> empty{nullptr};
@@ -761,7 +778,7 @@ struct HudEngine::Impl {
     bool candidate(const Layer& L, uint64_t* ps_out) const {
         const uint64_t s = L.show_seq.load(std::memory_order_acquire), ps = L.parts_seq.load();
         *ps_out          = ps;
-        return s != 0 && s == ps && (L.show_parts.load() & FH2_HUD_PART_ALL & L.parts) != 0 && L.killed != ps;
+        return s != 0 && s == ps && (L.show_parts.load() & kHudPartsScreen & L.parts) != 0 && L.killed != ps;
     }
 
     void choose_owner(int n) {
@@ -787,7 +804,7 @@ struct HudEngine::Impl {
             L.end_logged = true;
             if (owner_ == i || ps > 0) rated(i, 1, "HUD layer: " + layers[best].name + " showed its layer, so this one is hidden");
         }
-        const uint32_t want = best >= 0 ? layers[best].show_parts.load() & FH2_HUD_PART_ALL & layers[best].parts : 0;
+        const uint32_t want = best >= 0 ? layers[best].show_parts.load() & kHudPartsScreen & layers[best].parts : 0;
         const bool inst     = force_instant || (newest_layer >= 0 && (layers[newest_layer].show_parts.load() & FH2_HUD_PART_INSTANT));
         if (newest_layer >= 0) feed_quiet = (layers[newest_layer].show_parts.load() & FH2_HUD_PART_INSTANT) != 0;
         force_instant       = false;
@@ -1015,6 +1032,26 @@ struct HudEngine::Impl {
         }
     }
 
+    // The canvases, once a frame after the owner is chosen: the one whose layer has the screen is on, with the
+    // newest of its numbers and switches, and its texts when they changed. The others keep what they had.
+    void canvas_step(int n) {
+        for (int i = 0; i < n; ++i) {
+            Layer& L = layers[i];
+            if (L.cv_numbers < 0) continue;
+            setb(ix.cvOn[i], i == owner_);
+            if (i != owner_) continue;
+            for (int k = 0; k < L.cv_numbers; ++k) setf(ix.cvN[i][k], bitsf(L.cv_n[k].load(std::memory_order_relaxed)));
+            const uint32_t b = L.cv_b.load(std::memory_order_relaxed);
+            for (int k = 0; k < L.cv_switches; ++k) setb(ix.cvB[i][k], ((b >> k) & 1u) != 0);
+            if (L.cv_gen.load() != L.cv_copy_gen && L.mu.try_lock()) {
+                for (int k = 0; k < L.cv_texts; ++k) L.cv_copy[k] = L.cv_text[k];
+                L.cv_copy_gen = L.cv_gen.load();
+                L.mu.unlock();
+            }
+            for (int k = 0; k < L.cv_texts; ++k) sets(ix.cvT[i][k], L.cv_copy[k]);
+        }
+    }
+
     void frame_values(float playhead, float hold) {
         if (std::isnan(playhead)) playhead = 0;
         if (std::isnan(hold)) hold = 0;
@@ -1028,7 +1065,7 @@ struct HudEngine::Impl {
     // frame that card clears.
     void screen() {
         bool any = false;
-        static const int kOrder[kHudParts] = {1, 2, 3, 4, kPartFeed, kPartBar};
+        static const int kOrder[kHudParts] = {kPartCanvas, 1, 2, 3, 4, kPartFeed, kPartBar};
         for (const int k : kOrder) {
             Part& pt = part[k];
             if (!pt.declared) continue;
@@ -1156,8 +1193,8 @@ struct HudEngine::Impl {
             if (part[k].state != kOff) on |= 1u << k;
             else if (part[k].declared && (wanted & (1u << k))) coming |= 1u << k;
         }
-        for (const int i : {ix.PlayheadX, ix.HoldAngle, ix.HoldFill})
-            if (valid(i) && p[i].dirty && ((on | coming) & (1u << p[i].part)) && !tell(i)) return false;
+        for (const int i : frame_ix)   // the playhead, the hold ring and bar, and the canvases' numbers
+            if (p[i].dirty && ((on | coming) & (1u << p[i].part)) && !tell(i)) return false;
         // c: the content of parts in or going out, within the budget
         int budget = kBudget;
         std::vector<int> c;
@@ -1525,7 +1562,7 @@ int HudEngine::show(int layer, uint32_t parts) {
     const uint32_t p = (parts & L.parts) | (parts & FH2_HUD_PART_INSTANT);
     const uint64_t s = d.seq.fetch_add(1) + 1;
     L.show_parts.store(p);
-    if (p & FH2_HUD_PART_ALL) {
+    if (p & kHudPartsScreen) {
         L.parts_seq.store(s);
         L.epoch.fetch_add(1);   // LAPSED goes; TAKEN goes with the new parts_seq
     }
@@ -1555,6 +1592,53 @@ int HudEngine::pulse(int layer, int pulse) {
         return 0;
     }
     L.pulses.fetch_add(1);
+    return 1;
+}
+
+bool HudEngine::set_canvas(int layer, int numbers, int texts, int switches) {
+    Layer& L = d_->layers[layer];
+    if (L.cv_numbers >= 0) return false;
+    L.cv_texts    = std::clamp(texts, 0, kHudCanvasTexts);
+    L.cv_switches = std::clamp(switches, 0, kHudCanvasSwitches);
+    L.cv_numbers  = std::clamp(numbers, 0, kHudCanvasNumbers);
+    return true;
+}
+bool HudEngine::has_canvas(int layer) const { return d_->layers[layer].cv_numbers >= 0; }
+
+int HudEngine::canvas_numbers(int layer, const float* numbers, uint32_t count) {
+    Layer& L = d_->layers[layer];
+    d_->call(L);
+    if (L.cv_numbers < 0 || !numbers || count > static_cast<uint32_t>(L.cv_numbers)) return 0;
+    for (uint32_t i = 0; i < count; ++i) L.cv_n[i].store(fbits(std::isnan(numbers[i]) ? 0.0f : numbers[i]), std::memory_order_relaxed);
+    return 1;
+}
+
+int HudEngine::canvas_text(int layer, uint32_t which, const char* utf8) {
+    Impl& d  = *d_;
+    Layer& L = d.layers[layer];
+    d.call(L);
+    if (L.cv_numbers < 0 || which >= static_cast<uint32_t>(L.cv_texts)) return 0;
+    unsigned f     = 0;
+    uint32_t o     = 0;
+    std::wstring w = hud_text(utf8, 64, false, &f, &o);
+    if ((f & kHudTextControl) && d.once_l(layer, "canvas control"))
+        d.mlog(layer, "set_hud_canvas_text: a text has a line break or another control character; shown as a space");
+    if ((f & kHudTextCut) && d.once_l(layer, "canvas cut")) d.mlog(layer, "set_hud_canvas_text: a text is longer than 64 characters; the rest is cut");
+    if ((f & kHudTextOdd) && d.once_l(layer, "canvas odd"))
+        d.mlog(layer, fmt("set_hud_canvas_text: a text has letters outside the set seen working in the HUD's fonts (U+%04X); they may show as boxes", o));
+    std::scoped_lock lk{L.mu};
+    if (L.cv_text[which] != w) {
+        L.cv_text[which] = std::move(w);
+        L.cv_gen.fetch_add(1);
+    }
+    return 1;
+}
+
+int HudEngine::canvas_switches(int layer, uint32_t bits) {
+    Layer& L = d_->layers[layer];
+    d_->call(L);
+    if (L.cv_numbers < 0) return 0;
+    L.cv_b.store(bits, std::memory_order_relaxed);
     return 1;
 }
 
@@ -1754,6 +1838,16 @@ void HudEngine::build(const std::vector<HudProp>& props) {
         x.vis[k]           = at(std::string(kHudPartProps[k]) + "Vis");
         d.part[k].declared = x.fade[k] >= 0;
     }
+    for (int l = 0; l < kMaxLayers; ++l) {
+        const std::string cv = "Cv" + std::to_string(l);
+        x.cvOn[l]            = at(cv + "On");
+        for (int i = 0; i < kHudCanvasNumbers; ++i) x.cvN[l][i] = at(cv + "N" + std::to_string(i));
+        for (int i = 0; i < kHudCanvasTexts; ++i) x.cvT[l][i] = at(cv + "T" + std::to_string(i));
+        for (int i = 0; i < kHudCanvasSwitches; ++i) x.cvB[l][i] = at(cv + "B" + std::to_string(i));
+    }
+    d.frame_ix.clear();
+    for (int i = 0; i < d.np; ++i)
+        if (d.p[i].role == HudRole::frame_value) d.frame_ix.push_back(i);
 }
 
 const std::vector<HudProp>& HudEngine::props() const { return d_->table; }
@@ -1800,6 +1894,7 @@ HudEngine::FrameOut HudEngine::frame(const FrameIn& in) {
     d.choose_owner(n);
     if (d.leases(in, n, dt)) d.choose_owner(n);
     d.feed_step(in, dt);
+    d.canvas_step(n);
     // the owner's pulses; the others' are dropped (pulse_hud only says 1 to the owner)
     for (int i = 0; i < n; ++i) {
         Layer& L         = d.layers[i];
