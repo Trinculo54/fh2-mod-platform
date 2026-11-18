@@ -14,6 +14,7 @@ namespace fh2platform {
 const void* hud_interface();                     // the FH2HudInterface table
 FH2Mod* hud_layer_owner();                       // the HUD layer's own FH2Mod: its hooks, notice and log lines
 void hud_layer_prepare(const FH2ModApi* api);    // load_mods, after every fh2mod_init, before the first apply_all
+int hud_layer_on_screen();                       // the pad layer: 1 or 0 while the layer follows the HUD page, -1 when it doesn't
 bool hud_layer_wants_page();                     // write_hud_notice, settings_start
 bool hud_layer_splice(std::string& page);        // write_hud_notice: false = the layer is left out (logged)
 void hud_layer_page_written(bool ok, const std::string& page);

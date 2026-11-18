@@ -3481,6 +3481,20 @@ const Text kTexts[] = {
   "Zostań w grze",
   "Остаться в игре",
   "In het spel blijven"}},
+// A choice row with a pick list (2.9.1; a draft)
+{"Press A to pick from a list.",
+ {"Pressione A para escolher em uma lista.",
+  "Drücke A, um aus einer Liste zu wählen.",
+  "Appuyez sur A pour choisir dans une liste.",
+  "Pulsa A para elegir de una lista.",
+  "Presiona A para elegir de una lista.",
+  "Premi A per scegliere da un elenco.",
+  "Aを押すとリストから選べます。",
+  "A를 누르면 목록에서 고를 수 있습니다.",
+  "按下 A 即可從清單中選擇。",
+  "Naciśnij A, aby wybrać z listy.",
+  "Нажмите A, чтобы выбрать из списка.",
+  "Druk op A om uit een lijst te kiezen."}},
 };
 // clang-format on
 

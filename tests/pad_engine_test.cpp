@@ -44,6 +44,66 @@ int main() {
     check(!clash(FH2_PAD_LB, kDpad, FH2_PAD_RB, kDpad), "LB and RB are separate modifiers: fine");
     check(!clash(0, kDpad, FH2_PAD_LB, kDpad), "a layer that's off clashes with nothing");
 
+    // a world-only layer (FH2_PAD_LAYER_WORLD, 2.9.1): closed while the driving view isn't on screen
+    check(modifier_now(FH2_PAD_LB, 0, false, 0) == FH2_PAD_LB && modifier_now(FH2_PAD_LB, 0, false, 1) == FH2_PAD_LB,
+          "a layer without the flag is open in a menu and in the world");
+    check(modifier_now(FH2_PAD_LB, FH2_PAD_LAYER_WORLD, false, 1) == FH2_PAD_LB, "a world-only layer is open in the driving view");
+    check(modifier_now(FH2_PAD_LB, FH2_PAD_LAYER_WORLD, false, 0) == 0, "a world-only layer is closed while another page is up");
+    check(modifier_now(FH2_PAD_LB, FH2_PAD_LAYER_WORLD, false, -1) == FH2_PAD_LB,
+          "a world-only layer is open everywhere when the platform isn't following the HUD page");
+    check(modifier_now(FH2_PAD_LB, 0, true, 1) == 0 && modifier_now(FH2_PAD_LB, FH2_PAD_LAYER_WORLD, true, 1) == 0,
+          "a stopped mod's layer is closed either way");
+    {
+        // closed mid-press: the button it had taken stays hidden until it goes up, then it's the game's again
+        SlotState s;
+        const LayerView open[1] = {{FH2_PAD_LB, kDpad}}, closed[1] = {{0, kDpad}};
+        step(s, C(kLB), open, 1);
+        StepOut o = step(s, C(kLB) | C(kUp), open, 1);
+        check(o.pressed[0] == FH2_PAD_DPAD_UP && (o.hide & C(kUp)), "world layer: Up pressed in the driving view is the layer's");
+        o = step(s, C(kLB) | C(kUp), closed, 1);
+        check(!o.pressed[0] && (o.hide & C(kUp)), "world layer: the pause menu opens mid-press: Up stays hidden until it goes up");
+        step(s, C(kLB), closed, 1);
+        o = step(s, C(kLB) | C(kUp), closed, 1);
+        check(!o.pressed[0] && !o.hide, "world layer: pressed again in the menu, Up is the menu's");
+    }
+
+    // a latched layer (FH2_PAD_LAYER_LATCH, 2.9.1): open by its mod's say-so, no modifier held
+    check(open_now(true, FH2_PAD_LAYER_LATCH, false, 0) && open_now(true, FH2_PAD_LAYER_LATCH, false, -1),
+          "a latched layer its mod has open is open in a menu too");
+    check(!open_now(false, FH2_PAD_LAYER_LATCH, false, 1) && !open_now(true, FH2_PAD_LAYER_LATCH, true, 1),
+          "a latched layer is closed once its mod lets it lapse, or is stopped");
+    check(open_now(true, FH2_PAD_LAYER_LATCH | FH2_PAD_LAYER_WORLD, false, 1) && !open_now(true, FH2_PAD_LAYER_LATCH | FH2_PAD_LAYER_WORLD, false, 0) &&
+              open_now(true, FH2_PAD_LAYER_LATCH | FH2_PAD_LAYER_WORLD, false, -1),
+          "a latched layer for the driving view is closed while another page is up, however long its mod holds it open");
+    {
+        constexpr int kB = 13;
+        LayerView ed[1] = {{0, kDpad | FH2_PAD_A | FH2_PAD_B, false}};
+        SlotState s;
+        StepOut o = step(s, C(kA), ed, 1);
+        check(o.hide == 0 && o.pressed[0] == 0, "a latched layer that's closed takes nothing: the game has A");
+        ed[0].open = true;
+        o          = step(s, C(kA), ed, 1);
+        check(o.hide == C(kA) && o.pressed[0] == 0, "opened with A already held: A is hidden from now on, but isn't a press");
+        o = step(s, 0, ed, 1);
+        o = step(s, C(kA) | C(kUp) | C(kLT), ed, 1);
+        check(o.hide == (C(kA) | C(kUp)) && o.take == o.hide && o.pressed[0] == (FH2_PAD_A | FH2_PAD_DPAD_UP) && o.dpad_idle,
+              "open: A and Up are hidden and are presses, with no modifier; the trigger is the game's");
+        o = step(s, C(kA) | C(kUp), ed, 1);
+        check(o.pressed[0] == 0 && o.hide == (C(kA) | C(kUp)), "still held: hidden, no new press");
+        ed[0].open = false;
+        o          = step(s, C(kA) | C(kB), ed, 1);
+        check(o.hide == C(kA) && o.pressed[0] == 0, "closed with A still held: A stays hidden until it goes up; B, pressed after, is the game's");
+        o = step(s, 0, ed, 1);
+        o = step(s, C(kA), ed, 1);
+        check(o.hide == 0 && o.pressed[0] == 0, "A pressed again after the layer closed: the game has it");
+        // beside a modifier layer: both get what's theirs
+        const LayerView both[2] = {{FH2_PAD_LB, kDpad}, {0, FH2_PAD_A | FH2_PAD_B, true}};
+        SlotState t;
+        o = step(t, C(kLB) | C(kUp) | C(kB), both, 2);
+        check(o.pressed[0] == FH2_PAD_DPAD_UP && o.pressed[1] == FH2_PAD_B && o.hide == (C(kUp) | C(kB)),
+              "a latched layer beside a modifier layer: each takes its own");
+    }
+
     // steps
     const LayerView chat[1] = {{FH2_PAD_LB, kDpad}};
     {

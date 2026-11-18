@@ -1,8 +1,12 @@
 // PadMod.dll, for tests/pad_hook_test.cpp: one pad layer (LB with the d-pad) that logs each press with
-// what buttons() says, and a layer the platform has to refuse. Its first press also sends a pop-up it never
+// what buttons() says, a layer the platform has to refuse, a layer for the driving view only (RB with A,
+// FH2_PAD_LAYER_WORLD), one with a flag the platform doesn't know, and two latched layers the mod keeps open from a
+// thread of its own: Editor (X, anywhere) and Flight (Y, in the driving view only). Its first press also sends a pop-up it never
 // declared (API 10), which must find the platform's pop-up hooks in.
 #include "fh2mod.h"
 #include "fh2mod_pad.h"
+
+#include <windows.h>
 
 #include <cstdio>
 
@@ -31,6 +35,19 @@ void on_press(void*, const char* key, uint32_t button) {
     const int queued = g_api->show_toast(g_mod, &t);
     std::snprintf(line, sizeof line, "show_toast %d, then ui_status has pop-ups: %s", queued, g_api->ui_status(g_mod) & FH2_UI_TOASTS ? "yes" : "no");
     g_api->log(g_mod, line);
+}
+
+// Keeps both latched layers open, as a mod does while its mode is on: set_open's lease is 2 seconds.
+DWORD WINAPI keep_open(void*) {
+    bool said = false;
+    for (;;) {
+        const int a = g_pad->set_open(g_mod, "Editor", 1), b = g_pad->set_open(g_mod, "Flight", 1);
+        if (a && b && !said) {
+            said = true;
+            g_api->log(g_mod, "set_open: Editor and Flight are open");
+        }
+        Sleep(300);
+    }
 }
 
 } // namespace
@@ -62,5 +79,38 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     both.modifier    = FH2_PAD_LB | FH2_PAD_RB;
     both.buttons     = FH2_PAD_DPAD_UP;
     api->log(g_mod, g_pad->add_layer(g_mod, &both) ? "layer Both added" : "layer Both refused");
+    char v[48];
+    std::snprintf(v, sizeof v, "pad interface version %u", g_pad->version);
+    api->log(g_mod, v);
+    FH2PadLayer drive = l;   // RB with A, in the driving view only
+    drive.key         = "Drive";
+    drive.modifier    = FH2_PAD_RB;
+    drive.buttons     = FH2_PAD_A;
+    drive.flags       = FH2_PAD_LAYER_WORLD;
+    api->log(g_mod, g_pad->add_layer(g_mod, &drive) ? "layer Drive added" : "layer Drive refused");
+    FH2PadLayer odd = drive;   // a flag from a later platform
+    odd.key         = "Odd";
+    odd.buttons     = FH2_PAD_B;
+    odd.flags       = 0x80;
+    api->log(g_mod, g_pad->add_layer(g_mod, &odd) ? "layer Odd added" : "layer Odd refused");
+    FH2PadLayer editor = l;   // latched: X, wherever the player is
+    editor.key         = "Editor";
+    editor.modifier    = 0;
+    editor.buttons     = FH2_PAD_X;
+    editor.flags       = FH2_PAD_LAYER_LATCH;
+    api->log(g_mod, g_pad->add_layer(g_mod, &editor) ? "layer Editor added" : "layer Editor refused");
+    FH2PadLayer flight = editor;   // latched, in the driving view only: Y
+    flight.key         = "Flight";
+    flight.buttons     = FH2_PAD_Y;
+    flight.flags       = FH2_PAD_LAYER_LATCH | FH2_PAD_LAYER_WORLD;
+    api->log(g_mod, g_pad->add_layer(g_mod, &flight) ? "layer Flight added" : "layer Flight refused");
+    FH2PadLayer held = editor;     // latched with a modifier: refused
+    held.key         = "Held";
+    held.modifier    = FH2_PAD_LB;
+    held.buttons     = FH2_PAD_B;
+    api->log(g_mod, g_pad->add_layer(g_mod, &held) ? "layer Held added" : "layer Held refused");
+    api->log(g_mod, g_pad->set_open(g_mod, "Chat", 1) ? "set_open Chat: 1" : "set_open Chat: 0");   // not latched
+    api->log(g_mod, g_pad->set_modifier(g_mod, "Editor", FH2_PAD_RB) ? "set_modifier Editor: 1" : "set_modifier Editor: 0");
+    if (HANDLE t = CreateThread(nullptr, 0, &keep_open, nullptr, 0, nullptr)) CloseHandle(t);
     return 0;
 }

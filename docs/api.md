@@ -14,6 +14,7 @@ Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes throu
 | 8 | 2.7 | pages of your own |
 | 9 | 2.8 | title-screen entries, choice rows, online play (FH2MP), sessions, save snapshots, hotkeys, commands, crash-dump memory |
 | 10 | 2.9 | text in the game's language, translations, and the UI templates (pop-ups, tips, message boxes, UI sounds and page help) |
+| 11 | 2.9.1 | page texts: a mod's text in one of the game's own pages |
 
 API 10 only adds members at the end, so a mod built for API 9 or older loads on platform 2.9.0 without a rebuild. A few rules did change in 2.9.0 for every mod: `set_file` refuses the platform's own UI files ([set_file](#set_file-and-clear_file-api-2)), a mod that shouldn't run online is stopped when FH2MP turns out to be online after the mods started ([Online play](#online-play-api-9)), and pop-ups and tips need declaring ([ui_uses](#ui_status-and-ui_uses)).
 
@@ -369,7 +370,7 @@ typedef struct FH2Setting {
     const char* url;               /* with kind = FH2_SETTING_LINK */
     /* API 9: choices */
     const char* const* choices;    /* with kind = FH2_SETTING_CHOICE: the names, UTF-8 */
-    uint32_t choice_count;         /* 2 to FH2_SETTING_MAX_CHOICES (32) */
+    uint32_t choice_count;         /* 2 to FH2_SETTING_MAX_CHOICES (100; 32 up to platform 2.9.0) */
 } FH2Setting;
 ```
 
@@ -423,7 +424,7 @@ if (api->api_version >= 5) {
 }
 ```
 
-**Choices (API 9, platform 2.8.0).** Set `kind = FH2_SETTING_CHOICE` and give `choices` and `choice_count`, and the row shows one of them by name, between the same left and right arrows as the game's own option rows ("Speedometer: Analogue / Digital"). Left and right step through them, stopping at the ends. `value` is the index of the one chosen, from 0, and `on_change`, `get_setting` and `set_setting` use that index (`set_setting` keeps it in range). The names are copied when you add the row; there can be 2 to 32 of them, and a dozen or so characters of each fit. `needs_restart` works as for a switch. Use it wherever a number would otherwise stand for something with a name, like a button or a mode. An older platform would show it as an On/Off row, so only add one when `api_version >= 9`:
+**Choices (API 9, platform 2.8.0).** Set `kind = FH2_SETTING_CHOICE` and give `choices` and `choice_count`, and the row shows one of them by name, between the same left and right arrows as the game's own option rows ("Speedometer: Analogue / Digital"). Left and right step through them, stopping at the ends. `value` is the index of the one chosen, from 0, and `on_change`, `get_setting` and `set_setting` use that index (`set_setting` keeps it in range). The names are copied when you add the row; there can be 2 to 100 of them, and a dozen or so characters of each fit. Up to platform 2.9.0 a row took 32 at most and `add_setting` returned 0 for more, so for a longer list either check `api->platform_version` or, when `add_setting` returns 0, add the choices as two rows. From platform 2.9.1 a row with more than eight choices also opens them as a list when the player presses A: eight to a page, starting at the page with the one chosen now, with Back to leave it as it was. The row's description says so ("Press A to pick from a list."), and the pick reaches `on_change` like a step with left or right, so there's nothing for your mod to do. `needs_restart` works as for a switch. Use it wherever a number would otherwise stand for something with a name, like a button or a mode. An older platform would show it as an On/Off row, so only add one when `api_version >= 9`:
 
 ```cpp
 static const char* const kButtons[] = {"LB", "RB", "A", "B", "X", "Y"};
@@ -1216,6 +1217,32 @@ Players never see what it adds:
   There's no row for the test language: switch it on with `test=1` in `fh2-mods\platform-language.ini` and start the game again ([Translations](#translations-api-10)). The platform reads it once at start-up, because text set in `fh2mod_init` and the title screen's lines can't change language during a session, so a row would leave a mix of the two.
 
 Everything the tests do is logged in the platform's name (`[Platform]`), as a mod's would be.
+
+## Page texts (API 11)
+
+```c
+typedef void (*FH2PageTextFn)(void* user, void* page, char* out, size_t size);
+
+int  add_page_text(FH2Mod* mod, const char* name, FH2PageTextFn get, void* user);
+void page_text_changed(FH2Mod* mod, const char* name, void* page);
+```
+
+A text of yours in one of the game's own pages, for the pages the platform's templates don't reach. The name tag over another player's car is the first use: it's a page of the game's (`UI\Scenes\Anthem\AR_OpponentLabel.xaml`), one page object per car, and a mod can now give each tag a line of its own.
+
+How it fits together:
+
+1. Replace the game's page with `set_file` (a copy of the game's file with your text block added; not one of the platform's own files), and bind the text block to `{Binding FH2Mod_Text_<name>}`. The game's `StringVisConverter` hides an element while the text is empty.
+2. Call `add_page_text` from `fh2mod_init` with the same `name`: 1 to 40 letters, digits or `_`, starting with your mod's name (`MyMod_Tag`). It returns 1, or 0 for a bad name, no `get`, or a name another mod has.
+3. `get` is called on the game's UI thread each time a page reads the text, with `page`, the object reading it, and writes UTF-8 into `out`, or `""` for nothing. Which page is which is yours to know: `page` is the game's object, so compare it with what your own hooks or reads tell you about that page, and don't keep it past the page's life. Keep `get` short and don't call into the game from it.
+4. When the text changes, call `page_text_changed` with the page it changed for, or NULL for every page that has read it. From any thread: the pages read it again at the game's next tick. A page the game has freed since is skipped.
+
+Things to know:
+
+- **Guard it.** `if (api->api_version >= 11)`, and `api->size` for the members. On an older platform the binding finds nothing and the element stays empty, so the page still loads.
+- **Empty text.** The text reads as empty while the menus' code doesn't match (the platform's property lookup isn't in), and once your mod is stopped for online play. A `get` that crashes reads as empty too, with a line in the log.
+- **A small set of texts.** The game keeps every different text for the session. Past 256 different texts for one name, new ones read as empty and the log says so. A fixed list of phrases is what this is for, not a clock.
+- **One owner per file.** As for every `set_file`: two mods that both replace the same game page can't both win. Say in your README which page you replace.
+- **A page of the game's that fails to load crashes the game.** Use only resources the page already has, and test the page with your mod turned off too (`clear_file` when it's off).
 
 ## Crash reports
 

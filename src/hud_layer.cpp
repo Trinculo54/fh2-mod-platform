@@ -62,7 +62,8 @@ static_assert(sizeof(FH2HudState) == 1000, "FH2HudState moved");
 static_assert(offsetof(FH2HudState, countdown_label) == 992, "FH2HudState moved");
 static_assert(sizeof(FH2HudFeedLine) == 32, "FH2HudFeedLine moved");
 static_assert(offsetof(FH2HudInterface, play_ui_sound) == 64, "FH2HudInterface moved");   // version 1 ends here
-static_assert(sizeof(FH2HudInterface) == 80, "FH2HudInterface moved");
+static_assert(sizeof(FH2HudInterface) == 112, "FH2HudInterface moved");
+static_assert(sizeof(FH2HudCanvas) == 32, "FH2HudCanvas moved");
 
 // ---- game addresses (game+RVA; the full address in each comment) ------------------------------------
 constexpr uintptr_t kImageBase = 0x140000000;
@@ -1457,9 +1458,55 @@ int i_post_hud_feed(FH2Mod* m, const FH2HudFeedLine* line) {
     return i < 0 ? 0 : g_eng.post_feed(i, line);
 }
 
+// The canvases, in the order their mods gave them: fh2mod_init's thread until hud_layer_prepare, read-only after.
+std::vector<HudCanvas> g_canvases;
+
+int i_add_hud_canvas(FH2Mod* m, const FH2HudCanvas* c) {
+    if (!m) return 0;
+    const auto refuse = [&](const std::string& why) {
+        log_line(m->name, "add_hud_canvas: " + why + "; no canvas");
+        return 0;
+    };
+    if (!in_mod_init()) return refuse("it was called after fh2mod_init: the HUD page is written once every mod's fh2mod_init has returned");
+    const int i = g_eng.layer_of(m);
+    if (i < 0) return refuse("this mod has no HUD layer: call add_hud_layer first, with FH2_HUD_PART_CANVAS among its parts");
+    if (!(g_eng.layer_parts(i) & FH2_HUD_PART_CANVAS)) return refuse("this mod's layer has no FH2_HUD_PART_CANVAS");
+    if (!c || c->size < sizeof(FH2HudCanvas)) return refuse("its FH2HudCanvas is too small: set size = sizeof(FH2HudCanvas)");
+    if (!c->xaml || !*c->xaml) return refuse("it has no XAML");
+    if (c->numbers > FH2_HUD_CANVAS_NUMBERS || c->texts > FH2_HUD_CANVAS_TEXTS || c->switches > FH2_HUD_CANVAS_SWITCHES)
+        return refuse("it asks for " + std::to_string(c->numbers) + " numbers, " + std::to_string(c->texts) + " texts and " +
+                      std::to_string(c->switches) + " switches, and a canvas has at most " + std::to_string(FH2_HUD_CANVAS_NUMBERS) + ", " +
+                      std::to_string(FH2_HUD_CANVAS_TEXTS) + " and " + std::to_string(FH2_HUD_CANVAS_SWITCHES));
+    if (!g_eng.set_canvas(i, static_cast<int>(c->numbers), static_cast<int>(c->texts), static_cast<int>(c->switches)))
+        return refuse("this mod's layer already has one");
+    HudCanvas& cv = g_canvases.emplace_back();
+    cv.layer      = i;
+    cv.xaml       = c->xaml;
+    cv.numbers    = static_cast<int>(c->numbers);
+    cv.texts      = static_cast<int>(c->texts);
+    cv.switches   = static_cast<int>(c->switches);
+    log_line(m->name, "HUD canvas taken: " + std::to_string(c->numbers) + " numbers, " + std::to_string(c->texts) + " texts, " +
+                          std::to_string(c->switches) + " switches, " + std::to_string(cv.xaml.size()) +
+                          " bytes of XAML; it's checked when the HUD page is written");
+    return 1;
+}
+int i_set_hud_canvas_numbers(FH2Mod* m, const float* numbers, uint32_t count) {
+    const int i = stopped_online(m) ? -1 : g_eng.layer_of(m);
+    return i < 0 ? 0 : g_eng.canvas_numbers(i, numbers, count);
+}
+int i_set_hud_canvas_text(FH2Mod* m, uint32_t which, const char* text) {
+    const int i = stopped_online(m) ? -1 : g_eng.layer_of(m);
+    return i < 0 ? 0 : g_eng.canvas_text(i, which, text);
+}
+int i_set_hud_canvas_switches(FH2Mod* m, uint32_t switches) {
+    const int i = stopped_online(m) ? -1 : g_eng.layer_of(m);
+    return i < 0 ? 0 : g_eng.canvas_switches(i, switches);
+}
+
 const FH2HudInterface g_iface = {sizeof(FH2HudInterface), FH2_HUD_INTERFACE_VERSION, i_add_hud_layer, i_set_hud_state, i_set_hud_value,
                                  i_show_hud_layer,        i_pulse_hud,               i_hud_status,    i_hold_game_hud, i_play_ui_sound,
-                                 i_post_hud_feed};
+                                 i_post_hud_feed,         i_add_hud_canvas,          i_set_hud_canvas_numbers, i_set_hud_canvas_text,
+                                 i_set_hud_canvas_switches};
 
 std::atomic<bool> g_pump_late_logged{false};
 
@@ -1470,6 +1517,10 @@ std::atomic<bool> g_pump_late_logged{false};
 const void* hud_interface() { return &g_iface; }
 FH2Mod* hud_layer_owner() { return &g_layer_mod; }
 bool hud_layer_active() { return g_active.load(); }
+int hud_layer_on_screen() {
+    if (!g_active.load() || !g_ready.load(std::memory_order_acquire) || g_eng.off()) return -1;
+    return g_on_screen.load() ? 1 : 0;
+}
 
 void hud_layer_mod_stopped(FH2Mod* m) {
     if (const int i = m ? g_eng.layer_of(m) : -1; i >= 0) g_eng.stop_layer(i);
@@ -1499,7 +1550,10 @@ void hud_layer_prepare(const FH2ModApi* api) {
     if (g_debug.load()) hlog("Debug=1 (fh2-mods\\platform-hudlayer.ini): the HUD layer's stats every 10 s and its page lines go to the log");
     g_left_out = check_marker();
     g_parts    = g_eng.parts();
-    g_eng.build(hud_build_props(g_parts));
+    for (int i = 0; i < g_eng.layer_count(); ++i)
+        if ((g_eng.layer_parts(i) & FH2_HUD_PART_CANVAS) && !g_eng.has_canvas(i))
+            log_line(g_eng.layer_name(i), "HUD layer: its parts have FH2_HUD_PART_CANVAS, but add_hud_canvas never gave it one; the canvas shows nothing");
+    g_eng.build(hud_build_props(g_parts, g_canvases));
     const std::vector<HudProp>& props = g_eng.props();
     g_nprops = static_cast<int>(props.size());
     g_descs.reset(new std::atomic<uint8_t*>[static_cast<std::size_t>(g_nprops)]);
@@ -1534,11 +1588,15 @@ bool hud_layer_splice(std::string& page) {
     ui.read     = [](const char* name) { return settings_read_ui(name); };
     ui.balanced = [](const std::string& xml, std::string& why) { return settings_balanced(xml, why); };
     std::string why;
-    if (!hud_splice(page, g_parts, g_eng.props(), ui, g_check, why)) {
+    std::vector<std::string> canvas_why;
+    if (!hud_splice(page, g_parts, g_eng.props(), ui, g_check, why, g_canvases, &canvas_why)) {
         hlog("page: the layer is left out: %s", why.c_str());
         g_eng.set_off(HudOff::left_out);
         return false;
     }
+    for (std::size_t i = 0; i < g_canvases.size() && i < canvas_why.size(); ++i)
+        log_line(g_eng.layer_name(g_canvases[i].layer), canvas_why[i].empty() ? std::string("HUD canvas: checked, and in the HUD page")
+                                                                               : "HUD canvas: left out of the HUD page: " + canvas_why[i]);
     hlog("check: %zu resource keys used, all in UI.zip's application dictionaries (%d dictionaries, %zu keys)", g_check.used, g_check.dicts,
          g_check.known);
     g_spliced = true;

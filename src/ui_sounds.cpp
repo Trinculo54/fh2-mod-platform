@@ -65,6 +65,8 @@ std::atomic<int> g_code{0};
 std::mutex g_check_mu;
 // the tick: 0 not asked for, 1 on its way, 2 in, -1 it couldn't be hooked
 std::atomic<int> g_tick{0};
+// settings.cpp's page texts (API 11) are refreshed on the tick too: called at every tick once asked for (ui_tick_also)
+std::atomic<void (*)()> g_tick_also{nullptr};
 
 double now_ms() {
     static const double freq = [] {
@@ -198,6 +200,7 @@ void tell(FH2Mod* m, uint32_t sound, Played p) {
 // ---- the tick ----------------------------------------------------------------------------------------------------
 
 void on_tick(FH2Context*, void*) {
+    if (auto also = g_tick_also.load()) also();
     if (!g_rules.waiting()) return;
     std::vector<UiSoundRules::Dropped> dropped;
     UiSoundRules::Due due;
@@ -303,6 +306,18 @@ bool ui_sound_play_direct(uint32_t sound, uint32_t* code) {
 }
 
 void ui_sounds_prepare(const FH2ModApi* api) { g_api = api; }
+
+bool ui_tick_also(void (*fn)()) {
+    g_tick_also = fn;
+    if (g_tick.load() == 0) {
+        const FH2ModApi* api = g_api.load();
+        void* base           = api ? api->wait_for_code(0) : nullptr;
+        if (!base) return true;   // the game isn't there yet: asked again with the next change
+        g_base = reinterpret_cast<uintptr_t>(base);
+        want_tick();
+    }
+    return g_tick.load() >= 0;
+}
 
 void ui_sounds_mod_stopped(FH2Mod* m) {
     if (const std::size_t n = m ? g_rules.forget(m) : 0)

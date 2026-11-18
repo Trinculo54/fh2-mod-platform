@@ -2268,6 +2268,188 @@ static void t11_feed() {
         check(r.val("FeedVis") == 1, "T11 the next show without INSTANT lets it back");
     }
 }
+// The canvas (interface 3): a mod's own XAML in the page, the check it passes first, and its values on their way
+// to the page.
+static void t12_canvas() {
+    std::printf("\n== T12 the canvas\n");
+    Ui u;
+    if (const char* m = std::getenv("FH2_MEDIA"); m && *m && fs::exists(fs::path(m) / "UI.zip")) {
+        u.media = true;
+        u.zip   = fs::path(m) / "UI.zip";
+    }
+    const HudUi ui = make_ui(u);
+    const std::string mini =
+        "<Page x:Class=\"ForzaUI.A_Hud\"\r\n      xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"\r\n"
+        "      xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"\r\n      xmlns:local=\"clr-namespace:ForzaUI;assembly=\">\r\n"
+        "    <Page.Resources>\r\n        <ResourceDictionary>\r\n        </ResourceDictionary>\r\n    </Page.Resources>\r\n"
+        "    <local:ZPanel x:Name=\"LayoutRoot\">\r\n        <Grid>\r\n            <Grid />\r\n        </Grid>\r\n    </local:ZPanel>\r\n</Page>\r\n";
+    const std::string small = " Style=\"{StaticResource A_Style_FZTextBlock_HudSmall}\"";
+    const std::string rt    = " Preset=\"{DynamicResource A_FZMaterialPresetRoundtangle_HudItem}\"";
+    const std::string conv  = ", Converter={StaticResource A_FZBooleanToVisibilityConverter}}";
+    // a horizon line that turns and moves, a number as text, and a warning behind a switch
+    const std::string good =
+        "<Grid Width=\"400\" Height=\"200\" HorizontalAlignment=\"Center\" VerticalAlignment=\"Center\" ClipToBounds=\"True\">\n"
+        "    <local:FZMaterial" + rt + " Color=\"#FFF5F5F5\" Width=\"300\" Height=\"2\" RenderTransformOrigin=\"0.5,0.5\">\n"
+        "        <local:FZMaterial.RenderTransform>\n            <TransformGroup>\n                <TranslateTransform Y=\"{Binding N1}\" />\n"
+        "                <RotateTransform Angle=\"{Binding N0}\" />\n            </TransformGroup>\n        </local:FZMaterial.RenderTransform>\n"
+        "    </local:FZMaterial>\n"
+        "    <local:FZTextBlock" + small + " Text=\"{Binding T0}\" />\n"
+        "    <local:FZTextBlock" + small + " Text=\"STALL\" Visibility=\"{Binding B0" + conv + "\" />\n"
+        "</Grid>\n";
+    const uint32_t parts = FH2_HUD_PART_CHIPS | FH2_HUD_PART_CANVAS;
+    const auto canvas = [](int layer, const std::string& xaml, int n, int t, int b) {
+        HudCanvas c;
+        c.layer = layer, c.xaml = xaml, c.numbers = n, c.texts = t, c.switches = b;
+        return c;
+    };
+    {
+        const std::vector<HudCanvas> cv = {canvas(0, good, 2, 1, 1)};
+        const std::vector<HudProp> props = hud_build_props(parts, cv);
+        const auto find = [&](const char* n) -> const HudProp* {
+            for (const HudProp& p : props)
+                if (p.short_name == n) return &p;
+            return nullptr;
+        };
+        const HudProp *on = find("Cv0On"), *n1 = find("Cv0N1"), *t0 = find("Cv0T0"), *b0 = find("Cv0B0");
+        check(find("Canvas") && find("CanvasVis") && on && n1 && t0 && b0 && !find("Cv0N2") && !find("Cv1On"),
+              "T12 the canvas part's two properties, and the canvas's own: On, 2 numbers, 1 text, 1 switch");
+        check(on && n1 && t0 && b0 && !on->canvas && on->type == 'b' && n1->canvas && n1->type == 'f' && n1->role == HudRole::frame_value &&
+                  t0->type == 's' && b0->type == 'b' && n1->part == 6,
+              "T12 a number is a float told every frame; a text a String; a switch a bool");
+        std::string page = mini, why;
+        std::vector<std::string> cw;
+        HudCheck c;
+        const bool ok = hud_splice(page, parts, props, ui, c, why, cv, &cw);
+        check(ok && cw.size() == 1 && cw[0].empty(), "T12 a canvas that passes goes into the page%s%s", why.empty() ? "" : ": ",
+              (why + (cw.empty() ? "" : cw[0])).c_str());
+        check(has(page, "Angle=\"{Binding FH2Mod_Hud_Cv0N0}\"") && has(page, "Y=\"{Binding FH2Mod_Hud_Cv0N1}\"") &&
+                  has(page, "Text=\"{Binding FH2Mod_Hud_Cv0T0}\"") && has(page, "Visibility=\"{Binding FH2Mod_Hud_Cv0B0" + conv + "\"") &&
+                  has(page, "Text=\"STALL\"") && !has(page, "{Binding N") && !has(page, hud_canvas_placeholder(0)),
+              "T12 its N, T and B names are the page's own there, and its own text stays");
+        check(has(page, "FH2Mod_Hud_Cv0On" + conv) && has(page, "FH2HL_Fade_Canvas") && page.find("FH2Mod_Hud_Cv0On") < page.find("FH2Mod_Hud_Cv0N0") &&
+                  page.find("FH2Mod_Hud_CanvasVis") < page.find("FH2Mod_Hud_C0Shown"),
+              "T12 it sits in a Grid shown while its layer has the screen, inside the canvas part, under the chips");
+        std::string bw;
+        check(balanced(page, bw) && !has(page, kEd), "T12 the page balances, and has no xmlns:ed (no rings)%s%s", bw.empty() ? "" : ": ", bw.c_str());
+        check(c.bindings == 60 + 3 + 2 + 3 + 1 + 4, "T12 %zu bindings: the chips', the canvas part's, its On and its own 4", c.bindings);
+
+        // an ed:Arc of the mod's brings xmlns:ed
+        std::string arc_page = mini;
+        const std::vector<HudCanvas> arc = {canvas(0, "<ed:Arc Width=\"80\" Height=\"80\" ArcThickness=\"4\" StartAngle=\"0\" EndAngle=\"{Binding N0}\" />", 1, 0, 0)};
+        check(hud_splice(arc_page, parts, hud_build_props(parts, arc), ui, c, why, arc, &cw) && cw[0].empty() && count_of(arc_page, kEd) == 1,
+              "T12 a canvas with an ed:Arc gets xmlns:ed in the page");
+
+        // what the check keeps out: the canvas is left out, with why, and the rest of the layer goes in
+        const auto refused = [&](const char* what, const std::string& xaml, const std::string& want, int n = 2, int t = 1, int b = 1) {
+            const std::vector<HudCanvas> bad = {canvas(0, xaml, n, t, b)};
+            std::string pg = mini, w;
+            std::vector<std::string> bw2;
+            HudCheck cc;
+            const bool in = hud_splice(pg, parts, hud_build_props(parts, bad), ui, cc, w, bad, &bw2);
+            check(in && bw2.size() == 1 && has(bw2[0], want) && has(pg, hud_canvas_placeholder(0)) && has(pg, "FH2Mod_Hud_C0Shown") &&
+                      !has(pg, "FH2Mod_Hud_Cv0N") && !has(pg, "{Binding N"),
+                  "T12 left out, the layer still in: %s (\"%s\")", what, bw2.empty() ? w.c_str() : bw2[0].c_str());
+        };
+        refused("tags that don't balance", "<Grid><Border></Grid>", "its tags");
+        refused("empty XAML", "  \r\n", "its XAML is empty");
+        refused("a name of its own", "<Grid x:Name=\"Mine\" />", "can't have names, keys or pictures of its own");
+        refused("resources of its own", "<Grid><Grid.Resources><Style TargetType=\"Grid\" /></Grid.Resources></Grid>", "can't have resources of its own");
+        refused("a picture", "<Image Source=\"/ForzaUI;component/Textures/Anthem/Icons/Trophy_Icon_Medium.png\" />", "pictures of its own");
+        refused("a key the game doesn't have", "<local:FZTextBlock Style=\"{StaticResource My_Style}\" Text=\"x\" />", "the resource key My_Style isn't one every page");
+        refused("a binding to something else", "<local:FZTextBlock" + small + " Text=\"{Binding SpeedText}\" />", "isn't a plain {Binding N<i>}");
+        refused("a platform property by name", "<local:FZTextBlock" + small + " Text=\"{Binding FH2Mod_Hud_C0}\" />", "names a platform property");
+        refused("a number past its count", "<Grid><Grid.RenderTransform><RotateTransform Angle=\"{Binding N2}\" /></Grid.RenderTransform></Grid>",
+                "binds N2, but the canvas has 2 of those");
+        refused("a text where a number goes", "<Grid><Grid.RenderTransform><RotateTransform Angle=\"{Binding T0}\" /></Grid.RenderTransform></Grid>",
+                "T0 is a String, bound where a float goes");
+        refused("a number as a text", "<local:FZTextBlock" + small + " Text=\"{Binding N0}\" />", "N0 is a float, bound where a String goes");
+        refused("a number through an attribute the check doesn't know", "<Grid Width=\"{Binding N0}\" />", "bound through Width");
+        refused("a switch as Visibility without the converter", "<Grid Visibility=\"{Binding B0}\" />", "without the boolean converter");
+        refused("another markup extension", "<Grid Tag=\"{RelativeSource Self}\" />", "uses a {...} a canvas can't");
+        refused("a prefix the page doesn't have", "<my:Thing />", "has a prefix the HUD page doesn't have");
+        refused("a Style of another type", "<Grid" + small + " />", "is on a <Grid>");
+        std::string many = "<Grid>";
+        for (int i = 0; i < 65; ++i) many += "<Grid Opacity=\"{Binding N0}\" />";
+        refused("65 bindings", many + "</Grid>", "65 bindings, more than the 64");
+
+        // two canvases, one refused: the other is in
+        const std::vector<HudCanvas> two = {canvas(0, "<Grid x:Name=\"No\" />", 0, 0, 0), canvas(1, good, 2, 1, 1)};
+        std::string pg = mini;
+        check(hud_splice(pg, parts, hud_build_props(parts, two), ui, c, why, two, &cw) && cw.size() == 2 && !cw[0].empty() && cw[1].empty() &&
+                  has(pg, hud_canvas_placeholder(0)) && has(pg, "{Binding FH2Mod_Hud_Cv1N0}") && !has(pg, "x:Name=\"No\""),
+              "T12 of two canvases, the one refused is left out and the other is in");
+    }
+
+    // the engine: the canvas is a part of its layer, shown and hidden as the others are
+    {
+        Rig r;
+        const int a = r.add("Flight", FH2_HUD_PART_CHIPS | FH2_HUD_PART_CANVAS, 60000);
+        const int b = r.add("Other", FH2_HUD_PART_CANVAS, 60000);
+        check(!r.e->has_canvas(a) && r.e->set_canvas(a, 2, 1, 1) && r.e->has_canvas(a) && !r.e->set_canvas(a, 1, 0, 0) && r.e->set_canvas(b, 32, 0, 0),
+              "T12 a layer takes one canvas, once");
+        r.e->build(hud_build_props(r.e->parts(), {canvas(a, good, 2, 1, 1), canvas(b, "<Grid />", 32, 0, 0)}));
+        float v[3] = {12.5f, -30.0f, 0};
+        check(r.e->canvas_numbers(a, v, 2) == 1 && r.e->canvas_numbers(a, v, 3) == 0 && r.e->canvas_text(a, 0, "285") == 1 &&
+                  r.e->canvas_text(a, 1, "x") == 0 && r.e->canvas_switches(a, 1) == 1,
+              "T12 its numbers, text and switches are taken; a count or a text past its own isn't");
+        r.steps(3);
+        check(r.val("CanvasVis") == 0 && r.val("Shown") == 0 && r.val("Cv0On") == 0, "T12 nothing shows until show_hud_layer names the canvas");
+        r.e->show(a, FH2_HUD_PART_ALL);
+        r.steps(4);
+        check(r.val("CanvasVis") == 0 && r.val("ChipsVis") == 1, "T12 FH2_HUD_PART_ALL leaves the canvas out");
+        r.e->show(a, FH2_HUD_PART_CANVAS);
+        r.steps(20);
+        check(r.val("CanvasVis") == 1 && r.val("Canvas") == 1 && r.val("ChipsVis") == 0 && r.val("Cv0On") == 1 && r.val("Cv1On") == 0 &&
+                  (r.bits(a) & FH2_HUD_SHOWN),
+              "T12 show_hud_layer with the canvas: it's in, and it's this layer's");
+        check(r.fval("Cv0N0") == 12.5f && r.fval("Cv0N1") == -30.0f && r.text("Cv0T0") == L"285" && r.val("Cv0B0") == 1,
+              "T12 it came in with its numbers, text and switch");
+        v[0] = 13.0f;
+        r.e->canvas_numbers(a, v, 2);
+        r.step();
+        check(r.fval("Cv0N0") == 13.0f && told_name(r.last(), "Cv0N0") && !told_name(r.last(), "Cv0N1"),
+              "T12 a number that changed is told in the next frame, and one that didn't isn't");
+        v[0] = std::nanf("");
+        r.e->canvas_numbers(a, v, 2);
+        r.e->canvas_text(a, 0, std::string(80, 'x').c_str());
+        r.e->canvas_switches(a, 0);
+        r.steps(8);
+        check(r.fval("Cv0N0") == 0.0f && r.text("Cv0T0") == std::wstring(64, L'x') && r.val("Cv0B0") == 0 && r.lines_with("longer than 64 characters") == 1,
+              "T12 NaN counts as 0, a text is cut at 64 characters (logged), and the switch goes off");
+
+        // 32 numbers in one frame, all told in it: outside the 24-values budget
+        float many[32];
+        for (int i = 0; i < 32; ++i) many[i] = static_cast<float>(i + 1);
+        r.e->canvas_numbers(b, many, 32);
+        r.e->show(b, FH2_HUD_PART_CANVAS);
+        r.steps(12);
+        check(r.val("Cv1On") == 1 && r.val("Cv0On") == 0 && r.val("CanvasVis") == 1 && (r.bits(a) & FH2_HUD_TAKEN) && r.fval("Cv1N31") == 32.0f,
+              "T12 another layer's canvas takes the screen: its own is on, the first one's off (TAKEN)");
+        for (int i = 0; i < 32; ++i) many[i] += 0.5f;
+        r.e->canvas_numbers(b, many, 32);
+        r.step();
+        int told = 0;
+        for (const Told& t : r.last()) told += t.name.rfind("Cv1N", 0) == 0;
+        check(told == 32, "T12 32 numbers changed in one frame: %d told in it", told);
+        v[0] = 99.0f;
+        r.e->canvas_numbers(a, v, 2);
+        r.steps(2);
+        check(r.fval("Cv0N0") == 0.0f, "T12 a canvas that isn't on screen keeps what it showed");
+        r.e->show(b, 0);
+        r.steps(20);
+        check(r.val("CanvasVis") == 0 && r.val("Shown") == 0, "T12 show_hud_layer(0) takes the canvas away");
+    }
+    // a layer without a canvas
+    {
+        Rig r;
+        const int a = r.add("Plain", FH2_HUD_PART_CHIPS);
+        r.build();
+        const float one = 1;
+        check(r.e->canvas_numbers(a, &one, 1) == 0 && r.e->canvas_text(a, 0, "x") == 0 && r.e->canvas_switches(a, 1) == 0,
+              "T12 a layer without a canvas: its canvas calls return 0");
+    }
+}
+
 static void t10_sounds() {
     std::printf("\n== T10 sounds\n");
     Rig r;
@@ -2334,6 +2516,7 @@ int wmain(int argc, wchar_t** argv) {
     t9_pulses();
     t10_sounds();
     t11_feed();
+    t12_canvas();
     std::printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
     std::fflush(stdout);
     return fails;
