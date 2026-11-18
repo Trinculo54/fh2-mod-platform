@@ -6,6 +6,10 @@ It's the `d3dcompiler_47.dll` that sits next to `azimuth.exe`, and from 2.7.4 th
 
 Mods currently built on it are [Achievements](https://github.com/Trinculo54/fh2-achievements), which brings back the game's Xbox achievements offline, [FH2 Universal Radio](https://github.com/Trinculo54/FH2-Universal-Radio), which plays Spotify and more on the in-game radio, [WheresMyBuddy](https://github.com/Trinculo54/WheresMyBuddy), which puts your Xbox friends in the game as Drivatars, and [WreckingBall](https://github.com/Trinculo54/WreckingBall), which makes trees, fences, railings, roadside clutter and telephone poles break when you drive into them. It works alongside [Forza Horizon 2 Extra Options](https://github.com/RokkuDayo/forzahorizon2_extraoptions), which loads through `winmm.dll`.
 
+## What's new in 2.9.1
+
+A small release, mostly for mod makers. A mod can draw a heads-up display entirely of its own in the game's HUD (the HUD canvas), put its own text on one of the game's screens such as the name tag over a car (page texts, API 11), and keep the controller buttons it takes out of the menus. For players, a row on a mod's page can offer up to 100 choices, and **A** on a long one opens a list to pick from. [Release notes](docs/release-notes-2.9.1.md).
+
 ## What's new in 2.9.0
 
 For players:
