@@ -12,6 +12,10 @@ A small release on top of 2.9.0, mostly for mod makers: a mod can now draw a hea
 - **A mod's controller buttons can stay out of the menus.** A mod that takes buttons while you hold another (the d-pad while LB is held, say) can now say they are for driving only. In the pause menu, the map, photo mode and on the title screen those buttons are then the game's again, so holding LB and moving through a menu no longer sets the mod off. Mods have to be updated to use it.
 - **A mod's own mode can have its own buttons.** While a mode of a mod's is on (an editor, or flying), the mod can take buttons for as long as the mode lasts, with nothing held, so a button like RB can do the mode's job instead of changing the camera. The buttons go back to the game when the mode ends, or by themselves within two seconds if the mod stops.
 
+### Fixed
+
+- **Exit Game takes one press with an overlay mod installed.** With a mod that draws its own window over the game (ShowFPS's frame counter, for one), the first press of **Exit Game** on the pause menu's Home tab only closed that window, and a second press was needed to leave the game. **Restart now** had the same fault. Both now close the game's own window ([PR #27](https://github.com/Trinculo54/fh2-mod-platform/pull/27), by pavankumar-dss).
+
 ### What to do
 
 Install as always: extract the zip into your Azimuth folder, with Azimuth closed. Every mod's zip ships the platform it was built with, so if you use several mods, extract the one with the newest platform last. Nothing in 2.9.1 needs your mods to be updated: a mod built for 2.9.0 or older works as it did.
@@ -37,6 +41,10 @@ Nothing a mod built for 2.9.0 has to change. Two things to know when you rebuild
 
 - **`FH2_HUD_INTERFACE_VERSION` is 3 and `FH2_PAD_INTERFACE_VERSION` is 2.** A mod that passes those to `get_interface` now asks for 2.9.1's interfaces, and gets `NULL` on 2.9.0. If your mod should keep its bar or its layer on 2.9.0, ask for the version it needs (2 for the HUD layer with the feed, 1 for the pad layer) and look at the interface's `version` before using what is newer.
 - **`FH2_HUD_PART_ALL` is unchanged** (the five parts 2.9.0 had), so a canvas has to be named in `show_hud_layer`, as the feed is never shown by it.
+
+### Building on Windows
+
+`scripts/build.ps1` builds the platform on Windows from PowerShell, as `scripts/build.sh` does elsewhere, and can copy the result into an Azimuth folder: `.\scripts\build.ps1 -Clean -InstallTo "C:\path\to\azimuth_folder" -IncludeExample`. It needs llvm-mingw's `bin` folder, CMake and Ninja on `PATH` ([PR #26](https://github.com/Trinculo54/fh2-mod-platform/pull/26), by jacm0).
 
 ## Known limitations
 

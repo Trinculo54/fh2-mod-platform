@@ -8,7 +8,7 @@ Mods currently built on it are [Achievements](https://github.com/Trinculo54/fh2-
 
 ## What's new in 2.9.1
 
-A small release, mostly for mod makers. A mod can draw a heads-up display entirely of its own in the game's HUD (the HUD canvas), put its own text on one of the game's screens such as the name tag over a car (page texts, API 11), keep the controller buttons it takes out of the menus, and take buttons of its own for as long as a mode of its own is on. For players, a row on a mod's page can offer up to 100 choices, and **A** on a long one opens a list to pick from. [Release notes](docs/release-notes-2.9.1.md).
+A small release, mostly for mod makers. A mod can draw a heads-up display entirely of its own in the game's HUD (the HUD canvas), put its own text on one of the game's screens such as the name tag over a car (page texts, API 11), keep the controller buttons it takes out of the menus, and take buttons of its own for as long as a mode of its own is on. For players, a row on a mod's page can offer up to 100 choices, and **A** on a long one opens a list to pick from, and Exit Game takes one press with an overlay mod such as ShowFPS installed. The platform can now also be built on Windows with `scripts/build.ps1`. [Release notes](docs/release-notes-2.9.1.md).
 
 ## What's new in 2.9.0
 
