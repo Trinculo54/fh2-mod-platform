@@ -82,7 +82,12 @@ int wmain(int argc, wchar_t** argv) {
     CHECK(has(log, "[PadMod] layer Chat added"));
     CHECK(has(log, "[PadMod] add_layer: pad layer Both clashes with PadMod's Chat (LB with Up+Down+Left+Right)"));
     CHECK(has(log, "[PadMod] layer Both refused"));
-    CHECK(has(log, "[Pad layer] pad layers are on (2)"));
+    CHECK(has(log, "[Pad layer] pad layers are on (4)"));
+    CHECK(has(log, "[PadMod] pad layer Editor: latched: while its mod has it open, the game doesn't see X") && has(log, "[PadMod] layer Editor added"));
+    CHECK(has(log, "[PadMod] pad layer Flight: latched: while its mod has it open, the game doesn't see Y; in the driving view only"));
+    CHECK(has(log, "[PadMod] add_layer: pad layer Held is latched (FH2_PAD_LAYER_LATCH), so it can't have a modifier too") && has(log, "[PadMod] layer Held refused"));
+    CHECK(has(log, "[PadMod] set_open: there's no latched pad layer called Chat") && has(log, "[PadMod] set_open Chat: 0"));
+    CHECK(has(log, "[PadMod] set_modifier: pad layer Editor is latched") && has(log, "[PadMod] set_modifier Editor: 0"));
     CHECK(has(log, "[PadMod] pad interface version 2"));
     CHECK(has(log, "[PadMod] pad layer Drive: while RB is held, the game doesn't see A; in the driving view only") && has(log, "[PadMod] layer Drive added"));
     CHECK(has(log, "[PadMod] add_layer: pad layer Odd has flags this platform doesn't know") && has(log, "[PadMod] layer Odd refused"));
@@ -163,13 +168,25 @@ int wmain(int argc, wchar_t** argv) {
     if (followed) CHECK(is(frame(C(kRB) | C(kA)), 0, C(kRB) | C(kA)));    // not the driving view: A is the game's
     else CHECK(is(frame(C(kRB) | C(kA)), C(kA), C(kRB)));                 // nothing to go by: open everywhere
     CHECK(is(frame(0), 0, 0));
+    // The latched layers, which PadMod keeps open: Editor takes X with no button held, wherever the player is; Flight
+    // is for the driving view only, so with the HUD page followed and not on screen, Y is the game's.
+    const int kX = 14, kY = 15;
+    for (int i = 0; i < 60 && !has(slurp(L"fh2-mods\\platform.log"), "[PadMod] set_open: Editor and Flight are open"); ++i) Sleep(50);
+    CHECK(has(slurp(L"fh2-mods\\platform.log"), "[PadMod] pad layer Editor opened"));
+    CHECK(is(frame(C(kX)), C(kX), 0));                                    // X alone: hidden, the layer's
+    presses_logged(4);
+    CHECK(has(slurp(L"fh2-mods\\platform.log"), "[PadMod] press Editor 0x4000"));
+    CHECK(is(frame(0), 0, 0));
+    if (followed) CHECK(is(frame(C(kY)), 0, C(kY)));                      // not the driving view: Y is the game's
+    else CHECK(is(frame(C(kY)), C(kY), 0));
+    CHECK(is(frame(0), 0, 0));
     // the d-pad as one control (30, its left-right axis 31): the radio reads that
     After a = frame(C(kRight) | C(30) | C(31));
     CHECK(is(a, 0, C(kRight) | C(30) | C(31)) && a.dpad_dir == 2);   // without LB: the game's
     CHECK(is(frame(0), 0, 0));
     a = frame(C(kLB) | C(kRight) | C(30) | C(31));
     CHECK(is(a, C(kRight), C(kLB)) && a.dpad_dir == 8);              // LB + Right: all of it hidden, the d-pad idle
-    presses_logged(4);
+    presses_logged(5);
     a = frame(C(kLB));
     CHECK(is(a, 0, C(kLB)) && a.dpad_dir == 8);
 
@@ -193,14 +210,15 @@ int wmain(int argc, wchar_t** argv) {
     Sleep(500);
     log = slurp(L"fh2-mods\\platform.log");
     std::printf("---- platform.log\n%s----\n", log.c_str());
-    // one press each: Left, then Up and Right from the diagonal; buttons() saw what was held at the time
+    // one press each: Left, then Up and Right from the diagonal, then the latched layer's X; buttons() saw what was held at the time
     CHECK(has(log, "[PadMod] press Chat 0x0004 (buttons 1 0x010"));
     CHECK(has(log, "[PadMod] press Chat 0x0001 (buttons 1 0x0109)"));
     CHECK(has(log, "[PadMod] press Chat 0x0008 (buttons 1 0x0109)"));
     CHECK(has(log, "[PadMod] press Chat 0x0008 (buttons 1 0x0108)"));   // the Right with the d-pad as one
     std::size_t presses = 0;
     for (std::size_t at = 0; (at = log.find("[PadMod] press ", at)) != std::string::npos; ++at) ++presses;
-    CHECK(presses == 4);
+    CHECK(has(log, "[PadMod] press Editor 0x4000 (buttons 1 0x4000)"));   // the latched layer's X, with nothing else held
+    CHECK(presses == 5);
     CHECK(!has(log, "crashed in its on_press"));
     // its pop-up, sent mid-session without declaring pop-ups (it declared tips, so the hooks are in): queued, with a
     // line asking it to declare them, and ui_status says they can show

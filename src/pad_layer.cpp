@@ -99,6 +99,7 @@ struct Layer {
     std::string key, mod_name;
     uint32_t buttons = 0, flags = 0;
     std::atomic<uint32_t> modifier{0};
+    std::atomic<uint64_t> open_until{0};   // a latched layer (FH2_PAD_LAYER_LATCH): the GetTickCount64 it's open until
     FH2PadPressFn on_press = nullptr;
     void* user             = nullptr;
 };
@@ -230,13 +231,16 @@ bool step_slot(unsigned char* slot, StepOut* out) {
     const int n = g_count.load(std::memory_order_acquire);
     // a layer of a mod stopped for online play (platform.cpp's go_online) is off, and so is a world-only layer
     // while the driving view isn't on screen: modifier 0
-    const int world = world_now();
+    const int world     = world_now();
+    const uint64_t tick = GetTickCount64();
     for (int i = 0; i < n; ++i) {
         const Layer& l = g_layers[i];
         if ((l.flags & FH2_PAD_LAYER_WORLD) && world < 0 && !g_world_unknown_said.exchange(true))
             say("the platform isn't following the game's HUD page this session (no mod has pop-ups, tips or a HUD layer, or their hooks "
                 "didn't go in), so layers for the driving view only are open everywhere");
-        views[i] = {modifier_now(l.modifier.load(std::memory_order_relaxed), l.flags, stopped_online(l.mod), world), l.buttons};
+        const bool stopped = stopped_online(l.mod);
+        views[i] = {modifier_now(l.modifier.load(std::memory_order_relaxed), l.flags, stopped, world), l.buttons,
+                    open_now((l.flags & FH2_PAD_LAYER_LATCH) && tick < l.open_until.load(std::memory_order_relaxed), l.flags, stopped, world)};
     }
     const SlotState before = g_slots[idx];
     *out                   = step(g_slots[idx], controls, views, n);
@@ -349,8 +353,9 @@ const Layer* clashes(const Layer* self, uint32_t modifier, uint32_t buttons) {
 }
 
 std::string describe(uint32_t modifier, uint32_t buttons, uint32_t flags = 0) {
-    return (modifier ? "while " + bits_name(modifier) + " is held, the game doesn't see " + bits_name(buttons)
-                     : "off until its mod sets a modifier (" + bits_name(buttons) + ")") +
+    return ((flags & FH2_PAD_LAYER_LATCH) ? "latched: while its mod has it open, the game doesn't see " + bits_name(buttons)
+            : modifier                    ? "while " + bits_name(modifier) + " is held, the game doesn't see " + bits_name(buttons)
+                                          : "off until its mod sets a modifier (" + bits_name(buttons) + ")") +
            ((flags & FH2_PAD_LAYER_WORLD) ? "; in the driving view only" : "");
 }
 
@@ -373,8 +378,12 @@ int api_add_layer(FH2Mod* mod, const FH2PadLayer* l) {
         log_line(mod->name, "add_layer: pad layer " + key + " can't be used: " + why);
         return 0;
     }
-    if (!l->on_press || (l->flags & ~FH2_PAD_LAYER_WORLD)) {
+    if (!l->on_press || (l->flags & ~(FH2_PAD_LAYER_WORLD | FH2_PAD_LAYER_LATCH))) {
         log_line(mod->name, "add_layer: pad layer " + key + (l->on_press ? " has flags this platform doesn't know" : " needs an on_press"));
+        return 0;
+    }
+    if ((l->flags & FH2_PAD_LAYER_LATCH) && l->modifier) {
+        log_line(mod->name, "add_layer: pad layer " + key + " is latched (FH2_PAD_LAYER_LATCH), so it can't have a modifier too");
         return 0;
     }
     std::scoped_lock lk{g_mu};
@@ -405,12 +414,36 @@ int api_add_layer(FH2Mod* mod, const FH2PadLayer* l) {
     return 1;
 }
 
+// A latched layer open (1) or closed (0). Open lasts kLatchLeaseMs from the newest call, so the mod repeats it.
+int api_set_open(FH2Mod* mod, const char* key, int open) {
+    if (!mod || !key) return 0;
+    Layer* l = nullptr;
+    {
+        std::scoped_lock lk{g_mu};
+        l = find(mod, key);
+    }
+    if (!l || !(l->flags & FH2_PAD_LAYER_LATCH)) {
+        static std::atomic<bool> told{false};
+        if (!told.exchange(true)) log_line(mod->name, std::string("set_open: there's no latched pad layer called ") + key);
+        return 0;
+    }
+    if (stopped_online(mod) && open) return 0;
+    const uint64_t now = GetTickCount64();
+    const uint64_t was = l->open_until.exchange(open ? now + kLatchLeaseMs : 0, std::memory_order_relaxed);
+    if ((was > now) != (open != 0)) log_line(mod->name, "pad layer " + l->key + (open ? " opened" : " closed"));
+    return g_live.load(std::memory_order_acquire) ? 1 : 0;
+}
+
 int api_set_modifier(FH2Mod* mod, const char* key, uint32_t modifier) {
     if (!mod || !key) return 0;
     std::scoped_lock lk{g_mu};
     Layer* l = find(mod, key);
     if (!l) {
         log_line(mod->name, std::string("set_modifier: there's no pad layer called ") + key);
+        return 0;
+    }
+    if ((l->flags & FH2_PAD_LAYER_LATCH) && modifier) {
+        log_line(mod->name, "set_modifier: pad layer " + l->key + " is latched: its mod opens it with set_open, and it has no modifier");
         return 0;
     }
     if (const char* why = bits_problem(modifier, l->buttons)) {
@@ -445,7 +478,7 @@ int api_buttons(uint32_t* held) {
     return read_held(held) ? 1 : 0;
 }
 
-const FH2PadInterface g_iface = {sizeof(FH2PadInterface), FH2_PAD_INTERFACE_VERSION, api_add_layer, api_set_modifier, api_buttons};
+const FH2PadInterface g_iface = {sizeof(FH2PadInterface), FH2_PAD_INTERFACE_VERSION, api_add_layer, api_set_modifier, api_buttons, api_set_open};
 
 } // namespace
 

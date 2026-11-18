@@ -2,7 +2,7 @@
 
 A pad layer lets your mod use some controller buttons while the player holds a modifier, without the game also acting on them. While LB is held, say, the d-pad is yours: the game doesn't change the radio station or open telemetry, and your mod is told about each press. Let go of LB and the d-pad is the game's again.
 
-This is a preview. Platform 2.9.0 is the first release with it, as the interface `FH2Platform.PadLayer` version 1; 2.9.1 has version 2, which adds [layers for the driving view only](#layers-for-the-driving-view-only-291). It isn't part of an API version yet, and its shape can still change before it becomes one, so never make it the only way your mod can be used.
+This is a preview. Platform 2.9.0 is the first release with it, as the interface `FH2Platform.PadLayer` version 1; 2.9.1 has version 2, which adds [layers for the driving view only](#layers-for-the-driving-view-only-291) and [layers your mod opens itself](#layers-your-mod-opens-itself-291). It isn't part of an API version yet, and its shape can still change before it becomes one, so never make it the only way your mod can be used.
 
 ## Getting it
 
@@ -60,6 +60,30 @@ pad->add_layer(mod, &chat);
 - **A press that straddles the change is safe.** A button the layer had taken when a menu opens stays hidden until it goes up, so the menu never gets half a press; pressed again, it's the menu's.
 - **The platform has to be following that page.** It does in a session where some mod has pop-ups or tips (`ui_uses`, API 10) or a [HUD layer](hud-layer-preview.md). In a session where none has, the layer is open everywhere, as a layer without the flag is, and `platform.log` says once: "the platform isn't following the game's HUD page this session ...". A mod whose layer must stay out of the menus can declare tips or pop-ups to make sure of it.
 - **On 2.9.0** `version` is 1 and `add_layer` refuses a layer with any flag, so set it only when `version >= 2`, and keep ignoring presses in menus yourself there (the paragraph above).
+
+## Layers your mod opens itself (2.9.1)
+
+A modifier suits a quick action. A mode of your own that lasts (an editor, a photo tool, flying) can't ask the player to hold a button for every press, and may need buttons the game uses all the time, like RB (the camera) or Y (the rewind). A **latched** layer has no modifier: your mod opens and closes it, and while it's open the game doesn't see its buttons.
+
+```cpp
+FH2PadLayer flight{sizeof flight};
+flight.key      = "Flight";
+flight.buttons  = FH2_PAD_RB | FH2_PAD_Y | FH2_PAD_DPAD_UP | FH2_PAD_DPAD_DOWN | FH2_PAD_DPAD_LEFT | FH2_PAD_DPAD_RIGHT;
+flight.flags    = FH2_PAD_LAYER_LATCH | FH2_PAD_LAYER_WORLD;   // version 2: check pad->version first
+flight.on_press = on_press;
+pad->add_layer(mod, &flight);
+
+// while the mode is on, a few times a second, from any thread
+pad->set_open(mod, "Flight", 1);
+// when it ends
+pad->set_open(mod, "Flight", 0);
+```
+
+- **`set_open(mod, key, 1)` opens it for 2 seconds.** Repeat the call (every half second, say) for as long as your mode is on. If your code stops, the lease runs out and the player's buttons go back to the game by themselves. `set_open(mod, key, 0)` closes it at once.
+- **Presses work as with a modifier.** A button already held as the layer opens isn't a press (the game has had it), and one held as it closes stays hidden until it goes up, so the game never gets half a press.
+- **Leave the player a way out.** Don't take `FH2_PAD_START`: the pause menu has to open. With `FH2_PAD_LAYER_WORLD` as well, the layer is only open in the driving view however long you hold it open, so the pause menu, the map and photo mode keep every button; use both for a mode that belongs to driving.
+- **No modifier, and no clash check.** `add_layer` refuses a latched layer with a `modifier`, and `set_modifier` refuses to give it one. A latched layer isn't checked against other layers: if two layers that are open at once take the same button, both get its press. Take only the buttons your mode needs.
+- **It returns** 1, or 0 for an unknown layer, one that isn't latched, or pad layers being off this session (the log says which). On platform 2.9.0 the interface is version 1 and has no `set_open`: check `version >= 2`.
 
 ## Changing the modifier
 

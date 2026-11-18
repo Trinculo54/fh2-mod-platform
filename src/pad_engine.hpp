@@ -68,6 +68,7 @@ inline bool clash(uint32_t mod_a, uint32_t buttons_a, uint32_t mod_b, uint32_t b
 // What a layer looks like to the step, read once per call.
 struct LayerView {
     uint32_t modifier, buttons;
+    bool open = false;   // a latched layer its mod has open (set_open): it takes its buttons with no modifier held
 };
 
 // A layer's modifier for this step: none while its mod is stopped, or while it's a world-only layer
@@ -77,6 +78,17 @@ struct LayerView {
 inline uint32_t modifier_now(uint32_t modifier, uint32_t flags, bool stopped, int world) {
     return stopped || ((flags & FH2_PAD_LAYER_WORLD) && world == 0) ? 0u : modifier;
 }
+
+// Whether a latched layer (FH2_PAD_LAYER_LATCH) is open for this step: its mod has it open (`latched`: set_open's
+// lease hasn't run out), the mod isn't stopped, and, for one that's world-only too, the driving view isn't known to
+// be off screen.
+inline bool open_now(bool latched, uint32_t flags, bool stopped, int world) {
+    return latched && !stopped && !((flags & FH2_PAD_LAYER_WORLD) && world == 0);
+}
+
+// How long a latched layer stays open after its mod's last set_open(1): a mod that stopped can't keep the
+// player's buttons from the game.
+constexpr uint64_t kLatchLeaseMs = 2000;
 
 // One controller's memory between steps.
 struct SlotState {
@@ -109,7 +121,7 @@ inline StepOut step(SlotState& s, uint64_t controls, const LayerView* layers, in
     for (int i = 0; i < n && i < kMaxLayers; ++i) {
         const LayerView& l = layers[i];
         uint32_t now       = 0;
-        if (l.modifier && (held & l.modifier) == l.modifier) now = l.buttons & held;
+        if (l.open || (l.modifier && (held & l.modifier) == l.modifier)) now = l.buttons & held;
         out.pressed[i] = now & ~s.held;
         take |= now;
     }
