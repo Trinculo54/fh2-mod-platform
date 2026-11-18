@@ -4120,13 +4120,22 @@ int chosen_item(void* popup) {
 // would, so Azimuth shuts down the way it always does. The helper (below, outside the
 // namespace) waits for this process to end and starts Azimuth again; if it hasn't ended
 // within two minutes, the quit was cancelled and the helper gives up.
+//
+// The game window is Azimuth's (class Azimuth.Game.Win32). Mods' overlays are top-level windows of this process too,
+// and can come first in EnumWindows' order: ShowFPS's (a visible, unowned tool window) did, so the first WM_CLOSE
+// only closed the FPS counter and Exit Game took two presses. So Azimuth's window is taken wherever it is; without
+// one (another host), the first visible, unowned window that isn't a tool window (overlays are).
 BOOL CALLBACK find_game_window(HWND w, LPARAM out) {
     DWORD pid = 0;
     GetWindowThreadProcessId(w, &pid);
-    if (pid == GetCurrentProcessId() && IsWindowVisible(w) && !GetWindow(w, GW_OWNER)) {
+    if (pid != GetCurrentProcessId() || !IsWindowVisible(w) || GetWindow(w, GW_OWNER)) return TRUE;
+    wchar_t cls[64] = {};
+    if (GetClassNameW(w, cls, 64) && !std::wcscmp(cls, L"Azimuth.Game.Win32")) {
         *reinterpret_cast<HWND*>(out) = w;
         return FALSE;
     }
+    HWND& found = *reinterpret_cast<HWND*>(out);
+    if (!found && !(GetWindowLongPtrW(w, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)) found = w;   // until Azimuth's turns up
     return TRUE;
 }
 
