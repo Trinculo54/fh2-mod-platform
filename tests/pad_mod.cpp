@@ -1,5 +1,6 @@
 // PadMod.dll, for tests/pad_hook_test.cpp: one pad layer (LB with the d-pad) that logs each press with
-// what buttons() says, and a layer the platform has to refuse. Its first press also sends a pop-up it never
+// what buttons() says, a layer the platform has to refuse, a layer for the driving view only (RB with A,
+// FH2_PAD_LAYER_WORLD) and one with a flag the platform doesn't know. Its first press also sends a pop-up it never
 // declared (API 10), which must find the platform's pop-up hooks in.
 #include "fh2mod.h"
 #include "fh2mod_pad.h"
@@ -62,5 +63,19 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     both.modifier    = FH2_PAD_LB | FH2_PAD_RB;
     both.buttons     = FH2_PAD_DPAD_UP;
     api->log(g_mod, g_pad->add_layer(g_mod, &both) ? "layer Both added" : "layer Both refused");
+    char v[48];
+    std::snprintf(v, sizeof v, "pad interface version %u", g_pad->version);
+    api->log(g_mod, v);
+    FH2PadLayer drive = l;   // RB with A, in the driving view only
+    drive.key         = "Drive";
+    drive.modifier    = FH2_PAD_RB;
+    drive.buttons     = FH2_PAD_A;
+    drive.flags       = FH2_PAD_LAYER_WORLD;
+    api->log(g_mod, g_pad->add_layer(g_mod, &drive) ? "layer Drive added" : "layer Drive refused");
+    FH2PadLayer odd = drive;   // a flag from a later platform
+    odd.key         = "Odd";
+    odd.buttons     = FH2_PAD_B;
+    odd.flags       = 0x80;
+    api->log(g_mod, g_pad->add_layer(g_mod, &odd) ? "layer Odd added" : "layer Odd refused");
     return 0;
 }

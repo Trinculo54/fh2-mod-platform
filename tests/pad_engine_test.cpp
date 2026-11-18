@@ -44,6 +44,29 @@ int main() {
     check(!clash(FH2_PAD_LB, kDpad, FH2_PAD_RB, kDpad), "LB and RB are separate modifiers: fine");
     check(!clash(0, kDpad, FH2_PAD_LB, kDpad), "a layer that's off clashes with nothing");
 
+    // a world-only layer (FH2_PAD_LAYER_WORLD, 2.9.1): closed while the driving view isn't on screen
+    check(modifier_now(FH2_PAD_LB, 0, false, 0) == FH2_PAD_LB && modifier_now(FH2_PAD_LB, 0, false, 1) == FH2_PAD_LB,
+          "a layer without the flag is open in a menu and in the world");
+    check(modifier_now(FH2_PAD_LB, FH2_PAD_LAYER_WORLD, false, 1) == FH2_PAD_LB, "a world-only layer is open in the driving view");
+    check(modifier_now(FH2_PAD_LB, FH2_PAD_LAYER_WORLD, false, 0) == 0, "a world-only layer is closed while another page is up");
+    check(modifier_now(FH2_PAD_LB, FH2_PAD_LAYER_WORLD, false, -1) == FH2_PAD_LB,
+          "a world-only layer is open everywhere when the platform isn't following the HUD page");
+    check(modifier_now(FH2_PAD_LB, 0, true, 1) == 0 && modifier_now(FH2_PAD_LB, FH2_PAD_LAYER_WORLD, true, 1) == 0,
+          "a stopped mod's layer is closed either way");
+    {
+        // closed mid-press: the button it had taken stays hidden until it goes up, then it's the game's again
+        SlotState s;
+        const LayerView open[1] = {{FH2_PAD_LB, kDpad}}, closed[1] = {{0, kDpad}};
+        step(s, C(kLB), open, 1);
+        StepOut o = step(s, C(kLB) | C(kUp), open, 1);
+        check(o.pressed[0] == FH2_PAD_DPAD_UP && (o.hide & C(kUp)), "world layer: Up pressed in the driving view is the layer's");
+        o = step(s, C(kLB) | C(kUp), closed, 1);
+        check(!o.pressed[0] && (o.hide & C(kUp)), "world layer: the pause menu opens mid-press: Up stays hidden until it goes up");
+        step(s, C(kLB), closed, 1);
+        o = step(s, C(kLB) | C(kUp), closed, 1);
+        check(!o.pressed[0] && !o.hide, "world layer: pressed again in the menu, Up is the menu's");
+    }
+
     // steps
     const LayerView chat[1] = {{FH2_PAD_LB, kDpad}};
     {

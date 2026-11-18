@@ -1517,6 +1517,10 @@ std::atomic<bool> g_pump_late_logged{false};
 const void* hud_interface() { return &g_iface; }
 FH2Mod* hud_layer_owner() { return &g_layer_mod; }
 bool hud_layer_active() { return g_active.load(); }
+int hud_layer_on_screen() {
+    if (!g_active.load() || !g_ready.load(std::memory_order_acquire) || g_eng.off()) return -1;
+    return g_on_screen.load() ? 1 : 0;
+}
 
 void hud_layer_mod_stopped(FH2Mod* m) {
     if (const int i = m ? g_eng.layer_of(m) : -1; i >= 0) g_eng.stop_layer(i);

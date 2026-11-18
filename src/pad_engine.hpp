@@ -12,6 +12,7 @@
 #include <cstdint>
 
 #include "fh2mod.h"
+#include "fh2mod_pad.h"
 
 namespace fh2platform::pad {
 
@@ -68,6 +69,14 @@ inline bool clash(uint32_t mod_a, uint32_t buttons_a, uint32_t mod_b, uint32_t b
 struct LayerView {
     uint32_t modifier, buttons;
 };
+
+// A layer's modifier for this step: none while its mod is stopped, or while it's a world-only layer
+// (FH2_PAD_LAYER_WORLD) and the driving view isn't on screen. `world` is 1 while the free-roam HUD page
+// is on screen, 0 while it isn't, and -1 when the platform isn't following that page: then the layer is
+// open everywhere, as one without the flag is.
+inline uint32_t modifier_now(uint32_t modifier, uint32_t flags, bool stopped, int world) {
+    return stopped || ((flags & FH2_PAD_LAYER_WORLD) && world == 0) ? 0u : modifier;
+}
 
 // One controller's memory between steps.
 struct SlotState {

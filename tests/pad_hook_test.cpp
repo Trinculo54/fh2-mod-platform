@@ -82,7 +82,10 @@ int wmain(int argc, wchar_t** argv) {
     CHECK(has(log, "[PadMod] layer Chat added"));
     CHECK(has(log, "[PadMod] add_layer: pad layer Both clashes with PadMod's Chat (LB with Up+Down+Left+Right)"));
     CHECK(has(log, "[PadMod] layer Both refused"));
-    CHECK(has(log, "[Pad layer] pad layers are on (1)"));
+    CHECK(has(log, "[Pad layer] pad layers are on (2)"));
+    CHECK(has(log, "[PadMod] pad interface version 2"));
+    CHECK(has(log, "[PadMod] pad layer Drive: while RB is held, the game doesn't see A; in the driving view only") && has(log, "[PadMod] layer Drive added"));
+    CHECK(has(log, "[PadMod] add_layer: pad layer Odd has flags this platform doesn't know") && has(log, "[PadMod] layer Odd refused"));
     if (!game || !has(log, "pad layers are on")) {
         std::printf("---- platform.log\n%s----\n", log.c_str());
         std::printf("\n%d FAILED\n", fails + 1);
@@ -152,6 +155,14 @@ int wmain(int argc, wchar_t** argv) {
     *reinterpret_cast<uint64_t*>(slot + 0x1E8) = C(kA);             // something the game itself took...
     CHECK(is(frame(C(kLB) | C(kA)), C(kA), C(kLB) | C(kA)));         // ...stays taken while held, untouched
     CHECK(is(frame(C(kLB)), 0, C(kLB)));                             // ...and goes when let go
+    // Drive is for the driving view only, and the pop-ups follow the HUD page here: none has been shown, so RB + A
+    // is the game's and no press comes. Where the page couldn't be followed, the layer is open as any other.
+    const int kRB = 9;
+    const bool followed = has(log, "the HUD page tracked");
+    std::printf("the HUD page is %s in this run\n", followed ? "followed (not on screen)" : "not followed");
+    if (followed) CHECK(is(frame(C(kRB) | C(kA)), 0, C(kRB) | C(kA)));    // not the driving view: A is the game's
+    else CHECK(is(frame(C(kRB) | C(kA)), C(kA), C(kRB)));                 // nothing to go by: open everywhere
+    CHECK(is(frame(0), 0, 0));
     // the d-pad as one control (30, its left-right axis 31): the radio reads that
     After a = frame(C(kRight) | C(30) | C(31));
     CHECK(is(a, 0, C(kRight) | C(30) | C(31)) && a.dpad_dir == 2);   // without LB: the game's

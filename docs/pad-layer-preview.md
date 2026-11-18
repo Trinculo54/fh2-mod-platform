@@ -2,7 +2,7 @@
 
 A pad layer lets your mod use some controller buttons while the player holds a modifier, without the game also acting on them. While LB is held, say, the d-pad is yours: the game doesn't change the radio station or open telemetry, and your mod is told about each press. Let go of LB and the d-pad is the game's again.
 
-This is a preview. Platform 2.9.0 is the first release with it, as the interface `FH2Platform.PadLayer` version 1. It isn't part of an API version yet, and its shape can still change before it becomes one, so never make it the only way your mod can be used.
+This is a preview. Platform 2.9.0 is the first release with it, as the interface `FH2Platform.PadLayer` version 1; 2.9.1 has version 2, which adds [layers for the driving view only](#layers-for-the-driving-view-only-291). It isn't part of an API version yet, and its shape can still change before it becomes one, so never make it the only way your mod can be used.
 
 ## Getting it
 
@@ -39,7 +39,27 @@ pad->add_layer(mod, &chat);
 
 - **The modifier always reaches the game.** Only the layer's buttons are kept from it. Pick a modifier that does nothing harmful while held. LB is the clutch for players who drive manual with clutch, so give them a choice.
 - **Letting go of the modifier first** doesn't hand the button to the game: it stays the layer's until it goes up, so the game never sees a press nobody made.
-- **Menus.** A layer is on in every game state: the title screen, the pause menu and the MODS tab, the map and photo mode as well as driving. While its modifier is held there, the menu doesn't get the layer's buttons and your `on_press` still comes, so a player holding LB (the menus' tab-left) in the pause menu and pressing the d-pad would send your action from the menu. If your layer is for driving, ignore presses while a menu is open: `FH2_HUD_ON_SCREEN` in `hud_status` (with a [HUD layer](hud-layer-preview.md) of your own), or `FH2_UI_ON_SCREEN` in `ui_status` (API 10, in a session with pop-ups or tips: declare them with `ui_uses`), is set while the free-roam HUD page is on screen. Without `FH2_HUD_AVAILABLE`, or `FH2_UI_TOASTS` (in a session where no mod declared pop-ups or tips, say), the platform may not be following that page and the bit may never come, so then let presses through rather than drop them all. A flag for layers that are only on in the world is planned for 2.9.1, in `FH2PadLayer.flags`, which is reserved until then.
+- **Menus.** A layer is on in every game state: the title screen, the pause menu and the MODS tab, the map and photo mode as well as driving. While its modifier is held there, the menu doesn't get the layer's buttons and your `on_press` still comes, so a player holding LB (the menus' tab-left) in the pause menu and pressing the d-pad would send your action from the menu. If your layer is for driving, ignore presses while a menu is open: `FH2_HUD_ON_SCREEN` in `hud_status` (with a [HUD layer](hud-layer-preview.md) of your own), or `FH2_UI_ON_SCREEN` in `ui_status` (API 10, in a session with pop-ups or tips: declare them with `ui_uses`), is set while the free-roam HUD page is on screen. Without `FH2_HUD_AVAILABLE`, or `FH2_UI_TOASTS` (in a session where no mod declared pop-ups or tips, say), the platform may not be following that page and the bit may never come, so then let presses through rather than drop them all. From 2.9.1 the platform can do that for you: see [Layers for the driving view only](#layers-for-the-driving-view-only-291).
+
+## Layers for the driving view only (2.9.1)
+
+A layer for driving shouldn't take its buttons in a menu: LB is the menus' tab-left and the d-pad moves the selection, so held together for a moment they would send your action from the pause menu, and the menu wouldn't get the press. From platform 2.9.1 (interface version 2), set `FH2_PAD_LAYER_WORLD` in the layer's `flags`:
+
+```cpp
+const FH2PadInterface* pad = (const FH2PadInterface*)api->get_interface(FH2_PAD_INTERFACE, 1);   // 1: 2.9.0 has it too
+FH2PadLayer chat{sizeof chat};
+chat.key      = "QuickChat";
+chat.modifier = FH2_PAD_LB;
+chat.buttons  = FH2_PAD_DPAD_UP | FH2_PAD_DPAD_DOWN | FH2_PAD_DPAD_LEFT | FH2_PAD_DPAD_RIGHT;
+chat.flags    = pad->version >= 2 ? FH2_PAD_LAYER_WORLD : 0;   // 2.9.0 refuses a layer with any flag
+chat.on_press = on_press;
+pad->add_layer(mod, &chat);
+```
+
+- **The layer is open only while the free-roam HUD page is on screen.** In the pause menu, the MODS tab, the map, photo mode, the rewind and on the title screen, its buttons are the game's and no `on_press` comes, whether the modifier is held or not.
+- **A press that straddles the change is safe.** A button the layer had taken when a menu opens stays hidden until it goes up, so the menu never gets half a press; pressed again, it's the menu's.
+- **The platform has to be following that page.** It does in a session where some mod has pop-ups or tips (`ui_uses`, API 10) or a [HUD layer](hud-layer-preview.md). In a session where none has, the layer is open everywhere, as a layer without the flag is, and `platform.log` says once: "the platform isn't following the game's HUD page this session ...". A mod whose layer must stay out of the menus can declare tips or pop-ups to make sure of it.
+- **On 2.9.0** `version` is 1 and `add_layer` refuses a layer with any flag, so set it only when `version >= 2`, and keep ignoring presses in menus yourself there (the paragraph above).
 
 ## Changing the modifier
 
