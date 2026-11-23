@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define FH2MOD_API_VERSION 11
+#define FH2MOD_API_VERSION 12
 
 #ifdef __cplusplus
 #define FH2MOD_EXPORT extern "C" __declspec(dllexport)
@@ -902,6 +902,10 @@ typedef void (*FH2PageSlotFn)(void* user, const char* page_key, int slot, int va
 #define FH2_PAGE_HANDLED        1   /* nothing else happens */
 #define FH2_PAGE_HANDLED_SELECT 2   /* and the menus' select sound plays */
 #define FH2_PAGE_HANDLED_BACK   3   /* and the menus' back sound plays */
+/* API 12: close a custom page and pause menu using the game's Back flow. */
+#define FH2_PAGE_RESUME         4
+#define FH2_PAGE_ISLAND         5   /* native island travel, with the game's eligibility checks */
+#define FH2_PAGE_MAINLAND       6   /* native mainland travel; no position override */
 #define FH2_PAGE_SLOTS 16
 
 struct FH2Page {
@@ -910,9 +914,9 @@ struct FH2Page {
     const char* title;             /* the page's title, UTF-8: "Achievements" (shown in capitals) */
     const char* label;             /* the row on your mod's page that opens it; NULL = the title */
     const char* description;       /* that row's description; may be NULL */
-    /* A pause-menu tile that opens this page instead of what it did on Xbox:
-       "Achievements" (the tile on the pause menu's PROGRESS tab and on its
-       PORSCHE tab). One mod per tile. NULL for none. */
+    /* A pause-menu tile that opens this page: "Achievements" (PROGRESS and
+       PORSCHE tabs) or "IslandFeatured" (PORSCHE tab's featured tile).
+       One mod per tile. NULL for none. */
     const char* tile;
     FH2PageOpenFn on_open;         /* may be NULL */
     FH2PageSelectFn on_select;     /* may be NULL: A then does nothing on the page */
@@ -920,6 +924,15 @@ struct FH2Page {
     /* Pages of your own design (set_page_xaml). Both may be NULL. */
     FH2PageButtonFn on_button;
     FH2PageSlotFn on_slot;
+    /* API 12: optional caption of the parent tab when tile is IslandFeatured.
+       NULL preserves the game's caption. Copied at init. */
+    const char* tab_title;
+    /* API 12: queried when wiring the pause menu; copied immediately.
+       NULL callback/result uses title. Do not retain native UI objects. */
+    const char* (*tile_title)(void* user, const char* page_key);
+    /* Called before opening the IslandFeatured page. IGNORED opens the page;
+       HANDLED stays on pause; RESUME/ISLAND/MAINLAND leave through stateflow. */
+    FH2PageButtonFn on_tile;
 };
 
 /* Title-screen entries (API 9). Called on the game's UI thread when the

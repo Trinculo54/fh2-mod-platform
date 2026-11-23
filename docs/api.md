@@ -15,6 +15,7 @@ Everything is in [`include/fh2mod.h`](../include/fh2mod.h). This page goes throu
 | 9 | 2.8 | title-screen entries, choice rows, online play (FH2MP), sessions, save snapshots, hotkeys, commands, crash-dump memory |
 | 10 | 2.9 | text in the game's language, translations, and the UI templates (pop-ups, tips, message boxes, UI sounds and page help) |
 | 11 | 2.9.1 | page texts: a mod's text in one of the game's own pages |
+| 12 | next release | an optional featured tile page, its caption callback, and native page exit actions |
 
 API 10 only adds members at the end, so a mod built for API 9 or older loads on platform 2.9.0 without a rebuild. A few rules did change in 2.9.0 for every mod: `set_file` refuses the platform's own UI files ([set_file](#set_file-and-clear_file-api-2)), a mod that shouldn't run online is stopped when FH2MP turns out to be online after the mods started ([Online play](#online-play-api-9)), and pop-ups and tips need declaring ([ui_uses](#ui_status-and-ui_uses)).
 
@@ -454,10 +455,11 @@ typedef struct FH2Page {
     const char* title;             /* "Achievements" (shown in capitals) */
     const char* label;             /* the row on your mod's page that opens it; NULL = the title */
     const char* description;       /* that row's description; may be NULL */
-    const char* tile;              /* a pause-menu tile that opens it: "Achievements", or NULL */
+    const char* tile;              /* "Achievements", "IslandFeatured" (API 12), or NULL */
     FH2PageOpenFn on_open;         /* void (*)(void* user, const char* page_key); may be NULL */
     FH2PageSelectFn on_select;     /* void (*)(void* user, const char* page_key, const char* row_key); may be NULL */
     void* user;
+    /* API 8+ trailing fields are shown in the sections below. */
 } FH2Page;
 
 typedef struct FH2PageRow {
@@ -474,7 +476,7 @@ typedef struct FH2PageRow {
 
 A page is a list of your own in the game's menus, laid out like your mod's page: each row has a label on the left and a value on the right, and the selected row's description shows beside the list, with your footer line at the bottom of it. It's for showing things (stats, a collection, what your mod has found) and, with `on_select`, for simple menus where A on a row does something.
 
-Your mod's own page under Pause > MODS > YOUR MODS gets a row for each of your pages (`label`, with `description` beside it and the value "Open"), and A on it shows the page; B goes back. A page can also take over a pause-menu tile that does nothing on PC. For now that's `"Achievements"`, the tile on the PROGRESS tab and the one on the PORSCHE tab, which on Xbox opened the console's achievements app. Only one mod can have a tile; a second one is told so in the log, and its page is still on its mod's page.
+Your mod's own page under Pause > MODS > YOUR MODS gets a row for each of your pages (`label`, with `description` beside it and the value "Open"), and A on it shows the page; B goes back. A page can also take over a pause-menu tile. `"Achievements"` owns the tile on the PROGRESS and PORSCHE tabs. API 12 also accepts `"IslandFeatured"` for the PORSCHE tab's featured tile. Only one mod can have a tile; a second one is told so in the log, and its page is still on its mod's page.
 
 Add pages from `fh2mod_init`. `add_page` returns 1, or 0 with the reason in the log. Pages are written when every mod's `fh2mod_init` has returned, and a page added later only shows from the next launch.
 
@@ -613,6 +615,45 @@ static int page_button(void*, const char* key, int button) {
 ```
 
 The game's XAML reader isn't forgiving: a page it can't read can take the game down when it opens. Base your XAML on the game's own pages, change a little at a time, and check every `StaticResource` you use exists. The Achievements mod's page (`src/ui.cpp` in its repo) is a complete example.
+
+### Featured tile and page exits (API 12)
+
+Set `FH2Page.tile = "IslandFeatured"` to put a mod's page on the PORSCHE tab's featured tile. The platform keeps the game's live tile and handlers, hides that control while your page owns the tile, and adds an ordinary button in its navigation cell. Your page remains available under YOUR MODS. The featured button can open a page even when the island DLC is not installed; native island travel still checks availability.
+
+The optional fields below follow `on_slot` at the end of `FH2Page`. Set `size = sizeof(FH2Page)`. An older mod with a smaller descriptor is accepted and its missing fields default to null.
+
+```c
+const char* tab_title; /* parent tab caption; NULL keeps the game's caption */
+const char* (*tile_title)(void* user, const char* page_key);
+FH2PageButtonFn on_tile;
+```
+
+`tab_title` is copied when the page is registered. `tile_title` is called on the game's UI thread when the pause menu is wired; its returned UTF-8 string is copied immediately. A null callback or result uses the page title. `set_page_tile_text` controls the tile's smaller line. The platform refreshes named text controls when the pause menu is reused, including after leaving the page, so the visible caption follows a changed `tile_title` result. Do not retain native UI pointers or call the game's functions from these callbacks.
+
+Pressing A on the featured button calls `on_tile(user, page_key, FH2_BUTTON_A)` first. `FH2_PAGE_IGNORED` opens your page; `FH2_PAGE_HANDLED` stays on the pause menu. The same callback may return a page exit action below. Without `on_tile`, A opens your page. On a page of your own design, `on_button` can also return these actions:
+
+| Result | Effect |
+|---|---|
+| `FH2_PAGE_RESUME` | Close the custom page, if open, and the pause menu using the game's Back flow. Queue any mod-owned free-roam work before returning this. |
+| `FH2_PAGE_ISLAND` | Enter the island through native travel, retaining the game's entitlement and install checks. |
+| `FH2_PAGE_MAINLAND` | Return from the island through native travel, with the game's normal destination. |
+
+The two stock travel actions require an `IslandFeatured` owner. Check the current map and settled free roam before returning one. The platform does not implement custom-map travel; a mod queues its own transition and returns `FH2_PAGE_RESUME` to leave the menus. Keep callbacks short. This interface is for an in-game XAML page, not an embedded external web browser.
+
+For a track gallery, register a page in `fh2mod_init` and supply its XAML through `set_page_xaml`:
+
+```c
+FH2Page page = {0};
+page.size = sizeof page;
+page.key = "Tracks";
+page.title = "Tracks";
+page.tile = "IslandFeatured";
+page.tab_title = "DLC";
+page.on_tile = tracks_tile_button;   /* return IGNORED to open the gallery */
+page.on_button = tracks_page_button; /* queue a track, then return RESUME */
+api->add_page(mod, &page);
+api->set_page_xaml(mod, "Tracks", resources, content, help);
+```
 
 ## Title-screen entries (API 9)
 

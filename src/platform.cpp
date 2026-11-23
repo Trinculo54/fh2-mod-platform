@@ -1535,6 +1535,7 @@ DWORD WINAPI load_mods(LPVOID) {
         }
     }).detach();
 
+    settings_prepare(&g_api);
     for (const auto& l : loaded) {
         auto init = reinterpret_cast<FH2ModInitFn>(GetProcAddress(l.mod, "fh2mod_init"));
         if (!init) {

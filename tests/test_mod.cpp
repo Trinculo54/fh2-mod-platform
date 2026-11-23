@@ -99,6 +99,22 @@ FH2MOD_EXPORT int fh2mod_init(const FH2ModApi* api) {
     api->add_page(g_mod, &other);
     api->add_page(g_mod, &other);                         // refused: already there
     api->set_page_rows(g_mod, "Missing", rows, 1);        // refused: no such page
+    // API 12: claim the featured tile and host an ordinary in-game browser page.
+    FH2Page featured{sizeof featured};
+    featured.key = "Tracks"; featured.title = "Tracks & maps"; featured.tile = "IslandFeatured";
+    featured.tab_title = "DLC";
+    featured.tile_title = [](void*, const char*) { return "Tracks"; };
+    featured.on_tile = [](void*, const char*, int) { return FH2_PAGE_IGNORED; };
+    api->add_page(g_mod, &featured);
+    api->set_page_xaml(g_mod, "Tracks", nullptr, "<Button x:Name=\"FirstItem\" Content=\"Storm Island\" />", nullptr);
+    api->set_page_tile_text(g_mod, "Tracks", "2 tracks");
+    featured.key = "TracksDuplicate";
+    api->add_page(g_mod, &featured); // remains under YOUR MODS: the tile is owned
+    // A descriptor made before the trailing page fields is still accepted.
+    FH2Page legacy{sizeof legacy};
+    legacy.size = offsetof(FH2Page, on_button);
+    legacy.key = "LegacyPage"; legacy.title = "Legacy page";
+    api->add_page(g_mod, &legacy);
     // Pages of its own design that can't be shown (platform 2.9.0): Design's XAML uses a resource key no page has
     // (refused when the game's UI.zip is there to check it against); Crashy was opening when the game last stopped
     // (the test writes fh2-mods\platform-pages.txt so), so it's left out this session.

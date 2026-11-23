@@ -482,7 +482,7 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("---- platform.log\n%s----\n", log.c_str());
 
     if (phase == L"full") {
-        CHECK(has(log, "FH2 Mod Platform 2.9.1 (API 11)"));
+        CHECK(has(log, "FH2 Mod Platform 2.9.1 (API 12)"));
         CHECK(has(log, "media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride"));
         // decided once, at start, and said so; the files, text and database below are where it said
         CHECK(has(log, own_layer() ? "media overrides: this Azimuth folder has data\\titles\\1A96545B (where Azimuth keeps the game's T:\\ "
@@ -587,6 +587,9 @@ int wmain(int argc, wchar_t** argv) {
 
         // Pages (API 8)
         CHECK(has(log, "[TestMod] page: Test stats, on the Achievements tile"));
+        CHECK(has(log, "[TestMod] page: Tracks & maps, on the IslandFeatured tile"));
+        CHECK(has(log, "[TestMod] add_page: the IslandFeatured tile already opens TestMod's page"));
+        CHECK(has(log, "[TestMod] page: Legacy page"));
         CHECK(has(log, "[TestMod] add_page: there's no tile called Nope; Other is only on its mod's page under MODS > YOUR MODS"));
         CHECK(has(log, "[TestMod] add_page: there's already a page called Other"));
         CHECK(has(log, "[TestMod] set_page_rows: there's no page called Missing"));
@@ -828,7 +831,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(id.size() >= 17 && id[8] == '-' && id[15] == '-' && id.substr(16) == std::to_string(GetCurrentProcessId()));
             CHECK(has(log, ("session " + id + ": started ").c_str()));
             const std::string copy = slurp(fs::path(L"fh2-mods\\platform-logs") / ("platform-" + id + ".log"));
-            CHECK(has(copy, "FH2 Mod Platform 2.9.1 (API 11)") && has(copy, "[TestMod] session id "));
+            CHECK(has(copy, "FH2 Mod Platform 2.9.1 (API 12)") && has(copy, "[TestMod] session id "));
             CHECK(slurp(fs::path(L"TestModData\\logs") / (id + ".log")) == "test mod's own log\n");
             CHECK(has(log, ("[TestMod] session log: TestModData\\logs\\" + id + ".log (the newest 3 kept)").c_str()));
             CHECK(has(log, "[TestMod] bad log folder refused") &&
@@ -892,6 +895,18 @@ int wmain(int argc, wchar_t** argv) {
                   has(pause, "Template=\"{StaticResource FH2Mod_Template_IconTile_0}\""));
             CHECK(has(pause, "Color=\"{Binding FH2Mod_TileBack_0, RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type Page}}}\"") &&
                   has(pause, "{Binding FH2Mod_TileTitle_0,") && has(pause, "{Binding FH2Mod_TileLine_0,") && has(pause, "{Binding FH2Mod_TileIcon_0,"));
+            CHECK(has(pause, "<local:IslandFeaturedLiveTile") && has(pause, "x:Name=\"PART_Button_IslandFeatureTile\""));
+            CHECK(has(pause, "Content=\"DLC\"") &&
+                  has(pause, "Template=\"{StaticResource FH2Mod_Template_FeaturedTile_1}\"") &&
+                  has(pause, "<ContentPresenter HorizontalAlignment=\"Stretch\" VerticalAlignment=\"Stretch\" />"));
+            CHECK(has(pause, "x:Name=\"PART_Text_FH2Mod_FeaturedHeading\" Text=\"Tracks &amp; maps\"") &&
+                  has(pause, "x:Name=\"PART_Button_IslandFeatureTile\"  Visibility=\"Collapsed\"") &&
+                  has(pause, "x:Name=\"PART_Button_FH2Mod_IslandFeatured\""));
+            CHECK(has(slurp(scenes / "A_ModPage_81.xaml"), "Content=\"Storm Island\""));
+            const auto pauseFlow = slurp(ov / "stateflow" / "pause.xml");
+            CHECK(has(pauseFlow, "<exit id=\"expansion_packs\" target=\"_fh2mod_native_travel\" />") &&
+                  has(pauseFlow, "state=\"track_swap.root_island\" cancel_on_game_control_owned=\"false\"") &&
+                  has(pauseFlow, "state=\"track_swap.root_mainland\" cancel_on_game_control_owned=\"false\""));
             // the MODS tab's own tiles: their names come from FH2Mod_HubTile_<k> (in the game's language), shown as their Tag
             bool hub_tags = true;
             for (int k = 0; k < 5; ++k)

@@ -329,6 +329,7 @@ int settings_show_box(FH2Mod* mod, const FH2MessageBox* box);
 int title_add(FH2Mod* mod, const FH2TitleEntry* entry);
 const char* title_started_by(FH2Mod* mod);
 // After every fh2mod_init: writes the pages and hooks the game if any mod added a row.
+void settings_prepare(const FH2ModApi* api);
 void settings_start(const FH2ModApi* api);
 
 // The MODS tab (platform 2.5.0): every mod in fh2-mods, loaded or turned off there.
