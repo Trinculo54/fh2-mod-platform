@@ -2,8 +2,9 @@
  * fh2mod_pad.h -- the pad layer preview of the FH2 Mod Platform (MIT licensed, see LICENSE).
  *
  * A preview: not part of any API version yet. Platform 2.9.0 is the first to offer it, as a
- * preview interface (version 1), so a mod that uses it still loads on a platform without it
- * (2.8.0 and older):
+ * preview interface (version 1; 2.9.1 offers version 2, with FH2_PAD_LAYER_WORLD and layers a
+ * mod opens itself), so a mod that uses it still loads on a platform without it (2.8.0 and
+ * older):
  *
  *     const FH2PadInterface* pad = (const FH2PadInterface*)api->get_interface(FH2_PAD_INTERFACE, 1);
  *     if (!pad) ...   (no pad layers on this platform: say so in your log, carry on without)
@@ -29,8 +30,14 @@
  * session with pop-ups or tips: declare them with ui_uses), is set while the free-roam HUD page
  * is on screen. Without FH2_HUD_AVAILABLE, or FH2_UI_TOASTS, the platform may not be following
  * that page and the bit may never come, so then let presses through rather than drop them all.
- * A flag for layers that are only on in the world is planned for 2.9.1, in the reserved
- * `flags`.
+ * From 2.9.1 (version 2) a layer with FH2_PAD_LAYER_WORLD in its `flags` is only open while
+ * that page is on screen, so the menus keep its buttons: use it for a layer that is for
+ * driving. On 2.9.0 add_layer refuses a layer with any flag, so ask for version 1, look at
+ * `version`, and only set the flag when it is 2 or more.
+ *
+ * Also from 2.9.1, a layer with FH2_PAD_LAYER_LATCH has no modifier at all: your mod opens and
+ * closes it itself (set_open), for a mode of its own that takes buttons for as long as it
+ * lasts, like an editor, or flying.
  */
 #ifndef FH2MOD_PAD_H
 #define FH2MOD_PAD_H
@@ -42,7 +49,23 @@ extern "C" {
 #endif
 
 #define FH2_PAD_INTERFACE "FH2Platform.PadLayer"
-#define FH2_PAD_INTERFACE_VERSION 1
+#define FH2_PAD_INTERFACE_VERSION 2   /* 2: FH2_PAD_LAYER_WORLD, FH2_PAD_LAYER_LATCH and set_open (2.9.1) */
+
+/* FH2PadLayer.flags (version 2, platform 2.9.1). */
+/* The layer is only open in the driving view: while the free-roam HUD page is on screen. In
+   a menu, on the map, in photo mode or on the title screen its buttons stay the game's and
+   no press comes, modifier held or not. The platform knows whether that page is on screen
+   in a session where some mod has pop-ups, tips or a HUD layer; in one where none has, the
+   layer is open everywhere, as a layer without the flag is, and the log says so once. */
+#define FH2_PAD_LAYER_WORLD 0x1u
+/* A latched layer: it has no modifier (leave `modifier` 0), and your mod opens and closes it
+   itself with set_open. While it's open the game doesn't see its buttons and on_press comes
+   for each press, exactly as while a modifier is held. Leave the game what the player needs
+   to get out: don't take FH2_PAD_START. With FH2_PAD_LAYER_WORLD as well, it's only open in
+   the driving view however long your mod keeps it open, so the menus keep their buttons. A
+   latched layer isn't checked for clashes with other layers: two layers open at once that
+   take the same button both get its press. */
+#define FH2_PAD_LAYER_LATCH 0x2u
 
 /* Called on a platform thread (not the game's) once per press of one of the layer's buttons
    while its modifier is held. `button` is one FH2_PAD_ bit. Keep it short. */
@@ -52,9 +75,10 @@ typedef void (*FH2PadPressFn)(void* user, const char* key, uint32_t button);
 typedef struct FH2PadLayer {
     uint32_t size;          /* sizeof(FH2PadLayer) */
     const char* key;        /* unique within your mod: letters, digits and '_', like "QuickChat" */
-    uint32_t modifier;      /* FH2_PAD_ bits, all held to open the layer, like FH2_PAD_LB; 0 = off for now */
+    uint32_t modifier;      /* FH2_PAD_ bits, all held to open the layer, like FH2_PAD_LB; 0 = off for now
+                               (always 0 for a latched layer) */
     uint32_t buttons;       /* FH2_PAD_ bits the layer takes while open, like the four d-pad bits */
-    uint32_t flags;         /* 0 (reserved: a flag for a layer only on in the world is planned) */
+    uint32_t flags;         /* FH2_PAD_LAYER_ bits (version 2); 0 on a version 1 platform, which refuses any other */
     FH2PadPressFn on_press;
     void* user;             /* passed to on_press */
 } FH2PadLayer;
@@ -77,6 +101,17 @@ typedef struct FH2PadInterface {
        from the game's own reading of it. Returns 1, or 0 when there's none yet (in the
        title screen's first seconds, say). Any thread. */
     int (*buttons)(uint32_t* held);
+
+    /* ---- version 2 (2.9.1): check version >= 2 before using this. ---- */
+
+    /* Opens (1) or closes (0) a latched layer of yours (FH2_PAD_LAYER_LATCH). Open lasts 2
+       seconds from your newest call, so repeat it (every half second, say) for as long as
+       your mode is on: if your code stops, the player's buttons go back to the game by
+       themselves. A button held as the layer opens isn't a press, and one held as it closes
+       reaches the game only once it's pressed again. Any thread. Returns 1, or 0 for an
+       unknown layer, one that isn't latched, or pad layers being off this session (the log
+       says which). */
+    int (*set_open)(FH2Mod* mod, const char* key, int open);
 } FH2PadInterface;
 
 #ifdef __cplusplus

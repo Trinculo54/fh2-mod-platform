@@ -482,7 +482,7 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("---- platform.log\n%s----\n", log.c_str());
 
     if (phase == L"full") {
-        CHECK(has(log, "FH2 Mod Platform 2.9.0 (API 10)"));
+        CHECK(has(log, "FH2 Mod Platform 2.9.1 (API 12)"));
         CHECK(has(log, "media overrides: Extra Options isn't loaded, so the platform mounts mediaoverride"));
         // decided once, at start, and said so; the files, text and database below are where it said
         CHECK(has(log, own_layer() ? "media overrides: this Azimuth folder has data\\titles\\1A96545B (where Azimuth keeps the game's T:\\ "
@@ -587,6 +587,9 @@ int wmain(int argc, wchar_t** argv) {
 
         // Pages (API 8)
         CHECK(has(log, "[TestMod] page: Test stats, on the Achievements tile"));
+        CHECK(has(log, "[TestMod] page: Tracks & maps, on the IslandFeatured tile"));
+        CHECK(has(log, "[TestMod] add_page: the IslandFeatured tile already opens TestMod's page"));
+        CHECK(has(log, "[TestMod] page: Legacy page"));
         CHECK(has(log, "[TestMod] add_page: there's no tile called Nope; Other is only on its mod's page under MODS > YOUR MODS"));
         CHECK(has(log, "[TestMod] add_page: there's already a page called Other"));
         CHECK(has(log, "[TestMod] set_page_rows: there's no page called Missing"));
@@ -647,8 +650,8 @@ int wmain(int argc, wchar_t** argv) {
               has(log, "[TestMod] set_page_tile_colors: Other isn't on a tile"));
         // choice rows and online play (API 9)
         CHECK(has(log, "[TestMod] choice row ok"));
-        CHECK(has(log, "[TestMod] add_setting: One is a choice row but needs 2 to 32 choices"));
-        CHECK(has(log, "[TestMod] add_setting: Lots is a choice row but needs 2 to 32 choices"));
+        CHECK(has(log, "[TestMod] add_setting: One is a choice row but needs 2 to 100 choices"));
+        CHECK(has(log, "[TestMod] add_setting: Lots is a choice row but needs 2 to 100 choices"));
         CHECK(has(log, "[TestMod] playing offline") && !has(log, "started from the FH2MP launcher"));
         // text in the game's language (API 10)
         CHECK(has(log, "[TestMod] no game language yet") && has(log, "[TestMod] setting text ok"));
@@ -743,6 +746,13 @@ int wmain(int argc, wchar_t** argv) {
         CHECK(has(log, "[TestMod] set_page_hints: Stats has 2 hints") && has(log, "[TestMod] set_page_hints: Tools: hint 2 is cut to 80 characters") &&
               has(log, "[TestMod] set_page_hints: Tools has 3 hints"));
         CHECK(has(log, "[TestMod] page Tools's hint line: Ready. (attention), from the next time it opens"));
+        // page texts (API 11): a name is checked, another mod's is refused, and a change nobody shows yet is nothing
+        CHECK(has(log, "[TestMod] page text TestMod_Label: {Binding FH2Mod_Text_TestMod_Label} in a game page it sets with set_file shows its text") &&
+              has(log, "[AaaMod] page text Shared_Text: {Binding FH2Mod_Text_Shared_Text}"));
+        CHECK(has(log, "[TestMod] add_page_text: \"bad name\" isn't a name (1 to 40 letters, digits or _)") &&
+              has(log, "[TestMod] add_page_text: no function to ask for the text") &&
+              has(log, "[TestMod] add_page_text: Shared_Text is AaaMod's; not added"));
+        CHECK(has(log, "[TestMod] page texts: added 11, the wrong ones 0"));
         CHECK(has(log, "[TestMod] show_page_hint: Tools has no hint 9 (it has 3; set them with set_page_hints)") &&
               has(log, "[TestMod] show_page_hint: 7 isn't a hint kind (FH2_HINT_INFO, _ATTENTION or _FAULT)"));
         // the tip TestMod marked seen is in platform-seen.txt, by its DLL's name (written on the store's own thread)
@@ -821,7 +831,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(id.size() >= 17 && id[8] == '-' && id[15] == '-' && id.substr(16) == std::to_string(GetCurrentProcessId()));
             CHECK(has(log, ("session " + id + ": started ").c_str()));
             const std::string copy = slurp(fs::path(L"fh2-mods\\platform-logs") / ("platform-" + id + ".log"));
-            CHECK(has(copy, "FH2 Mod Platform 2.9.0 (API 10)") && has(copy, "[TestMod] session id "));
+            CHECK(has(copy, "FH2 Mod Platform 2.9.1 (API 12)") && has(copy, "[TestMod] session id "));
             CHECK(slurp(fs::path(L"TestModData\\logs") / (id + ".log")) == "test mod's own log\n");
             CHECK(has(log, ("[TestMod] session log: TestModData\\logs\\" + id + ".log (the newest 3 kept)").c_str()));
             CHECK(has(log, "[TestMod] bad log folder refused") &&
@@ -841,7 +851,7 @@ int wmain(int argc, wchar_t** argv) {
                       !has(log, "[TestMod] save snapshot asked for"));
             }
             CHECK(has(status, ("\"session\": \"" + id + "\"").c_str()) && has(status, "\"state\": \"running\"") &&
-                  has(status, "\"platform\": \"2.9.0\"") && has(status, "\"TestMod\": \"1.0.0\""));
+                  has(status, "\"platform\": \"2.9.1\"") && has(status, "\"TestMod\": \"1.0.0\""));
         }
         // The game's menus were given: the pages are written. (Not with the game mapped: this
         // test's copy of it doesn't pass the menus' code checks, so the platform takes them out; see map_game.)
@@ -885,6 +895,18 @@ int wmain(int argc, wchar_t** argv) {
                   has(pause, "Template=\"{StaticResource FH2Mod_Template_IconTile_0}\""));
             CHECK(has(pause, "Color=\"{Binding FH2Mod_TileBack_0, RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type Page}}}\"") &&
                   has(pause, "{Binding FH2Mod_TileTitle_0,") && has(pause, "{Binding FH2Mod_TileLine_0,") && has(pause, "{Binding FH2Mod_TileIcon_0,"));
+            CHECK(has(pause, "<local:IslandFeaturedLiveTile") && has(pause, "x:Name=\"PART_Button_IslandFeatureTile\""));
+            CHECK(has(pause, "Content=\"DLC\"") &&
+                  has(pause, "Template=\"{StaticResource FH2Mod_Template_FeaturedTile_1}\"") &&
+                  has(pause, "<ContentPresenter HorizontalAlignment=\"Stretch\" VerticalAlignment=\"Stretch\" />"));
+            CHECK(has(pause, "x:Name=\"PART_Text_FH2Mod_FeaturedHeading\" Text=\"Tracks &amp; maps\"") &&
+                  has(pause, "x:Name=\"PART_Button_IslandFeatureTile\"  Visibility=\"Collapsed\"") &&
+                  has(pause, "x:Name=\"PART_Button_FH2Mod_IslandFeatured\""));
+            CHECK(has(slurp(scenes / "A_ModPage_81.xaml"), "Content=\"Storm Island\""));
+            const auto pauseFlow = slurp(ov / "stateflow" / "pause.xml");
+            CHECK(has(pauseFlow, "<exit id=\"expansion_packs\" target=\"_fh2mod_native_travel\" />") &&
+                  has(pauseFlow, "state=\"track_swap.root_island\" cancel_on_game_control_owned=\"false\"") &&
+                  has(pauseFlow, "state=\"track_swap.root_mainland\" cancel_on_game_control_owned=\"false\""));
             // the MODS tab's own tiles: their names come from FH2Mod_HubTile_<k> (in the game's language), shown as their Tag
             bool hub_tags = true;
             for (int k = 0; k < 5; ++k)
@@ -941,7 +963,7 @@ int wmain(int argc, wchar_t** argv) {
             CHECK(has(installed, "set later."));
             // the platform's own lines as whole sentences, one for each state (platform 2.9.0)
             CHECK(has(installed, "Heading=\"Version 0.5.0 (doesn't check for updates)\""));
-            CHECK(has(installed, "It isn't working: It needs FH2 Mod Platform 9.9.9 or newer; this is 2.9.0. Reinstall it to get the "
+            CHECK(has(installed, "It isn't working: It needs FH2 Mod Platform 9.9.9 or newer; this is 2.9.1. Reinstall it to get the "
                                  "platform it came with. fh2-mods\\platform.log has more."));
             // "One home" (platform 2.9.0): YOUR MODS, "MODS / YOUR MODS", a row per mod ending in ">" with what A shows
             CHECK(has(installed, "Tag=\"MODS\" Content=\"YOUR MODS\""));
@@ -979,6 +1001,11 @@ int wmain(int argc, wchar_t** argv) {
                 const std::size_t what = installed.find("Heading=\"What it does\"", about), load = installed.find("Heading=\"Load this mod *\"", about);
                 CHECK(own != std::string::npos && own < keys && keys < key_row && key_row < page && page < about && about < what && what < load &&
                       load != std::string::npos);
+                // a row with more than eight choices says A opens its list (platform 2.9.1): the hotkey's keys, not the three buttons
+                const auto item = [&](std::size_t at) {
+                    return at == std::string::npos ? std::string() : installed.substr(at, installed.find("Heading=\"", at + 9) - at);
+                };
+                CHECK(has(item(key_row), "Press A to pick from a list.\"") && !has(item(own), "Press A to pick"));
                 CHECK(has(installed, "Tag=\"MODS\" Content=\"TESTMOD\"") && has(installed, "Label=\"Load this mod *\""));
                 CHECK(has(installed, "Description=\"Off leaves it in fh2-mods, but the game doesn't load it. Takes effect the next time you start the game.\""));
                 CHECK(!has(installed, "(TestMod)\"") && !has(installed, "Load TestMod"));   // no "(Mod)" after descriptions; the old switch
@@ -989,7 +1016,7 @@ int wmain(int argc, wchar_t** argv) {
             // view, with one row while nothing has shown); no UI templates page without Developer=1. AaaMod's page has the
             // platform's Pop-ups row; TestMod has a row of its own (FH2_UI_USES_OWN_SWITCH), so it has none.
             {
-                CHECK(has(installed, "local:BindingProxy.A=\"FH2 Mod Platform\" local:BindingProxy.C=\"2.9.0  &gt;\""));
+                CHECK(has(installed, "local:BindingProxy.A=\"FH2 Mod Platform\" local:BindingProxy.C=\"2.9.1  &gt;\""));
                 CHECK(has(installed, "Heading=\"FH2 Mod Platform\" Description=\"Pop-ups and tips from every mod, and the last ones shown. Press A to open it.\""));
                 CHECK(has(installed, "Tag=\"MODS\" Content=\"FH2 MOD PLATFORM\"") && has(installed, "Content=\"RECENT POP-UPS\""));
                 const std::size_t heading = installed.find("Heading=\"Pop-ups and tips\""), choice = installed.find("Heading=\"Mod pop-ups\"");

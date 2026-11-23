@@ -321,11 +321,15 @@ int pages_set_tile_colors(FH2Mod* mod, const char* page_key, uint32_t background
 int pages_set_help(FH2Mod* mod, const char* page_key, const FH2Prompt* prompts, uint32_t count);
 int pages_set_hints(FH2Mod* mod, const char* page_key, const char* const* texts, uint32_t count);
 int pages_show_hint(FH2Mod* mod, const char* page_key, int index, uint32_t kind);
+// Page texts (API 11): a mod's text for a game page it set with set_file, {Binding FH2Mod_Text_<name>}; and its refresh.
+int pages_add_text(FH2Mod* mod, const char* name, FH2PageTextFn get, void* user);
+void pages_text_changed(FH2Mod* mod, const char* name, void* page);
 int settings_show_box(FH2Mod* mod, const FH2MessageBox* box);
 // Title-screen entries (API 9).
 int title_add(FH2Mod* mod, const FH2TitleEntry* entry);
 const char* title_started_by(FH2Mod* mod);
 // After every fh2mod_init: writes the pages and hooks the game if any mod added a row.
+void settings_prepare(const FH2ModApi* api);
 void settings_start(const FH2ModApi* api);
 
 // The MODS tab (platform 2.5.0): every mod in fh2-mods, loaded or turned off there.

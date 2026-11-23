@@ -20,6 +20,8 @@
 #include <psapi.h>
 
 #include "db_guards.hpp"
+#include "fh2mod_hud.h"
+#include "fh2mod_pad.h"
 #include "hud_layer.hpp"
 #include "l10n.hpp"
 #include "lang.hpp"
@@ -1430,9 +1432,9 @@ DWORD WINAPI load_mods(LPVOID) {
         }
     }
     // The HUD layer preview's interface, there from every mod's fh2mod_init on.
-    publish_platform_interface("FH2Platform.HudLayer", 2, hud_interface(), hud_layer_owner());   // 2: the feed (2.9.0)
+    publish_platform_interface("FH2Platform.HudLayer", FH2_HUD_INTERFACE_VERSION, hud_interface(), hud_layer_owner());   // 3: the canvas (2.9.1)
     // The pad layer preview's interface, there from every mod's fh2mod_init on.
-    publish_platform_interface("FH2Platform.PadLayer", 1, pad_interface(), pad_layer_owner());
+    publish_platform_interface("FH2Platform.PadLayer", FH2_PAD_INTERFACE_VERSION, pad_interface(), pad_layer_owner());   // 2: world-only layers (2.9.1)
     // Online play, for FH2MP (2.9.0), there from every mod's fh2mod_init on.
     publish_platform_interface(FH2_ONLINE_INTERFACE, 1, &g_online_iface, &g_online_owner);
     for (const auto& f : files) {
@@ -1533,6 +1535,7 @@ DWORD WINAPI load_mods(LPVOID) {
         }
     }).detach();
 
+    settings_prepare(&g_api);
     for (const auto& l : loaded) {
         auto init = reinterpret_cast<FH2ModInitFn>(GetProcAddress(l.mod, "fh2mod_init"));
         if (!init) {

@@ -156,8 +156,8 @@ From platform 2.9.0 (API 10) a mod never needs XAML to tell the player something
 | Say what the buttons do on your page | `set_page_help` | 2.9.0 |
 | Show a short status on your page ("Saved.") | `set_page_hints` and `show_page_hint` | 2.9.0 |
 | Say something before the game starts | `set_notice`, `add_title_entry` | 2.8.0 |
-| Show a state that lasts while driving (a ghost, a score) | a card or status line | 2.9.1 |
-| Acknowledge a press within a tenth of a second | a chip or status line | 2.9.1 |
+| Show a state that lasts while driving (a ghost, a score) | a card or status line (until then, the HUD layer preview's chips or canvas) | 2.9.x |
+| Acknowledge a press within a tenth of a second | a chip or status line (until then, the HUD layer preview's chips) | 2.9.x |
 | Count down to something | `show_countdown` | 2.9.x |
 | Run a mode with its own controls | the HUD layer and pad layer previews (below); an API for them later | 2.9.0 (preview) |
 | Watch numbers while testing | `set_overlay_text` | 2.9.x |

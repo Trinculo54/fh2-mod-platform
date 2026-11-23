@@ -6,6 +6,10 @@ It's the `d3dcompiler_47.dll` that sits next to `azimuth.exe`, and from 2.7.4 th
 
 Mods currently built on it are [Achievements](https://github.com/Trinculo54/fh2-achievements), which brings back the game's Xbox achievements offline, [FH2 Universal Radio](https://github.com/Trinculo54/FH2-Universal-Radio), which plays Spotify and more on the in-game radio, [WheresMyBuddy](https://github.com/Trinculo54/WheresMyBuddy), which puts your Xbox friends in the game as Drivatars, and [WreckingBall](https://github.com/Trinculo54/WreckingBall), which makes trees, fences, railings, roadside clutter and telephone poles break when you drive into them. It works alongside [Forza Horizon 2 Extra Options](https://github.com/RokkuDayo/forzahorizon2_extraoptions), which loads through `winmm.dll`.
 
+## What's new in 2.9.1
+
+A small release, mostly for mod makers. A mod can draw a heads-up display entirely of its own in the game's HUD (the HUD canvas), put its own text on one of the game's screens such as the name tag over a car (page texts, API 11), keep the controller buttons it takes out of the menus, and take buttons of its own for as long as a mode of its own is on. For players, a row on a mod's page can offer up to 100 choices, and **A** on a long one opens a list to pick from, and Exit Game takes one press with an overlay mod such as ShowFPS installed. The platform can now also be built on Windows with `scripts/build.ps1`. [Release notes](docs/release-notes-2.9.1.md).
+
 ## What's new in 2.9.0
 
 For players:
@@ -109,6 +113,12 @@ The platform is built with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/r
 
 ```bash
 ./scripts/build.sh
+```
+
+On Windows:
+
+```powershell
+.\scripts\build.ps1 -Clean -InstallTo "C:\path\to\azimuth_folder" -IncludeExample
 ```
 
 `dist/` then holds `d3dcompiler_47.dll` and `DWrite.dll`, the example mod, every header in `include/` (`fh2mod.h`, `fh2game.h`, the helpers and the previews' interfaces), the `fh2mod` command tool, the translation scripts in `tools/l10n`, a `README.txt` and the licence files. GitHub Actions does the same on every push, and a tag like `v2.0.0` attaches the zip to a release. The version lives in `project(... VERSION x.y.z)` in `CMakeLists.txt`; bump it before tagging, since the tag build refuses to run if the two don't match.

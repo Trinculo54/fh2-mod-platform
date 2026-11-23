@@ -11,11 +11,26 @@
 
 namespace fh2platform {
 
-// The parts, in FH2_HUD_PART_ bit order (fh2mod_hud.h): BAR, CHIPS, TIP, PANEL, COUNTDOWN, FEED.
-constexpr int kHudParts = 6;
-extern const char* const kHudPartNames[kHudParts];   // "BAR", "CHIPS", "TIP", "PANEL", "COUNTDOWN", "FEED"
-extern const char* const kHudPartProps[kHudParts];   // their fade properties: "Bar", "Chips", "Tip", "Panel", "Count", "Feed"
-constexpr uint32_t kHudPartsKnown = 0x3Fu;           // every part bit, the feed's included (FH2_HUD_PART_ALL leaves it out)
+// The parts, in FH2_HUD_PART_ bit order (fh2mod_hud.h): BAR, CHIPS, TIP, PANEL, COUNTDOWN, FEED, CANVAS.
+constexpr int kHudParts = 7;
+extern const char* const kHudPartNames[kHudParts];   // "BAR", "CHIPS", "TIP", "PANEL", "COUNTDOWN", "FEED", "CANVAS"
+extern const char* const kHudPartProps[kHudParts];   // their fade properties: "Bar", "Chips", "Tip", "Panel", "Count", "Feed", "Canvas"
+constexpr uint32_t kHudPartsKnown = 0x7Fu;           // every part bit, the feed's and the canvas's included
+// The parts that take the screen for their layer: FH2_HUD_PART_ALL's five and the canvas (the feed is shared).
+constexpr uint32_t kHudPartsScreen = 0x5Fu;
+constexpr int kHudMaxLayers = 4;                     // FH2_HUD_MAX_LAYERS
+// A canvas's limits (FH2_HUD_CANVAS_ in fh2mod_hud.h).
+constexpr int kHudCanvasNumbers = 32, kHudCanvasTexts = 16, kHudCanvasSwitches = 16;
+constexpr std::size_t kHudCanvasBindings = 64;
+
+// A mod's canvas (add_hud_canvas): its XAML as the mod gave it, and how many of each kind of value it binds.
+// Its properties are Cv<layer>On (the platform's: this canvas is the one showing), Cv<layer>N<i>, Cv<layer>T<i>
+// and Cv<layer>B<i>; the mod's XAML names the last three as N<i>, T<i> and B<i>.
+struct HudCanvas {
+    int layer = 0;
+    std::string xaml;
+    int numbers = 0, texts = 0, switches = 0;
+};
 constexpr int kHudFeedLines = 5;                     // FH2_HUD_MAX_FEED
 // Where the feed's bottom line sits: its foot this far above the bottom of the 1920 x 1080 page, its left at
 // the HUD's 108 px margin, over the game's minimap.
@@ -40,20 +55,23 @@ struct HudProp {
     char type = 'b';           // b bool, i int, f float, s String
     std::string def;           // a String's default (UTF-8); the others default to false, 0 and 0.0
     std::vector<int> values;   // an int's values, each with its DataTrigger in the page
-    int part = -1;             // the part whose elements bind it (0 BAR ... 4 COUNTDOWN), -1 for Shown and Shutter
+    int part = -1;             // the part whose elements bind it (0 BAR ... 6 CANVAS), -1 for Shown and Shutter
     HudRole role = HudRole::content;
+    bool canvas = false;       // a canvas's number, text or switch: bound in the mod's own XAML, if at all
 };
 
 // The table for the declared parts (FH2_HUD_PART_ bits), in template order: 316 properties with the five
-// parts before the feed, 338 with the feed.
-std::vector<HudProp> hud_build_props(uint32_t parts);
+// parts before the feed, 338 with the feed; then, with the canvas part, its two and each canvas's own.
+std::vector<HudProp> hud_build_props(uint32_t parts, const std::vector<HudCanvas>& canvases = {});
 // fh2-mods\platform-hudlayer-props.txt: "name<TAB>type<TAB>default<TAB>values", one a line, \r\n.
 std::string hud_props_text(const std::vector<HudProp>& props);
 const char* hud_type_word(char type);   // "bool", "int", "float", "String"
 
 // The two blocks spliced into A_Hud.xaml, indented for the page, \r\n lines.
 std::string hud_resources_markup(uint32_t parts);
-std::string hud_layer_markup(uint32_t parts);
+std::string hud_layer_markup(uint32_t parts, const std::vector<HudCanvas>& canvases = {});
+// The line in the layer's markup that stands for a canvas until hud_splice puts its checked XAML there.
+std::string hud_canvas_placeholder(int layer);
 
 struct HudUi {
     std::function<std::string(const char*)> read;                     // a file of UI.zip by its path, "" if unreadable
@@ -81,7 +99,9 @@ bool hud_check_markup(const std::string& res, const std::string& layer, uint32_t
 // the start of the line holding the last </Grid> before the one </local:ZPanel>, and xmlns:ed after the
 // xmlns:local line when BAR or COUNTDOWN is declared. False, with the first problem and `page` untouched,
 // if anything doesn't fit (item 9 included).
+// Each canvas is checked on its own (FH2HudCanvas in fh2mod_hud.h says what passes): one that doesn't is left out
+// of the page, with the reason in `canvas_why` at its place ("" for one that's in), and the rest goes in.
 bool hud_splice(std::string& page, uint32_t parts, const std::vector<HudProp>& props, const HudUi& ui, HudCheck& out,
-                std::string& why);
+                std::string& why, const std::vector<HudCanvas>& canvases = {}, std::vector<std::string>* canvas_why = nullptr);
 
 } // namespace fh2platform

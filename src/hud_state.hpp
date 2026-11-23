@@ -140,6 +140,13 @@ public:
     int hold(int layer, int hold);
     int play_sound(int layer, uint32_t sound);
     int post_feed(int layer, const FH2HudFeedLine* line);   // interface version 2
+    // The canvas (interface version 3). set_canvas is fh2mod_init's thread: the layer's canvas and how many of
+    // each kind of value it has; false if the layer has one already. The other three are any thread.
+    bool set_canvas(int layer, int numbers, int texts, int switches);
+    bool has_canvas(int layer) const;
+    int canvas_numbers(int layer, const float* numbers, uint32_t count);
+    int canvas_text(int layer, uint32_t which, const char* utf8);
+    int canvas_switches(int layer, uint32_t bits);
     // Its mod was stopped for online play (any thread): from the next frame its layer is hidden and its hold let
     // go, as when its lease runs out, whatever it calls (its hud_status still keeps a lease). The glue refuses its
     // shows with parts and its holds from then on.

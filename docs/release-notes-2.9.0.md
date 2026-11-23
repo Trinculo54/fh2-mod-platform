@@ -1,4 +1,4 @@
-# FH2 Mod Platform 2.9.0: release notes (draft)
+# FH2 Mod Platform 2.9.0: release notes
 
 The language and UI release. Mod settings get one home, the platform's menus follow the game's language, and mods can show pop-ups, tips and message boxes in the game's own look, in your language too. It also brings car packs, guards against two kinds of crash, and fixes for online play and Proton. API 10, which only adds to API 9: mods made for 2.8.0 or older keep working.
 

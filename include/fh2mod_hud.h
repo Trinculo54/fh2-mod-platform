@@ -19,7 +19,9 @@
  *   - a tip card, centred just above the bar;
  *   - a panel of up to eight rows, over the left of the bar;
  *   - a countdown: a big number in a ring, in the middle of the screen;
- *   - a shutter: a short white blink across the whole picture.
+ *   - a shutter: a short white blink across the whole picture;
+ *   - a canvas (version 3, platform 2.9.1): drawing of your own, as XAML you
+ *     write, with numbers, texts and switches you set while it shows.
  * You fill the parts with text and numbers. The platform owns the layout, so
  * nothing you set can break the game's HUD page. Prompts follow the device
  * the player used last: the game's own controller pictures, or key names on
@@ -101,7 +103,7 @@ extern "C" {
 #endif
 
 #define FH2_HUD_INTERFACE         "FH2Platform.HudLayer"
-#define FH2_HUD_INTERFACE_VERSION 2   /* 2: post_hud_feed and FH2_HUD_PART_FEED (2.9.0) */
+#define FH2_HUD_INTERFACE_VERSION 3   /* 2: post_hud_feed and FH2_HUD_PART_FEED (2.9.0); 3: the canvas (2.9.1) */
 
 /* Limits. Text longer than its limit (given with each field below, in
    UTF-16 characters) is cut by the platform; the HUD also trims text that
@@ -123,7 +125,7 @@ extern "C" {
 #define FH2_HUD_PART_TIP       0x04u        /* the tip card, just above the bar */
 #define FH2_HUD_PART_PANEL     0x08u        /* the rows, over the left of the bar */
 #define FH2_HUD_PART_COUNTDOWN 0x10u        /* the number in a ring, in the middle */
-#define FH2_HUD_PART_ALL       0x1Fu        /* the parts show_hud_layer shows: every one but the feed */
+#define FH2_HUD_PART_ALL       0x1Fu        /* the five parts above: not the feed, and not the canvas */
 /* The feed (interface version 2): a few lines of text at the left, above the
    game's minimap, newest at the bottom, like a chat log. Unlike the other
    parts it's shared and never shown with show_hud_layer: every mod whose
@@ -135,6 +137,13 @@ extern "C" {
    show_hud_layer with FH2_HUD_PART_INSTANT (a clean frame) until the next
    show without it. */
 #define FH2_HUD_PART_FEED      0x20u
+/* The canvas (interface version 3, platform 2.9.1): drawing of your own over
+   the whole HUD page, under the layer's other parts. Its XAML is yours
+   (add_hud_canvas), so unlike the other parts its look and layout are too.
+   It's shown and hidden with show_hud_layer like the bar, with the same fade,
+   lease and one-layer-at-a-time rule: FH2_HUD_PART_ALL leaves it out, so name
+   it. */
+#define FH2_HUD_PART_CANVAS    0x40u
 #define FH2_HUD_PART_INSTANT   0x80000000u  /* show_hud_layer: parts going out go at once instead of fading */
 
 /* FH2HudFeedLine.style: the colour of the line's text (its name is always
@@ -305,6 +314,40 @@ typedef struct FH2HudState {
     const char* countdown_label;               /* under the ring, 48: "TEST RUN" */
 } FH2HudState;
 
+/* The canvas's limits. */
+#define FH2_HUD_CANVAS_NUMBERS  32
+#define FH2_HUD_CANVAS_TEXTS    16
+#define FH2_HUD_CANVAS_SWITCHES 16
+#define FH2_HUD_CANVAS_BINDINGS 64   /* bindings in its XAML: each one costs a little on every change to the page */
+
+/* Your canvas (add_hud_canvas, version 3). The XAML is the content of a Grid
+   that covers the HUD page, 1920 x 1080 (the game scales it to the screen):
+   one or more elements, in the game's own XAML dialect. docs/hud-layer-
+   preview.md has what is known to work and a worked example. In it:
+     {Binding N0} ... {Binding N31}   your numbers, where a number goes: a
+         TranslateTransform's X or Y, a RotateTransform's Angle, a
+         ScaleTransform's ScaleX or ScaleY, an ed:Arc's EndAngle, an Opacity;
+     {Binding T0} ... {Binding T15}   your texts, as a Text;
+     {Binding B0} ... {Binding B15}   your switches: as a DataTrigger's Binding
+         with Value="True" or "False", or as a Visibility with
+         ", Converter={StaticResource A_FZBooleanToVisibilityConverter}"
+         (or ..._Inverse) after the name.
+   {StaticResource K} and {DynamicResource K} may name the keys every page of
+   the game has (its text styles, its material presets). The platform checks
+   the XAML before the page is written, and leaves the canvas out, with the
+   reason in the log, if its tags don't balance, a key isn't the game's, a
+   binding isn't one of the above, or it uses what the check keeps out:
+   x:Name, x:Key, resources of its own, pictures (Source), and any other
+   {...}. A canvas that passes can still be drawn wrongly by the game, so
+   look at it in game. */
+typedef struct FH2HudCanvas {
+    uint32_t size;               /* sizeof(FH2HudCanvas) */
+    const char* xaml;            /* UTF-8, copied; letters outside ASCII as &#x..; with a lowercase x */
+    uint32_t numbers;            /* how many numbers it binds, N0 on: 0 to FH2_HUD_CANVAS_NUMBERS */
+    uint32_t texts;              /* T0 on: 0 to FH2_HUD_CANVAS_TEXTS */
+    uint32_t switches;           /* B0 on: 0 to FH2_HUD_CANVAS_SWITCHES */
+} FH2HudCanvas;
+
 /* A feed line (post_hud_feed, version 2). */
 typedef struct FH2HudFeedLine {
     uint32_t size;               /* sizeof(FH2HudFeedLine) */
@@ -423,6 +466,35 @@ typedef struct FH2HudInterface {
        layer with FH2_HUD_PART_FEED. Any thread. Returns 1, or 0 if you have no
        feed, the text is empty, or the layer is off this session (logged once). */
     int (*post_hud_feed)(FH2Mod* mod, const FH2HudFeedLine* line);
+
+    /* ---- version 3 (2.9.1): check version >= 3 (or size) before using these. ---- */
+
+    /* Gives your layer's canvas its XAML. From fh2mod_init only, after
+       add_hud_layer with FH2_HUD_PART_CANVAS among its parts, once. Returns
+       1 if it was taken, 0 if not (the log says why): no layer, no canvas
+       part, a second call, a struct that's too small, or counts over the
+       limits. The XAML itself is checked when the page is written, after
+       every mod's fh2mod_init: if it's refused the log says why, the canvas
+       shows nothing, and the rest of your layer works as it would. */
+    int (*add_hud_canvas)(FH2Mod* mod, const FH2HudCanvas* canvas);
+
+    /* The canvas's numbers, N0 to N<count-1>, all in one call. Any thread, as
+       often as you like: the newest are used at the platform's next frame,
+       and each one that changed is told to the page in that frame, outside
+       the 24-values budget. A number that doesn't change costs nothing, so
+       round to what can be seen (a tenth of a pixel or of a degree). NaN
+       counts as 0. Numbers are 0 until set. Returns 1, or 0 for no canvas or
+       a count over the canvas's own. */
+    int (*set_hud_canvas_numbers)(FH2Mod* mod, const float* numbers, uint32_t count);
+
+    /* One text of the canvas, T<which> (UTF-8, 64 characters). As every text
+       of the layer, it changes on screen at most 10 times a second. Any
+       thread. Returns 1, or 0 for no canvas or no such text. */
+    int (*set_hud_canvas_text)(FH2Mod* mod, uint32_t which, const char* text);
+
+    /* The canvas's switches, all at once: bit 0 is B0. Any thread. Returns
+       1, or 0 for no canvas. */
+    int (*set_hud_canvas_switches)(FH2Mod* mod, uint32_t switches);
 } FH2HudInterface;
 
 #ifdef __cplusplus
